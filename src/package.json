@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "pdfjs-dist": "^6.1.200",
+    "react-pdf": "^10.4.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "tailwindcss": "^4.3.3"
+  }
+}
