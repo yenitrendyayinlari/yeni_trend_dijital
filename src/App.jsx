@@ -53,20 +53,24 @@ export default function App() {
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
-      const fileUrl = URL.createObjectURL(file);
-      const newExam = {
-        id: Date.now(),
-        name: file.name.replace('.pdf', ''),
-        pdfFile: fileUrl,
-        numPages: 0,
-        duration: 60,
-        answerKey: {},
-        solutionPdfFile: null, 
-        solutionNumPages: 0,   
-        isPublished: false
+      const reader = new FileReader();
+      reader.onload = (uploadEvent) => {
+        const base64Pdf = uploadEvent.target.result; // PDF'i Base64 metnine dönüştürüyoruz
+        const newExam = {
+          id: Date.now(),
+          name: file.name.replace('.pdf', ''),
+          pdfFile: base64Pdf, // Blob yerine Base64 kaydediyoruz ki canlıda çalışsın
+          numPages: 0,
+          duration: 60,
+          answerKey: {},
+          solutionPdfFile: null, 
+          solutionNumPages: 0,   
+          isPublished: false
+        };
+        setExams([...exams, newExam]);
+        setActiveAdminExamId(newExam.id);
       };
-      setExams([...exams, newExam]);
-      setActiveAdminExamId(newExam.id);
+      reader.readAsDataURL(file);
     }
   };
 
