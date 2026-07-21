@@ -85,7 +85,7 @@ export default function App() {
     const sanitizedText = text.toUpperCase().replace(/[^ABCDE]/g, '');
     const newKey = {};
     for (let i = 0; i < sanitizedText.length; i++) {
-      if (i < exam.numPages) {
+      if (i < (exam.numPages || 120)) {
         newKey[i + 1] = sanitizedText[i];
       }
     }
@@ -293,7 +293,7 @@ export default function App() {
                 <input type="number" value={adminActiveExam.duration} onChange={(e) => updateExam(adminActiveExam.id, { duration: Number(e.target.value) })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
               </div>
 
-              {/* YENİ: Çözüm PDF Yükleme Alanı */}
+              {/* Çözüm PDF Yükleme Alanı */}
               <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '6px', color: '#0f172a' }}>💡 Açıklamalı Çözüm PDF'i:</label>
                 <input type="file" accept="application/pdf" onChange={handleSolutionUpload} style={{ fontSize: '0.85rem', width: '100%' }} />
@@ -307,15 +307,14 @@ export default function App() {
               <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>Hızlı Cevap Anahtarı</h3>
               <div style={{ marginBottom: '20px' }}>
                 <textarea 
-  placeholder="Örn: ABCDECAD..."
-  value={
-    Array.from(
-      { length: adminActiveExam?.numPages || adminActiveExam?.totalQuestions || 120 }, 
-      (_, i) => adminActiveExam?.answerKey?.[i + 1] || ''
-    ).join('').toUpperCase()
-  }
-  onChange={(e) => handleFastKeyEntry(e.target.value.toUpperCase())}
-/>
+                  placeholder="Örn: ABCDECAD..."
+                  value={
+                    Array.from(
+                      { length: adminActiveExam?.numPages || 120 }, 
+                      (_, i) => adminActiveExam?.answerKey?.[i + 1] || ''
+                    ).join('').toUpperCase()
+                  }
+                  onChange={(e) => handleFastKeyEntry(e.target.value)}
                   style={{ 
                     width: '100%', 
                     height: '100px', 
@@ -330,7 +329,7 @@ export default function App() {
                   }} 
                 />
                 <div style={{ fontSize: '0.85rem', color: '#16a34a', fontWeight: 'bold', marginTop: '8px', textAlign: 'right' }}>
-                  Girilen: {Object.keys(adminActiveExam.answerKey).length} / {adminActiveExam.numPages || 0}
+                  Girilen: {Object.keys(adminActiveExam.answerKey || {}).length} / {adminActiveExam.numPages || 0}
                 </div>
               </div>
 
@@ -448,7 +447,6 @@ export default function App() {
                 <span>💡 {studentCurrentPage}. Soru Açıklamalı Çözümü</span>
                 <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: '#166534', color: '#fff', cursor: 'pointer', fontSize: '0.8rem' }}>Kapat</button>
               </div>
-              {/* Çözüm PDF'inin aynen soru numarasına karşılık gelen sayfasını gösterir */}
               <PdfViewer file={activeStudentExam.solutionPdfFile} pageNumber={studentCurrentPage} />
             </div>
           ) : (
