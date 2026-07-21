@@ -307,9 +307,15 @@ export default function App() {
               <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>Hızlı Cevap Anahtarı</h3>
               <div style={{ marginBottom: '20px' }}>
                 <textarea 
-                  placeholder="Örn: ABCDECAD..."
-                  value={Array.from({ length: adminActiveExam.numPages || 0 }, (_, i) => adminActiveExam.answerKey[i + 1] || '').join('')}
-                  onChange={(e) => handleFastKeyEntry(e.target.value)}
+  placeholder="Örn: ABCDECAD..."
+  value={
+    Array.from(
+      { length: adminActiveExam?.numPages || adminActiveExam?.totalQuestions || 120 }, 
+      (_, i) => adminActiveExam?.answerKey?.[i + 1] || ''
+    ).join('').toUpperCase()
+  }
+  onChange={(e) => handleFastKeyEntry(e.target.value.toUpperCase())}
+/>
                   style={{ 
                     width: '100%', 
                     height: '100px', 
