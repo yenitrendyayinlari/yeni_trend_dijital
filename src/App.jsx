@@ -4,8 +4,13 @@ import { supabase } from './supabase';
 
 export default function App() {
   const [appMode, setAppMode] = useState('home'); // 'home', 'admin', 'student'
-  const [exams, setExams] = useState([]);
+  const [authMode, setAuthMode] = useState('login'); // 'login', 'register', 'forgot'
+  const [user, setUser] = useState(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
 
+  const [exams, setExams] = useState([]);
   const [activeAdminExamId, setActiveAdminExamId] = useState(null);
   const [activeStudentExamId, setActiveStudentExamId] = useState(null);
 
@@ -15,13 +20,38 @@ export default function App() {
   const [isExamFinished, setIsExamFinished] = useState(false);
   const [showResults, setShowResults] = useState(false);
   
-  // ÖĞRENCİ ÇÖZÜM İNCELEME MODU (Hangi sorunun çözümü açık?)
-  const [viewingSolutionQ, setViewingSolutionQ] = useState(null);
+  // ÖĞRENCİ ÇÖZÜM İNCELEME MODU
+  const [viewingSolutionQ, setViewingSolutionQ] = useState(false);
 
-  // SUPABASE'DEN SINAVLARI ÇEKME
+  // OTURUM KONTROLÜ (Zaten açıksa direkt panele yönlendirir)
   useEffect(() => {
-    fetchExams();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        checkUserRoleAndSetMode(session.user);
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        checkUserRoleAndSetMode(session.user);
+      } else {
+        setAppMode('home');
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
+
+  const checkUserRoleAndSetMode = (currentUser) => {
+    if (currentUser.email === 'admin@yayinevi.com') {
+      setAppMode('admin');
+    } else {
+      setAppMode('student');
+    }
+    fetchExams();
+  };
 
   const fetchExams = async () => {
     const { data, error } = await supabase
@@ -46,7 +76,55 @@ export default function App() {
     }
   };
 
-  // VERİTABANINDA GÜNCELLEME YAPMA
+  // GİRİŞ / KAYIT / ŞİFRE SIFIRLAMA İŞLEMLERİ
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    
+    if (authMode === 'register' && password.length < 6) {
+      alert("Şifre en az 6 haneli olmalıdır.");
+      return;
+    }
+
+    setAuthLoading(true);
+
+    if (authMode === 'register') {
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      if (error) {
+        alert("Kayıt hatası: " + error.message);
+      } else {
+        alert("Kayıt başarılı! Lütfen e-postanızı kontrol edin veya giriş yapın.");
+        setAuthMode('login');
+      }
+    } else if (authMode === 'login') {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        alert("Giriş hatası: " + error.message);
+      } else {
+        setUser(data.user);
+        checkUserRoleAndSetMode(data.user);
+      }
+    } else if (authMode === 'forgot') {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      });
+      if (error) {
+        alert("Şifre sıfırlama hatası: " + error.message);
+      } else {
+        alert("Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.");
+        setAuthMode('login');
+      }
+    }
+    setAuthLoading(false);
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setAppMode('home');
+    setActiveAdminExamId(null);
+    setActiveStudentExamId(null);
+  };
+
   const updateExamInDb = async (id, updates) => {
     setExams((prev) => prev.map(ex => ex.id === id ? { ...ex, ...updates } : ex));
 
@@ -94,9 +172,6 @@ export default function App() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // ==========================================
-  // YÖNETİCİ FONKSİYONLARI
-  // ==========================================
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -192,16 +267,13 @@ export default function App() {
     }
   };
 
-  // ==========================================
-  // ÖĞRENCİ FONKSİYONLARI
-  // ==========================================
   const startExam = (exam) => {
     setActiveStudentExamId(exam.id);
     setStudentAnswers({});
     setStudentCurrentPage(1);
     setIsExamFinished(false);
     setShowResults(false);
-    setViewingSolutionQ(null);
+    setViewingSolutionQ(false);
     setTimeLeft(exam.duration * 60);
   };
 
@@ -257,35 +329,75 @@ export default function App() {
   };
 
   // ==========================================
-  // RENDER: GİRİŞ EKRANI
+  // RENDER: GİRİŞ / KAYIT / ŞİFRE SIFIRLAMA EKRANI (HOME)
   // ==========================================
-  if (appMode === 'home') {
-    const publishedExamsCount = exams.filter(e => e.isPublished).length;
-    
+  if (!user) {
     return (
-      <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '800px', margin: '100px auto', textAlign: 'center', color: '#1e293b' }}>
-        <h1 style={{ fontSize: '2rem', color: '#0f172a', marginBottom: '40px' }}>YENİ TREND DİJİTAL SINAV PLATFORMU</h1>
-        
-        <div style={{ display: 'flex', justifyContent: 'center', gap: '24px' }}>
-          <div onClick={() => setAppMode('admin')} style={{ border: '1px solid #cbd5e1', borderRadius: '12px', padding: '40px', width: '300px', cursor: 'pointer', backgroundColor: '#f8fafc', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}>
-            <div style={{ fontSize: '3rem', marginBottom: '16px' }}>👨‍🏫</div>
-            <h2 style={{ margin: 0, color: '#334155' }}>Yönetici Girişi</h2>
-            <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '12px' }}>Sınav ve çözüm PDF'i yükle, cevap anahtarı gir.</p>
+      <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '400px', margin: '60px auto', padding: '30px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', color: '#1e293b' }}>
+        <h2 style={{ textAlign: 'center', color: '#0f172a', marginBottom: '24px' }}>
+          {authMode === 'login' && '🔑 Kullanıcı Girişi'}
+          {authMode === 'register' && '📝 Yeni Hesap Oluştur'}
+          {authMode === 'forgot' && '🔒 Şifremi Unuttum'}
+        </h2>
+
+        <form onSubmit={handleAuth}>
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '6px' }}>E-posta Adresi:</label>
+            <input 
+              type="email" 
+              required 
+              value={email} 
+              onChange={(e) => setEmail(e.target.value)} 
+              placeholder="ornek@mail.com"
+              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+            />
           </div>
 
-          <div onClick={() => {
-              if (publishedExamsCount === 0) {
-                alert("Şu an aktif bir sınav bulunmamaktadır.");
-                return;
-              }
-              setAppMode('student');
-            }}
-            style={{ border: '1px solid #cbd5e1', borderRadius: '12px', padding: '40px', width: '300px', cursor: publishedExamsCount > 0 ? 'pointer' : 'not-allowed', backgroundColor: publishedExamsCount > 0 ? '#eff6ff' : '#f1f5f9', opacity: publishedExamsCount > 0 ? 1 : 0.6, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)' }}
+          {authMode !== 'forgot' && (
+            <div style={{ marginBottom: '20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Şifre {authMode === 'register' && <span style={{ fontWeight: 'normal', color: '#64748b', fontSize: '0.75rem' }}>(En az 6 karakter)</span>}:</label>
+                {authMode === 'login' && (
+                  <button 
+                    type="button" 
+                    onClick={() => setAuthMode('forgot')} 
+                    style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}
+                  >
+                    Şifremi Unuttum?
+                  </button>
+                )}
+              </div>
+              <input 
+                type="password" 
+                required 
+                minLength={6}
+                value={password} 
+                onChange={(e) => setPassword(e.target.value)} 
+                placeholder="••••••••"
+                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+              />
+            </div>
+          )}
+
+          <button 
+            type="submit" 
+            disabled={authLoading}
+            style={{ width: '100%', padding: '12px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer', marginBottom: '16px' }}
           >
-            <div style={{ fontSize: '3rem', marginBottom: '16px' }}>👨‍🎓</div>
-            <h2 style={{ margin: 0, color: '#1e40af' }}>Öğrenci Girişi</h2>
-            <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '12px' }}>Sistemde {publishedExamsCount} aktif sınav var.</p>
-          </div>
+            {authLoading ? 'İşleniyor...' : (authMode === 'login' ? 'Giriş Yap' : authMode === 'register' ? 'Kayıt Ol' : 'Sıfırlama Bağlantısı Gönder')}
+          </button>
+        </form>
+
+        <div style={{ textAlign: 'center', fontSize: '0.85rem' }}>
+          {authMode === 'login' && (
+            <span>Hesabınız yok mu? <button onClick={() => setAuthMode('register')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>Kayıt Olun</button></span>
+          )}
+          {authMode === 'register' && (
+            <span>Zaten hesabınız var mı? <button onClick={() => setAuthMode('login')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>Giriş Yapın</button></span>
+          )}
+          {authMode === 'forgot' && (
+            <span><button onClick={() => setAuthMode('login')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>◀ Giriş Ekranına Dön</button></span>
+          )}
         </div>
       </div>
     );
@@ -300,8 +412,8 @@ export default function App() {
     return (
       <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '1200px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px' }}>
-          <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>⚙️ Yönetici Paneli</h1>
-          <button onClick={() => { setAppMode('home'); setActiveAdminExamId(null); }} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer' }}>Ana Menüye Dön</button>
+          <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>⚙️ Yönetici Paneli ({user.email})</h1>
+          <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
         </header>
 
         {!adminActiveExam ? (
@@ -433,28 +545,34 @@ export default function App() {
       return (
         <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '800px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
            <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '30px' }}>
-            <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#1e40af' }}>🎓 Sınav Seçim Ekranı</h1>
-            <button onClick={() => setAppMode('home')} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer' }}>Çıkış Yap</button>
+            <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#1e40af' }}>🎓 Sınav Seçim Ekranı ({user.email})</h1>
+            <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
           </header>
 
           <h2 style={{ color: '#334155', marginBottom: '20px' }}>Aktif Sınavlar</h2>
-          <div style={{ display: 'grid', gap: '16px' }}>
-            {publishedExams.map(exam => (
-               <div key={exam.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
-                 <div>
-                    <h3 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>{exam.name}</h3>
-                    <div style={{ display: 'flex', gap: '16px', fontSize: '0.9rem', color: '#64748b' }}>
-                      <span>⏱ {exam.duration} Dakika</span>
-                      <span>📝 {exam.numPages} Soru</span>
-                      {exam.solutionPdfFile && <span style={{ color: '#2563eb', fontWeight: 'bold' }}>💡 Çözümlü</span>}
+          {publishedExams.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px', backgroundColor: '#f8fafc', borderRadius: '12px', border: '1px dashed #cbd5e1', color: '#64748b' }}>
+              Şu an yayında olan aktif bir sınav bulunmamaktadır.
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: '16px' }}>
+              {publishedExams.map(exam => (
+                 <div key={exam.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
+                    <div>
+                      <h3 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>{exam.name}</h3>
+                      <div style={{ display: 'flex', gap: '16px', fontSize: '0.9rem', color: '#64748b' }}>
+                        <span>⏱ {exam.duration} Dakika</span>
+                        <span>📝 {exam.numPages} Soru</span>
+                        {exam.solutionPdfFile && <span style={{ color: '#2563eb', fontWeight: 'bold' }}>💡 Çözümlü</span>}
+                      </div>
                     </div>
+                    <button onClick={() => startExam(exam)} style={{ padding: '12px 24px', borderRadius: '8px', border: 'none', backgroundColor: '#2563eb', color: '#fff', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer' }}>
+                      Sınava Başla ▶
+                    </button>
                  </div>
-                 <button onClick={() => startExam(exam)} style={{ padding: '12px 24px', borderRadius: '8px', border: 'none', backgroundColor: '#2563eb', color: '#fff', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer' }}>
-                   Sınava Başla ▶
-                 </button>
-               </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       );
     }
@@ -480,7 +598,6 @@ export default function App() {
                 <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#475569', fontWeight: 'bold' }}>BOŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#64748b' }}>{results.empty}</div></div>
                 <div style={{ backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#1e40af', fontWeight: 'bold' }}>NET</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#2563eb' }}>{results.net}</div></div>
               </div>
-              <button onClick={() => setShowResults(false)} style={{ width: '100%', padding: '10px', borderRadius: '8px', border: 'none', backgroundColor: '#334155', color: '#ffffff', fontWeight: 'bold', cursor: 'pointer' }}>📝 Soru Soru Cevapları ve Çözümleri İncele</button>
             </div>
           </div>
         ) : null}
@@ -514,8 +631,8 @@ export default function App() {
             )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '16px' }}>
-              <button disabled={studentCurrentPage <= 1} onClick={() => setStudentCurrentPage(p => p - 1)} style={{ padding: '10px 24px', borderRadius: '6px', border: 'none', backgroundColor: studentCurrentPage <= 1 ? '#e2e8f0' : '#475569', color: studentCurrentPage <= 1 ? '#94a3b8' : '#ffffff', fontWeight: 'bold', cursor: studentCurrentPage <= 1 ? 'not-allowed' : 'pointer' }}>◀ Önceki Soru</button>
-              <button disabled={studentCurrentPage >= activeStudentExam.numPages} onClick={() => setStudentCurrentPage(p => p + 1)} style={{ padding: '10px 24px', borderRadius: '6px', border: 'none', backgroundColor: studentCurrentPage >= activeStudentExam.numPages ? '#e2e8f0' : '#2563eb', color: studentCurrentPage >= activeStudentExam.numPages ? '#94a3b8' : '#ffffff', fontWeight: 'bold', cursor: studentCurrentPage >= activeStudentExam.numPages ? 'not-allowed' : 'pointer' }}>Sonraki Soru ▶</button>
+              <button disabled={studentCurrentPage <= 1} onClick={() => { setStudentCurrentPage(p => p - 1); setViewingSolutionQ(false); }} style={{ padding: '10px 24px', borderRadius: '6px', border: 'none', backgroundColor: studentCurrentPage <= 1 ? '#e2e8f0' : '#475569', color: studentCurrentPage <= 1 ? '#94a3b8' : '#ffffff', fontWeight: 'bold', cursor: studentCurrentPage <= 1 ? 'not-allowed' : 'pointer' }}>◀ Önceki Soru</button>
+              <button disabled={studentCurrentPage >= activeStudentExam.numPages} onClick={() => { setStudentCurrentPage(p => p + 1); setViewingSolutionQ(false); }} style={{ padding: '10px 24px', borderRadius: '6px', border: 'none', backgroundColor: studentCurrentPage >= activeStudentExam.numPages ? '#e2e8f0' : '#2563eb', color: studentCurrentPage >= activeStudentExam.numPages ? '#94a3b8' : '#ffffff', fontWeight: 'bold', cursor: studentCurrentPage >= activeStudentExam.numPages ? 'not-allowed' : 'pointer' }}>Sonraki Soru ▶</button>
             </div>
           </div>
 
@@ -536,11 +653,7 @@ export default function App() {
                   <span style={{ color: '#16a34a', fontWeight: 'bold' }}>● Çözüldü: {answeredCount}</span>
                   <span style={{ color: '#64748b', fontWeight: 'bold' }}>○ Boş: {emptyCount}</span>
                 </div>
-              ) : (
-                <div style={{ marginBottom: '16px', textAlign: 'center' }}>
-                  <button onClick={() => setShowResults(true)} style={{ padding: '6px 12px', backgroundColor: '#475569', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '0.85rem', cursor: 'pointer' }}>📊 Sonuç Paneline Dön</button>
-                </div>
-              )}
+              ) : null}
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '8px', maxHeight: '340px', overflowY: 'auto', paddingRight: '4px', marginBottom: '16px' }}>
                 {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
@@ -566,7 +679,7 @@ export default function App() {
                   if (isCurrent) { btnBorder = '2px solid #2563eb'; }
 
                   return (
-                    <button key={qNum} onClick={() => setStudentCurrentPage(qNum)} style={{ height: '38px', borderRadius: '6px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer' }}>
+                    <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '38px', borderRadius: '6px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer' }}>
                       {qNum}
                     </button>
                   );
