@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import PdfViewer from './PdfViewer';
+import { supabase } from './supabase';
 
 export default function App() {
   const [appMode, setAppMode] = useState('home'); // 'home', 'admin', 'student'
@@ -17,8 +18,57 @@ export default function App() {
   // ÖĞRENCİ ÇÖZÜM İNCELEME MODU (Hangi sorunun çözümü açık?)
   const [viewingSolutionQ, setViewingSolutionQ] = useState(null);
 
-  const updateExam = (id, updates) => {
+  // SUPABASE'DEN SINAVLARI ÇEKME
+  useEffect(() => {
+    fetchExams();
+  }, []);
+
+  const fetchExams = async () => {
+    const { data, error } = await supabase
+      .from('exams')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error("Sınavlar yüklenirken hata oluştu:", error);
+    } else {
+      // Supabase'den gelen verileri uygulamanın formatına uyarlıyoruz
+      const formattedExams = data.map(item => ({
+        id: item.id,
+        name: item.name,
+        duration: item.duration,
+        pdfFile: item.pdf_file,
+        solutionPdfFile: item.solution_pdf_file,
+        answerKey: item.answer_key || {},
+        isPublished: item.is_published,
+        numPages: 0 // PDF yüklendikçe PdfViewer hesaplayacak
+      }));
+      setExams(formattedExams);
+    }
+  };
+
+  // VERİTABANINDA GÜNCELLEME YAPMA
+  const updateExamInDb = async (id, updates) => {
+    // UI state'ini hemen güncelle
     setExams((prev) => prev.map(ex => ex.id === id ? { ...ex, ...updates } : ex));
+
+    // Supabase sütun adlarına dönüştür
+    const dbUpdates = {};
+    if (updates.name !== undefined) dbUpdates.name = updates.name;
+    if (updates.duration !== undefined) dbUpdates.duration = updates.duration;
+    if (updates.pdfFile !== undefined) dbUpdates.pdf_file = updates.pdfFile;
+    if (updates.solutionPdfFile !== undefined) dbUpdates.solution_pdf_file = updates.solutionPdfFile;
+    if (updates.answerKey !== undefined) dbUpdates.answer_key = updates.answerKey;
+    if (updates.isPublished !== undefined) dbUpdates.is_published = updates.isPublished;
+
+    const { error } = await supabase
+      .from('exams')
+      .update(dbUpdates)
+      .eq('id', id);
+
+    if (error) {
+      console.error("Güncelleme hatası:", error);
+    }
   };
 
   const activeStudentExam = exams.find(e => e.id === activeStudentExamId);
@@ -48,27 +98,48 @@ export default function App() {
   };
 
   // ==========================================
-  // YÖNETİCİ FONKSİYONLARI
+  // YÖNETİCİ FONKSİYONLARI (SUPABASE DESTEKLİ)
   // ==========================================
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (uploadEvent) => {
-        const base64Pdf = uploadEvent.target.result; // PDF'i Base64 metnine dönüştürüyoruz
-        const newExam = {
-          id: Date.now(),
+      reader.onload = async (uploadEvent) => {
+        const base64Pdf = uploadEvent.target.result;
+        
+        // Supabase veritabanına yeni sınav ekleme
+        const newExamData = {
           name: file.name.replace('.pdf', ''),
-          pdfFile: base64Pdf, // Blob yerine Base64 kaydediyoruz ki canlıda çalışsın
-          numPages: 0,
           duration: 60,
-          answerKey: {},
-          solutionPdfFile: null, 
-          solutionNumPages: 0,   
-          isPublished: false
+          pdf_file: base64Pdf,
+          solution_pdf_file: null,
+          answer_key: {},
+          is_published: false
         };
-        setExams([...exams, newExam]);
-        setActiveAdminExamId(newExam.id);
+
+        const { data, error } = await supabase
+          .from('exams')
+          .insert([newExamData])
+          .select();
+
+        if (error) {
+          console.error("Sınav yüklenemedi:", error);
+          alert("Sınav yüklenirken hata oluştu.");
+        } else if (data && data.length > 0) {
+          const inserted = data[0];
+          const formatted = {
+            id: inserted.id,
+            name: inserted.name,
+            duration: inserted.duration,
+            pdfFile: inserted.pdf_file,
+            solutionPdfFile: inserted.solution_pdf_file,
+            answerKey: inserted.answer_key || {},
+            isPublished: inserted.is_published,
+            numPages: 0
+          };
+          setExams(prev => [formatted, ...prev]);
+          setActiveAdminExamId(formatted.id);
+        }
       };
       reader.readAsDataURL(file);
     }
@@ -77,8 +148,12 @@ export default function App() {
   const handleSolutionUpload = (e) => {
     const file = e.target.files[0];
     if (file && activeAdminExamId) {
-      const fileUrl = URL.createObjectURL(file);
-      updateExam(activeAdminExamId, { solutionPdfFile: fileUrl });
+      const reader = new FileReader();
+      reader.onload = async (uploadEvent) => {
+        const base64Solution = uploadEvent.target.result;
+        await updateExamInDb(activeAdminExamId, { solutionPdfFile: base64Solution });
+      };
+      reader.readAsDataURL(file);
     }
   };
 
@@ -92,23 +167,32 @@ export default function App() {
         newKey[i + 1] = sanitizedText[i];
       }
     }
-    updateExam(activeAdminExamId, { answerKey: newKey });
+    updateExamInDb(activeAdminExamId, { answerKey: newKey });
   };
 
-  const togglePublish = (examId) => {
+  const togglePublish = async (examId) => {
     const exam = exams.find(e => e.id === examId);
     if (exam) {
       if (!exam.isPublished && Object.keys(exam.answerKey).length === 0) {
          if(!window.confirm("Hiç cevap anahtarı girmediniz! Yine de yayınlamak istiyor musunuz?")) return;
       }
-      updateExam(examId, { isPublished: !exam.isPublished });
+      await updateExamInDb(examId, { isPublished: !exam.isPublished });
     }
   };
 
-  const deleteExam = (examId) => {
+  const deleteExam = async (examId) => {
     if (window.confirm("Bu sınavı silmek istediğinize emin misiniz?")) {
-      setExams(exams.filter(e => e.id !== examId));
-      if (activeAdminExamId === examId) setActiveAdminExamId(null);
+      const { error } = await supabase
+        .from('exams')
+        .delete()
+        .eq('id', examId);
+
+      if (error) {
+        console.error("Silme hatası:", error);
+      } else {
+        setExams(exams.filter(e => e.id !== examId));
+        if (activeAdminExamId === examId) setActiveAdminExamId(null);
+      }
     }
   };
 
@@ -277,7 +361,7 @@ export default function App() {
                 pageNumber={1} 
                 onDocumentLoadSuccess={({ numPages }) => {
                   if (adminActiveExam.numPages !== numPages) {
-                    updateExam(adminActiveExam.id, { numPages });
+                    setExams(prev => prev.map(ex => ex.id === adminActiveExam.id ? { ...ex, numPages } : ex));
                   }
                 }} 
               />
@@ -288,12 +372,12 @@ export default function App() {
               
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Adı:</label>
-                <input type="text" value={adminActiveExam.name} onChange={(e) => updateExam(adminActiveExam.id, { name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                <input type="text" value={adminActiveExam.name} onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
               </div>
 
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Süre (Dakika):</label>
-                <input type="number" value={adminActiveExam.duration} onChange={(e) => updateExam(adminActiveExam.id, { duration: Number(e.target.value) })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                <input type="number" value={adminActiveExam.duration} onChange={(e) => updateExamInDb(adminActiveExam.id, { duration: Number(e.target.value) })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
               </div>
 
               <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
