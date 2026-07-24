@@ -20,10 +20,11 @@ export default function App() {
   const [isExamFinished, setIsExamFinished] = useState(false);
   const [showResults, setShowResults] = useState(false);
   
-  // ÖĞRENCİ ÇÖZÜM İNCELEME MODU
+  // ÖĞRENCİ ÇÖZÜM İNCELEME MODU & SONUÇLARI
   const [viewingSolutionQ, setViewingSolutionQ] = useState(false);
+  const [studentResultsMap, setStudentResultsMap] = useState({});
 
-  // OTURUM KONTROLÜ (Zaten açıksa direkt panele yönlendirir)
+  // OTURUM KONTROLÜ
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
@@ -50,10 +51,10 @@ export default function App() {
     } else {
       setAppMode('student');
     }
-    fetchExams();
+    fetchExams(currentUser);
   };
 
-  const fetchExams = async () => {
+  const fetchExams = async (currentUser = user) => {
     const { data, error } = await supabase
       .from('exams')
       .select('*')
@@ -70,9 +71,32 @@ export default function App() {
         solutionPdfFile: item.solution_pdf_file,
         answerKey: item.answer_key || {},
         isPublished: item.is_published,
-        numPages: 0
+        numPages: item.num_pages || 0
       }));
       setExams(formattedExams);
+    }
+
+    // Eğer kullanıcı öğrenci ise, daha önce çözdüğü sınavları çekelim
+    if (currentUser && currentUser.email !== 'admin@yayinevi.com') {
+      const { data: resultsData, error: resError } = await supabase
+        .from('student_exams')
+        .select('*')
+        .eq('student_email', currentUser.email);
+
+      if (!resError && resultsData) {
+        const resultMap = {};
+        resultsData.forEach(res => {
+          resultMap[res.exam_id] = {
+            is_finished: res.is_finished,
+            answers: res.answers || {},
+            correct: res.correct_count,
+            wrong: res.wrong_count,
+            empty: res.empty_count,
+            net: res.net
+          };
+        });
+        setStudentResultsMap(resultMap);
+      }
     }
   };
 
@@ -135,6 +159,7 @@ export default function App() {
     if (updates.solutionPdfFile !== undefined) dbUpdates.solution_pdf_file = updates.solutionPdfFile;
     if (updates.answerKey !== undefined) dbUpdates.answer_key = updates.answerKey;
     if (updates.isPublished !== undefined) dbUpdates.is_published = updates.isPublished;
+    if (updates.numPages !== undefined) dbUpdates.num_pages = updates.numPages;
 
     const { error } = await supabase
       .from('exams')
@@ -154,9 +179,8 @@ export default function App() {
         setTimeLeft((prev) => {
           if (prev <= 1) {
             clearInterval(timer);
-            setIsExamFinished(true);
-            setShowResults(true);
-            alert("Süre doldu! Sınavınız tamamlanmıştır.");
+            saveAndFinishExam();
+            alert("Süre doldu! Sınavınız otomatik olarak tamamlanmıştır.");
             return 0;
           }
           return prev - 1;
@@ -164,7 +188,7 @@ export default function App() {
       }, 1000);
       return () => clearInterval(timer);
     }
-  }, [appMode, activeStudentExam, isExamFinished, showResults]);
+  }, [appMode, activeStudentExam, isExamFinished, showResults, studentAnswers]);
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -185,7 +209,8 @@ export default function App() {
           pdf_file: base64Pdf,
           solution_pdf_file: null,
           answer_key: {},
-          is_published: false
+          is_published: false,
+          num_pages: 0
         };
 
         const { data, error } = await supabase
@@ -206,7 +231,7 @@ export default function App() {
             solutionPdfFile: inserted.solution_pdf_file,
             answerKey: inserted.answer_key || {},
             isPublished: inserted.is_published,
-            numPages: 0
+            numPages: inserted.num_pages || 0
           };
           setExams(prev => [formatted, ...prev]);
           setActiveAdminExamId(formatted.id);
@@ -277,13 +302,6 @@ export default function App() {
     setTimeLeft(exam.duration * 60);
   };
 
-  const exitStudentExam = () => {
-    if(!isExamFinished) {
-      if(!window.confirm("Sınav devam ediyor. Çıkarsanız ilerlemeniz kaybolur. Emin misiniz?")) return;
-    }
-    setActiveStudentExamId(null);
-  };
-
   const handleAnswerSelect = (option) => {
     if (isExamFinished) return;
     setStudentAnswers((prev) => {
@@ -294,13 +312,6 @@ export default function App() {
       }
       return { ...prev, [studentCurrentPage]: option };
     });
-  };
-
-  const finishExam = () => {
-    if (window.confirm("Sınavı bitirmek istediğinize emin misiniz?")) {
-      setIsExamFinished(true);
-      setShowResults(true);
-    }
   };
 
   const calculateResults = () => {
@@ -326,6 +337,43 @@ export default function App() {
     }
     const net = Math.max(0, correct - wrong * 0.25);
     return { correct, wrong, empty, net };
+  };
+
+  const saveAndFinishExam = async () => {
+    const results = calculateResults();
+    
+    setIsExamFinished(true);
+    setShowResults(true);
+
+    const { error } = await supabase
+      .from('student_exams')
+      .upsert([
+        {
+          student_email: user.email,
+          exam_id: activeStudentExamId,
+          answers: studentAnswers,
+          correct_count: results.correct,
+          wrong_count: results.wrong,
+          empty_count: results.empty,
+          net: results.net,
+          is_finished: true
+        }
+      ], { onConflict: 'student_email, exam_id' });
+
+    if (error) {
+      console.error("Sınav sonucu kaydedilemedi:", error);
+    } else {
+      setStudentResultsMap(prev => ({
+        ...prev,
+        [activeStudentExamId]: { is_finished: true, ...results, answers: studentAnswers }
+      }));
+    }
+  };
+
+  const finishExam = () => {
+    if (window.confirm("Sınavı bitirmek istediğinize emin misiniz?")) {
+      saveAndFinishExam();
+    }
   };
 
   // ==========================================
@@ -469,7 +517,7 @@ export default function App() {
                 pageNumber={1} 
                 onDocumentLoadSuccess={({ numPages }) => {
                   if (adminActiveExam.numPages !== numPages) {
-                    setExams(prev => prev.map(ex => ex.id === adminActiveExam.id ? { ...ex, numPages } : ex));
+                    updateExamInDb(adminActiveExam.id, { numPages });
                   }
                 }} 
               />
@@ -556,21 +604,41 @@ export default function App() {
             </div>
           ) : (
             <div style={{ display: 'grid', gap: '16px' }}>
-              {publishedExams.map(exam => (
-                 <div key={exam.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
+              {publishedExams.map(exam => {
+                const resData = studentResultsMap[exam.id];
+                const isCompleted = resData?.is_finished;
+                return (
+                  <div key={exam.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
                     <div>
-                      <h3 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>{exam.name}</h3>
+                      <h3 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>
+                        {exam.name} {isCompleted && <span style={{ color: '#16a34a', fontSize: '0.85rem', marginLeft: '8px' }}>(✅ Çözüldü - Net: {resData.net})</span>}
+                      </h3>
                       <div style={{ display: 'flex', gap: '16px', fontSize: '0.9rem', color: '#64748b' }}>
                         <span>⏱ {exam.duration} Dakika</span>
                         <span>📝 {exam.numPages} Soru</span>
                         {exam.solutionPdfFile && <span style={{ color: '#2563eb', fontWeight: 'bold' }}>💡 Çözümlü</span>}
                       </div>
                     </div>
-                    <button onClick={() => startExam(exam)} style={{ padding: '12px 24px', borderRadius: '8px', border: 'none', backgroundColor: '#2563eb', color: '#fff', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer' }}>
-                      Sınava Başla ▶
+                    <button 
+                      onClick={() => {
+                        if (isCompleted) {
+                          setActiveStudentExamId(exam.id);
+                          setStudentAnswers(resData.answers || {});
+                          setStudentCurrentPage(1);
+                          setIsExamFinished(true);
+                          setShowResults(true);
+                          setViewingSolutionQ(false);
+                        } else {
+                          startExam(exam);
+                        }
+                      }} 
+                      style={{ padding: '12px 24px', borderRadius: '8px', border: 'none', backgroundColor: isCompleted ? '#475569' : '#2563eb', color: '#fff', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer' }}
+                    >
+                      {isCompleted ? 'Sonuçları İncele 📊' : 'Sınava Başla ▶'}
                     </button>
-                 </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -579,19 +647,19 @@ export default function App() {
 
     const answeredCount = Object.keys(studentAnswers).length;
     const emptyCount = activeStudentExam.numPages - answeredCount;
-    const results = showResults ? calculateResults() : null;
+    const results = showResults ? (studentResultsMap[activeStudentExamId] || calculateResults()) : null;
 
     return (
       <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '1200px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px' }}>
           <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>{activeStudentExam.name}</h1>
-          <button onClick={exitStudentExam} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer' }}>Sınav Listesine Dön</button>
+          <button onClick={() => setActiveStudentExamId(null)} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer' }}>Sınav Listesine Dön</button>
         </header>
 
         {showResults ? (
           <div>
             <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', maxWidth: '700px', margin: '0 auto 24px auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
-              <h2 style={{ textAlign: 'center', marginTop: 0, color: '#0f172a' }}>🎉 Sınavınız Tamamlandı!</h2>
+              <h2 style={{ textAlign: 'center', marginTop: 0, color: '#0f172a' }}>🎉 Sınav Sonucu</h2>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>
                 <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#166534', fontWeight: 'bold' }}>DOĞRU</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#15803d' }}>{results.correct}</div></div>
                 <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 'bold' }}>YANLIŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#dc2626' }}>{results.wrong}</div></div>
@@ -615,7 +683,15 @@ export default function App() {
               <span>İşaretlenen: <strong style={{ color: studentAnswers[studentCurrentPage] ? '#16a34a' : '#2563eb' }}>{studentAnswers[studentCurrentPage] || 'Boş'}</strong></span>
             </div>
 
-            <PdfViewer file={activeStudentExam.pdfFile} pageNumber={studentCurrentPage} />
+            <PdfViewer 
+              file={activeStudentExam.pdfFile} 
+              pageNumber={studentCurrentPage} 
+              onDocumentLoadSuccess={({ numPages }) => {
+                if (activeStudentExam.numPages !== numPages) {
+                  updateExamInDb(activeStudentExam.id, { numPages });
+                }
+              }}
+            />
 
             {!isExamFinished && (
               <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', margin: '20px 0' }}>
@@ -670,7 +746,7 @@ export default function App() {
                     } else if (studentAns && studentAns !== correctAns) {
                       btnBg = '#fee2e2'; btnColor = '#dc2626'; btnBorder = '1px solid #ef4444';
                     } else {
-                      btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #cbd5e1';
+                      btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #e2e8f0';
                     }
                   } else {
                     if (isAnswered) { btnBg = '#16a34a'; btnColor = '#ffffff'; btnBorder = '1px solid #16a34a'; }
