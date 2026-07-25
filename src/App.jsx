@@ -16,7 +16,7 @@ export default function App() {
 
   const [studentCurrentPage, setStudentCurrentPage] = useState(1);
   const [studentAnswers, setStudentAnswers] = useState({});
-  const [timeLeft, setTimeLeft] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(0); // Deneme için kalan süre, Test için geçen süre (kronometre)
   const [isExamFinished, setIsExamFinished] = useState(false);
   const [showResults, setShowResults] = useState(false);
   
@@ -67,6 +67,7 @@ export default function App() {
         id: item.id,
         name: item.name,
         duration: item.duration,
+        examType: item.exam_type || 'deneme', // 'deneme' veya 'test'
         pdfFile: item.pdf_file,
         solutionPdfFile: item.solution_pdf_file,
         answerKey: item.answer_key || {},
@@ -76,14 +77,15 @@ export default function App() {
       setExams(formattedExams);
     }
 
-    // Eğer kullanıcı öğrenci ise, daha önce çözdüğü sınavları çekelim
     if (currentUser && currentUser.email !== 'admin@yayinevi.com') {
       const { data: resultsData, error: resError } = await supabase
         .from('student_exams')
         .select('*')
         .eq('student_email', currentUser.email);
 
-      if (!resError && resultsData) {
+      if (resError) {
+        console.error("Öğrenci sonuçları çekilemedi:", resError);
+      } else if (resultsData) {
         const resultMap = {};
         resultsData.forEach(res => {
           resultMap[res.exam_id] = {
@@ -112,7 +114,7 @@ export default function App() {
     setAuthLoading(true);
 
     if (authMode === 'register') {
-      const { data, error } = await supabase.auth.signUp({ email, password });
+      const { error } = await supabase.auth.signUp({ email, password });
       if (error) {
         alert("Kayıt hatası: " + error.message);
       } else {
@@ -147,6 +149,7 @@ export default function App() {
     setAppMode('home');
     setActiveAdminExamId(null);
     setActiveStudentExamId(null);
+    setStudentResultsMap({});
   };
 
   const updateExamInDb = async (id, updates) => {
@@ -155,6 +158,7 @@ export default function App() {
     const dbUpdates = {};
     if (updates.name !== undefined) dbUpdates.name = updates.name;
     if (updates.duration !== undefined) dbUpdates.duration = updates.duration;
+    if (updates.examType !== undefined) dbUpdates.exam_type = updates.examType;
     if (updates.pdfFile !== undefined) dbUpdates.pdf_file = updates.pdfFile;
     if (updates.solutionPdfFile !== undefined) dbUpdates.solution_pdf_file = updates.solutionPdfFile;
     if (updates.answerKey !== undefined) dbUpdates.answer_key = updates.answerKey;
@@ -173,18 +177,25 @@ export default function App() {
 
   const activeStudentExam = exams.find(e => e.id === activeStudentExamId);
   
+  // SAYAC YÖNETİMİ (Deneme için Geri Sayım, Test için Kronometre)
   useEffect(() => {
     if (appMode === 'student' && activeStudentExam && !isExamFinished && !showResults) {
       const timer = setInterval(() => {
-        setTimeLeft((prev) => {
-          if (prev <= 1) {
-            clearInterval(timer);
-            saveAndFinishExam();
-            alert("Süre doldu! Sınavınız otomatik olarak tamamlanmıştır.");
-            return 0;
-          }
-          return prev - 1;
-        });
+        if (activeStudentExam.examType === 'deneme') {
+          // Geri Sayım
+          setTimeLeft((prev) => {
+            if (prev <= 1) {
+              clearInterval(timer);
+              saveAndFinishExam();
+              alert("Süre doldu! Sınavınız otomatik olarak tamamlanmıştır.");
+              return 0;
+            }
+            return prev - 1;
+          });
+        } else {
+          // Kronometre (İleri Sayım)
+          setTimeLeft((prev) => prev + 1);
+        }
       }, 1000);
       return () => clearInterval(timer);
     }
@@ -206,6 +217,7 @@ export default function App() {
         const newExamData = {
           name: file.name.replace('.pdf', ''),
           duration: 60,
+          exam_type: 'deneme',
           pdf_file: base64Pdf,
           solution_pdf_file: null,
           answer_key: {},
@@ -227,6 +239,7 @@ export default function App() {
             id: inserted.id,
             name: inserted.name,
             duration: inserted.duration,
+            examType: inserted.exam_type || 'deneme',
             pdfFile: inserted.pdf_file,
             solutionPdfFile: inserted.solution_pdf_file,
             answerKey: inserted.answer_key || {},
@@ -277,7 +290,7 @@ export default function App() {
   };
 
   const deleteExam = async (examId) => {
-    if (window.confirm("Bu sınavı silmek istediğinize emin misiniz?")) {
+    if (window.confirm("Bu içeriği silmek istediğinize emin misiniz?")) {
       const { error } = await supabase
         .from('exams')
         .delete()
@@ -299,7 +312,8 @@ export default function App() {
     setIsExamFinished(false);
     setShowResults(false);
     setViewingSolutionQ(false);
-    setTimeLeft(exam.duration * 60);
+    // Eğer deneme ise geri sayım için süre yüklenir, test ise kronometre 0'dan başlar
+    setTimeLeft(exam.examType === 'deneme' ? exam.duration * 60 : 0);
   };
 
   const handleAnswerSelect = (option) => {
@@ -361,7 +375,7 @@ export default function App() {
       ], { onConflict: 'student_email, exam_id' });
 
     if (error) {
-      console.error("Sınav sonucu kaydedilemedi:", error);
+      console.error("Sonuç kaydedilemedi:", error);
     } else {
       setStudentResultsMap(prev => ({
         ...prev,
@@ -371,7 +385,8 @@ export default function App() {
   };
 
   const finishExam = () => {
-    if (window.confirm("Sınavı bitirmek istediğinize emin misiniz?")) {
+    const confirmText = activeStudentExam.examType === 'deneme' ? "Sınavı bitirmek istediğinize emin misiniz?" : "Testi bitirmek ve sonuçları görmek istediğinize emin misiniz?";
+    if (window.confirm(confirmText)) {
       saveAndFinishExam();
     }
   };
@@ -467,16 +482,16 @@ export default function App() {
         {!adminActiveExam ? (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ margin: 0 }}>Tüm Sınavlar</h2>
+              <h2 style={{ margin: 0 }}>Tüm Sınavlar ve Testler</h2>
               <label style={{ padding: '10px 20px', backgroundColor: '#2563eb', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
-                + Yeni Sınav Yükle (PDF)
+                + Yeni İçerik Yükle (PDF)
                 <input type="file" accept="application/pdf" onChange={handleFileUpload} style={{ display: 'none' }} />
               </label>
             </div>
 
             {exams.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px', backgroundColor: '#f8fafc', borderRadius: '12px', border: '1px dashed #cbd5e1' }}>
-                <p style={{ color: '#64748b' }}>Henüz sisteme yüklenmiş bir sınav yok.</p>
+                <p style={{ color: '#64748b' }}>Henüz sisteme yüklenmiş bir içerik yok.</p>
               </div>
             ) : (
               <div style={{ display: 'grid', gap: '16px' }}>
@@ -485,9 +500,12 @@ export default function App() {
                     <div>
                       <h3 style={{ margin: '0 0 8px 0' }}>{exam.name}</h3>
                       <div style={{ display: 'flex', gap: '12px', fontSize: '0.85rem', color: '#64748b' }}>
-                        <span>⏱ {exam.duration} Dk.</span>
+                        <span style={{ backgroundColor: exam.examType === 'deneme' ? '#dbeafe' : '#f3e8ff', color: exam.examType === 'deneme' ? '#1e40af' : '#6b21a8', padding: '2px 8px', borderRadius: '4px', fontWeight: 'bold' }}>
+                          {exam.examType === 'deneme' ? '📋 Deneme Sınavı' : '📚 Süresiz Test / Soru Bankası'}
+                        </span>
+                        {exam.examType === 'deneme' && <span>⏱ {exam.duration} Dk.</span>}
                         <span>📄 {exam.numPages || '?'} Soru</span>
-                        <span>💡 Çözüm PDF: {exam.solutionPdfFile ? '✅ Yüklendi' : '❌ Yüklenmedi'}</span>
+                        <span>💡 Çözüm: {exam.solutionPdfFile ? '✅ Yüklendi' : '❌ Yüklenmedi'}</span>
                         <span style={{ color: exam.isPublished ? '#16a34a' : '#ef4444', fontWeight: 'bold' }}>
                           {exam.isPublished ? '● Yayında' : '○ Taslak'}
                         </span>
@@ -524,17 +542,31 @@ export default function App() {
             </div>
 
             <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px', position: 'sticky', top: '20px' }}>
-              <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>Sınav Ayarları</h3>
+              <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>İçerik Ayarları</h3>
               
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Adı:</label>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>İçerik Adı:</label>
                 <input type="text" value={adminActiveExam.name} onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
               </div>
 
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Süre (Dakika):</label>
-                <input type="number" value={adminActiveExam.duration} onChange={(e) => updateExamInDb(adminActiveExam.id, { duration: Number(e.target.value) })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>İçerik Türü:</label>
+                <select 
+                  value={adminActiveExam.examType || 'deneme'} 
+                  onChange={(e) => updateExamInDb(adminActiveExam.id, { examType: e.target.value })}
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff' }}
+                >
+                  <option value="deneme">Deneme Sınavı (Süreli Geri Sayım)</option>
+                  <option value="test">Süresiz Test / Soru Bankası (Kronometreli)</option>
+                </select>
               </div>
+
+              {adminActiveExam.examType === 'deneme' && (
+                <div style={{ marginBottom: '16px' }}>
+                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Süre (Dakika):</label>
+                  <input type="number" value={adminActiveExam.duration} onChange={(e) => updateExamInDb(adminActiveExam.id, { duration: Number(e.target.value) })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                </div>
+              )}
 
               <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '6px', color: '#0f172a' }}>💡 Açıklamalı Çözüm PDF'i:</label>
@@ -593,28 +625,33 @@ export default function App() {
       return (
         <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '800px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
            <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '30px' }}>
-            <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#1e40af' }}>🎓 Sınav Seçim Ekranı ({user.email})</h1>
+            <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#1e40af' }}>🎓 Sınav & Test Seçim Ekranı ({user.email})</h1>
             <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
           </header>
 
-          <h2 style={{ color: '#334155', marginBottom: '20px' }}>Aktif Sınavlar</h2>
+          <h2 style={{ color: '#334155', marginBottom: '20px' }}>Aktif İçerikler</h2>
           {publishedExams.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '40px', backgroundColor: '#f8fafc', borderRadius: '12px', border: '1px dashed #cbd5e1', color: '#64748b' }}>
-              Şu an yayında olan aktif bir sınav bulunmamaktadır.
+              Şu an yayında olan aktif bir sınav veya test bulunmamaktadır.
             </div>
           ) : (
             <div style={{ display: 'grid', gap: '16px' }}>
               {publishedExams.map(exam => {
                 const resData = studentResultsMap[exam.id];
                 const isCompleted = resData?.is_finished;
+                const isDeneme = exam.examType === 'deneme';
                 return (
                   <div key={exam.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
                     <div>
-                      <h3 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>
-                        {exam.name} {isCompleted && <span style={{ color: '#16a34a', fontSize: '0.85rem', marginLeft: '8px' }}>(✅ Çözüldü - Net: {resData.net})</span>}
-                      </h3>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
+                        <span style={{ backgroundColor: isDeneme ? '#dbeafe' : '#f3e8ff', color: isDeneme ? '#1e40af' : '#6b21a8', padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold' }}>
+                          {isDeneme ? 'Deneme Sınavı' : 'Süresiz Test'}
+                        </span>
+                        {isCompleted && <span style={{ color: '#16a34a', fontSize: '0.85rem', fontWeight: 'bold' }}>(✅ Çözüldü - Net: {resData.net})</span>}
+                      </div>
+                      <h3 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>{exam.name}</h3>
                       <div style={{ display: 'flex', gap: '16px', fontSize: '0.9rem', color: '#64748b' }}>
-                        <span>⏱ {exam.duration} Dakika</span>
+                        {isDeneme && <span>⏱ {exam.duration} Dakika</span>}
                         <span>📝 {exam.numPages} Soru</span>
                         {exam.solutionPdfFile && <span style={{ color: '#2563eb', fontWeight: 'bold' }}>💡 Çözümlü</span>}
                       </div>
@@ -634,7 +671,7 @@ export default function App() {
                       }} 
                       style={{ padding: '12px 24px', borderRadius: '8px', border: 'none', backgroundColor: isCompleted ? '#475569' : '#2563eb', color: '#fff', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer' }}
                     >
-                      {isCompleted ? 'Sonuçları İncele 📊' : 'Sınava Başla ▶'}
+                      {isCompleted ? 'Sonuçları İncele 📊' : (isDeneme ? 'Sınava Başla ▶' : 'Teste Başla ▶')}
                     </button>
                   </div>
                 );
@@ -648,18 +685,19 @@ export default function App() {
     const answeredCount = Object.keys(studentAnswers).length;
     const emptyCount = activeStudentExam.numPages - answeredCount;
     const results = showResults ? (studentResultsMap[activeStudentExamId] || calculateResults()) : null;
+    const isDeneme = activeStudentExam.examType === 'deneme';
 
     return (
       <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '1200px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px' }}>
           <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>{activeStudentExam.name}</h1>
-          <button onClick={() => setActiveStudentExamId(null)} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer' }}>Sınav Listesine Dön</button>
+          <button onClick={() => setActiveStudentExamId(null)} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer' }}>İçerik Listesine Dön</button>
         </header>
 
         {showResults ? (
           <div>
             <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', maxWidth: '700px', margin: '0 auto 24px auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
-              <h2 style={{ textAlign: 'center', marginTop: 0, color: '#0f172a' }}>🎉 Sınav Sonucu</h2>
+              <h2 style={{ textAlign: 'center', marginTop: 0, color: '#0f172a' }}>🎉 Sonuçlar</h2>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>
                 <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#166534', fontWeight: 'bold' }}>DOĞRU</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#15803d' }}>{results.correct}</div></div>
                 <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 'bold' }}>YANLIŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#dc2626' }}>{results.wrong}</div></div>
@@ -676,8 +714,16 @@ export default function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '12px 20px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px' }}>
               <span>Soru {studentCurrentPage} / {activeStudentExam.numPages}</span>
               {!showResults && (
-                <div style={{ backgroundColor: timeLeft < 300 ? '#fef2f2' : '#ffffff', color: timeLeft < 300 ? '#dc2626' : '#0f172a', padding: '6px 14px', borderRadius: '6px', border: timeLeft < 300 ? '1px solid #fca5a5' : '1px solid #cbd5e1', fontSize: '1rem' }}>
-                  ⏱️ Kalan Süre: <strong>{formatTime(timeLeft)}</strong>
+                <div style={{ 
+                  backgroundColor: isDeneme && timeLeft < 300 ? '#fef2f2' : '#ffffff', 
+                  color: isDeneme && timeLeft < 300 ? '#dc2626' : '#0f172a', 
+                  padding: '6px 14px', 
+                  borderRadius: '6px', 
+                  border: isDeneme && timeLeft < 300 ? '1px solid #fca5a5' : '1px solid #cbd5e1', 
+                  fontSize: '1rem' 
+                }}>
+                  {isDeneme ? `⏱️ Kalan Süre: ` : `⏳ Geçen Süre (Kronometre): `}
+                  <strong>{formatTime(timeLeft)}</strong>
                 </div>
               )}
               <span>İşaretlenen: <strong style={{ color: studentAnswers[studentCurrentPage] ? '#16a34a' : '#2563eb' }}>{studentAnswers[studentCurrentPage] || 'Boş'}</strong></span>
@@ -770,7 +816,7 @@ export default function App() {
 
               {!isExamFinished && (
                 <button onClick={finishExam} style={{ width: '100%', padding: '12px', borderRadius: '8px', border: 'none', backgroundColor: '#dc2626', color: '#ffffff', fontWeight: 'bold', fontSize: '0.95rem', cursor: 'pointer' }}>
-                  Sınavı Bitir 🏁
+                  {isDeneme ? 'Sınavı Bitir 🏁' : 'Testi Bitir 🏁'}
                 </button>
               )}
             </div>
