@@ -207,18 +207,37 @@ export default function App() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // YENİ: Sınav PDF'ini Supabase Storage'a Yükleme (Base64 yerine)
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = async (uploadEvent) => {
-        const base64Pdf = uploadEvent.target.result;
-        
+      const uploadExamFile = async () => {
+        setAuthLoading(true);
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
+
+        const { error: storageError } = await supabase.storage
+          .from('exam-files')
+          .upload(fileName, file);
+
+        if (storageError) {
+          console.error("Storage yükleme hatası:", storageError);
+          alert("Dosya depolama alanına yüklenemedi: " + storageError.message);
+          setAuthLoading(false);
+          return;
+        }
+
+        const { data: publicURLData } = supabase.storage
+          .from('exam-files')
+          .getPublicUrl(fileName);
+
+        const filePublicUrl = publicURLData.publicUrl;
+
         const newExamData = {
           name: file.name.replace('.pdf', ''),
           duration: 60,
           exam_type: 'deneme',
-          pdf_file: base64Pdf,
+          pdf_file: filePublicUrl,
           solution_pdf_file: null,
           answer_key: {},
           is_published: false,
@@ -230,9 +249,11 @@ export default function App() {
           .insert([newExamData])
           .select();
 
+        setAuthLoading(false);
+
         if (error) {
-          console.error("Sınav yüklenemedi:", error);
-          alert("Sınav yüklenirken hata oluştu.");
+          console.error("Sınav veritabanı kayıt hatası:", error);
+          alert("Sınav veritabanına kaydedilemedi: " + error.message);
         } else if (data && data.length > 0) {
           const inserted = data[0];
           const formatted = {
@@ -250,19 +271,42 @@ export default function App() {
           setActiveAdminExamId(formatted.id);
         }
       };
-      reader.readAsDataURL(file);
+
+      uploadExamFile();
     }
   };
 
+  // YENİ: Çözüm PDF'ini Supabase Storage'a Yükleme
   const handleSolutionUpload = (e) => {
     const file = e.target.files[0];
     if (file && activeAdminExamId) {
-      const reader = new FileReader();
-      reader.onload = async (uploadEvent) => {
-        const base64Solution = uploadEvent.target.result;
-        await updateExamInDb(activeAdminExamId, { solutionPdfFile: base64Solution });
+      const uploadSolutionFile = async () => {
+        setAuthLoading(true);
+        const fileExt = file.name.split('.').pop();
+        const fileName = `sol_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
+
+        const { error: storageError } = await supabase.storage
+          .from('exam-files')
+          .upload(fileName, file);
+
+        if (storageError) {
+          console.error("Çözüm storage yükleme hatası:", storageError);
+          alert("Çözüm dosyası depolama alanına yüklenemedi: " + storageError.message);
+          setAuthLoading(false);
+          return;
+        }
+
+        const { data: publicURLData } = supabase.storage
+          .from('exam-files')
+          .getPublicUrl(fileName);
+
+        const solutionPublicUrl = publicURLData.publicUrl;
+        setAuthLoading(false);
+
+        await updateExamInDb(activeAdminExamId, { solutionPdfFile: solutionPublicUrl });
       };
-      reader.readAsDataURL(file);
+
+      uploadSolutionFile();
     }
   };
 
@@ -312,7 +356,6 @@ export default function App() {
     setIsExamFinished(false);
     setShowResults(false);
     setViewingSolutionQ(false);
-    // Eğer deneme ise geri sayım için süre yüklenir, test ise kronometre 0'dan başlar
     setTimeLeft(exam.examType === 'deneme' ? exam.duration * 60 : 0);
   };
 
@@ -478,6 +521,12 @@ export default function App() {
           <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>⚙️ Yönetici Paneli ({user.email})</h1>
           <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
         </header>
+
+        {authLoading && (
+          <div style={{ textAlign: 'center', padding: '10px', backgroundColor: '#eff6ff', color: '#1e40af', marginBottom: '16px', borderRadius: '6px', fontWeight: 'bold' }}>
+            ⏳ Dosya depolama alanına yükleniyor, lütfen bekleyin...
+          </div>
+        )}
 
         {!adminActiveExam ? (
           <div>
