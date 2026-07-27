@@ -250,7 +250,7 @@ export default function App() {
         const fileName = `${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
 
         const { error: storageError } = await supabase.storage
-          .from('EXAM-FILES')
+          .from('exam-files')
           .upload(fileName, file);
 
         if (storageError) {
@@ -261,7 +261,7 @@ export default function App() {
         }
 
         const { data: publicURLData } = supabase.storage
-          .from('EXAM-FILES')
+          .from('exam-files')
           .getPublicUrl(fileName);
 
         const filePublicUrl = publicURLData.publicUrl;
@@ -321,7 +321,7 @@ export default function App() {
         const fileName = `sol_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
 
         const { error: storageError } = await supabase.storage
-          .from('EXAM-FILES')
+          .from('exam-files')
           .upload(fileName, file);
 
         if (storageError) {
@@ -332,7 +332,7 @@ export default function App() {
         }
 
         const { data: publicURLData } = supabase.storage
-          .from('EXAM-FILES')
+          .from('exam-files')
           .getPublicUrl(fileName);
 
         const solutionPublicUrl = publicURLData.publicUrl;
