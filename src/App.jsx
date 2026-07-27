@@ -665,12 +665,14 @@ export default function App() {
 
       const uniqueLessons = Array.from(new Set(exams.filter(e => e.isPublished).map(e => e.categoryLesson).filter(Boolean)));
       const uniqueExamTypes = Array.from(new Set(exams.filter(e => e.isPublished).map(e => e.categoryExamType).filter(Boolean)));
-      const allCategories = ['Tümü', ...new Set([...uniqueExamTypes, ...uniqueLessons])];
+      
+      const rawCategories = ['Tümü', ...uniqueExamTypes, ...uniqueLessons];
+      const allCategories = Array.from(new Set(rawCategories.map(cat => cat === 'Tümü' ? 'Tümü' : cat.trim())));
 
       return (
         <div style={{ fontFamily: 'Inter, system-ui, sans-serif', minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b' }}>
           
-          {/* Udemy Tarzı Üst Header */}
+          {/* Üst Header ("Keşfedin" sol taraftan tamamen kaldırıldı) */}
           <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '12px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '24px', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)' }}>
             
             <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
@@ -678,9 +680,6 @@ export default function App() {
                 <span style={{ backgroundColor: '#2563eb', color: '#fff', padding: '4px 8px', borderRadius: '6px', fontSize: '1rem' }}>YT</span>
                 YENİTREND
               </div>
-              <button style={{ background: 'none', border: 'none', fontWeight: '600', color: '#334155', cursor: 'pointer', fontSize: '0.95rem' }}>
-                Keşfedin
-              </button>
             </div>
 
             <div style={{ flex: 1, maxWidth: '700px', position: 'relative' }}>
