@@ -672,8 +672,8 @@ export default function App() {
       return (
         <div style={{ fontFamily: 'Inter, system-ui, sans-serif', minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b' }}>
           
-          {/* Üst Header ("Keşfedin" sol taraftan tamamen kaldırıldı) */}
-          <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '12px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '24px', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)' }}>
+          {/* Üst Header (Arama çubuğu genişliği sınırlandı, butonlarla çakışması önlendi) */}
+          <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '12px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '20px', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)', flexWrap: 'wrap' }}>
             
             <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
               <div style={{ fontSize: '1.4rem', fontWeight: '900', letterSpacing: '-0.05em', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -682,18 +682,18 @@ export default function App() {
               </div>
             </div>
 
-            <div style={{ flex: 1, maxWidth: '700px', position: 'relative' }}>
+            <div style={{ flex: '0 1 450px', position: 'relative', minWidth: '250px' }}>
               <span style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: '#64748b' }}>🔍</span>
               <input 
                 type="text" 
                 placeholder="Ne öğrenmek veya çözmek istiyorsunuz?" 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                style={{ width: '100%', padding: '12px 16px 12px 46px', borderRadius: '9999px', border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', outline: 'none', fontSize: '0.95rem' }} 
+                style={{ width: '100%', padding: '12px 16px 12px 46px', borderRadius: '9999px', border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', outline: 'none', fontSize: '0.95rem', boxSizing: 'border-box' }} 
               />
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0 }}>
               {user ? (
                 <>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f1f5f9', padding: '6px 12px', borderRadius: '20px', border: '1px solid #e2e8f0' }}>
