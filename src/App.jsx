@@ -24,7 +24,6 @@ export default function App() {
   const [viewingSolutionQ, setViewingSolutionQ] = useState(false);
   const [studentResultsMap, setStudentResultsMap] = useState({});
   
-  // Arama ve Kategori Filtreleme State'leri
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tümü');
 
@@ -251,7 +250,7 @@ export default function App() {
         const fileName = `${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
 
         const { error: storageError } = await supabase.storage
-          .from('exam-files')
+          .from('EXAM-FILES')
           .upload(fileName, file);
 
         if (storageError) {
@@ -262,7 +261,7 @@ export default function App() {
         }
 
         const { data: publicURLData } = supabase.storage
-          .from('exam-files')
+          .from('EXAM-FILES')
           .getPublicUrl(fileName);
 
         const filePublicUrl = publicURLData.publicUrl;
@@ -322,7 +321,7 @@ export default function App() {
         const fileName = `sol_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
 
         const { error: storageError } = await supabase.storage
-          .from('exam-files')
+          .from('EXAM-FILES')
           .upload(fileName, file);
 
         if (storageError) {
@@ -333,7 +332,7 @@ export default function App() {
         }
 
         const { data: publicURLData } = supabase.storage
-          .from('exam-files')
+          .from('EXAM-FILES')
           .getPublicUrl(fileName);
 
         const solutionPublicUrl = publicURLData.publicUrl;
@@ -556,7 +555,6 @@ export default function App() {
                 <input type="text" value={adminActiveExam.name} onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
               </div>
 
-              {/* Sınav Türü */}
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
                 <input 
@@ -568,7 +566,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Ders Türü */}
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
                 <input 
@@ -648,7 +645,7 @@ export default function App() {
   }
 
   // ==========================================
-  // RENDER: ÖĞRENCİ EKRANI (Katalog + Üst Menü Düzeni)
+  // RENDER: ÖĞRENCİ EKRANI
   // ==========================================
   if (appMode === 'student') {
     if (!activeStudentExamId) {
@@ -676,7 +673,6 @@ export default function App() {
       return (
         <div style={{ fontFamily: 'Inter, system-ui, sans-serif', minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b' }}>
           
-          {/* Üst Header */}
           <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '12px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '20px', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)', flexWrap: 'wrap' }}>
             
             <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
@@ -721,7 +717,6 @@ export default function App() {
             </div>
           </header>
 
-          {/* Alt Kategori Menü Çubuğu (Yalnızca Sınav Türleri) */}
           <div style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '0 32px', overflowX: 'auto', display: 'flex', gap: '24px' }}>
             {allCategories.map(cat => (
               <button 
@@ -900,15 +895,15 @@ export default function App() {
       );
     }
 
-    // Sınav / Test Çözüm Ekranı
+    // Sınav / Test Çözüm Ekranı (Daraltılmış Soru Paleti Düzeni)
     const answeredCount = Object.keys(studentAnswers).length;
     const emptyCount = activeStudentExam.numPages - answeredCount;
     const results = showResults ? (studentResultsMap[activeStudentExamId] || calculateResults()) : null;
     const isDeneme = activeStudentExam.examType === 'deneme';
 
     return (
-      <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '1200px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px' }}>
+      <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '1300px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
           <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>{activeStudentExam.name}</h1>
           <button onClick={() => setActiveStudentExamId(null)} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer' }}>İçerik Listesine Dön</button>
         </header>
@@ -927,10 +922,25 @@ export default function App() {
           </div>
         ) : null}
 
-        <div style={{ display: 'grid', gridTemplateColumns: (showResults && viewingSolutionQ) && activeStudentExam.solutionPdfFile ? '1fr 1fr' : '1fr 300px', gap: '24px', alignItems: 'start' }}>
+        {/* Soru alanı genişletildi, sağ palet daraltıldı (220px) */}
+        <style>{`
+          .exam-layout {
+            display: grid;
+            grid-template-columns: 1fr 220px;
+            gap: 20px;
+            align-items: start;
+          }
+          @media (max-width: 900px) {
+            .exam-layout {
+              grid-template-columns: 1fr !important;
+            }
+          }
+        `}</style>
+
+        <div className="exam-layout">
           
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '12px 20px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '12px 20px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
               <span>Soru {studentCurrentPage} / {activeStudentExam.numPages}</span>
               {!showResults && (
                 <div style={{ backgroundColor: '#ffffff', color: '#0f172a', padding: '6px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '1rem' }}>
@@ -964,32 +974,33 @@ export default function App() {
               </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '16px', gap: '10px' }}>
               <button disabled={studentCurrentPage <= 1} onClick={() => { setStudentCurrentPage(p => p - 1); setViewingSolutionQ(false); }} style={{ padding: '10px 24px', borderRadius: '6px', border: 'none', backgroundColor: studentCurrentPage <= 1 ? '#e2e8f0' : '#475569', color: studentCurrentPage <= 1 ? '#94a3b8' : '#ffffff', fontWeight: 'bold', cursor: studentCurrentPage <= 1 ? 'not-allowed' : 'pointer' }}>◀ Önceki Soru</button>
               <button disabled={studentCurrentPage >= activeStudentExam.numPages} onClick={() => { setStudentCurrentPage(p => p + 1); setViewingSolutionQ(false); }} style={{ padding: '10px 24px', borderRadius: '6px', border: 'none', backgroundColor: studentCurrentPage >= activeStudentExam.numPages ? '#e2e8f0' : '#2563eb', color: studentCurrentPage >= activeStudentExam.numPages ? '#94a3b8' : '#ffffff', fontWeight: 'bold', cursor: studentCurrentPage >= activeStudentExam.numPages ? 'not-allowed' : 'pointer' }}>Sonraki Soru ▶</button>
             </div>
           </div>
 
           {(showResults && viewingSolutionQ) && activeStudentExam.solutionPdfFile ? (
-            <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '16px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#dcfce7', padding: '12px 20px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', color: '#166534' }}>
-                <span>💡 {studentCurrentPage}. Soru Açıklamalı Çözümü</span>
-                <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: '#166534', color: '#fff', cursor: 'pointer', fontSize: '0.8rem' }}>Kapat</button>
+            <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#dcfce7', padding: '10px 14px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', color: '#166534', fontSize: '0.85rem' }}>
+                <span>💡 {studentCurrentPage}. Soru Çözümü</span>
+                <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '2px 8px', borderRadius: '4px', border: 'none', backgroundColor: '#166534', color: '#fff', cursor: 'pointer', fontSize: '0.75rem' }}>Kapat</button>
               </div>
               <PdfViewer file={activeStudentExam.solutionPdfFile} pageNumber={studentCurrentPage} />
             </div>
           ) : (
-            <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '16px', position: 'sticky', top: '20px' }}>
-              <h3 style={{ margin: '0 0 12px 0', fontSize: '1.1rem', color: '#0f172a', textAlign: 'center' }}>Soru Paleti</h3>
+            <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '12px' }}>
+              <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem', color: '#0f172a', textAlign: 'center' }}>Soru Paleti</h3>
               
               {!showResults ? (
-                <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: '16px', padding: '8px', backgroundColor: '#ffffff', borderRadius: '6px', border: '1px solid #f1f5f9', fontSize: '0.85rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: '12px', padding: '6px', backgroundColor: '#ffffff', borderRadius: '6px', border: '1px solid #f1f5f9', fontSize: '0.75rem' }}>
                   <span style={{ color: '#16a34a', fontWeight: 'bold' }}>● Çözüldü: {answeredCount}</span>
                   <span style={{ color: '#64748b', fontWeight: 'bold' }}>○ Boş: {emptyCount}</span>
                 </div>
               ) : null}
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '8px', maxHeight: '340px', overflowY: 'auto', paddingRight: '4px', marginBottom: '16px' }}>
+              {/* 4 sütunlu daha kompakt yapı */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '5px', maxHeight: '360px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
                 {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
                   const qNum = index + 1;
                   const isAnswered = !!studentAnswers[qNum];
@@ -1013,7 +1024,7 @@ export default function App() {
                   if (isCurrent) { btnBorder = '2px solid #2563eb'; }
 
                   return (
-                    <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '38px', borderRadius: '6px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer' }}>
+                    <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '32px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.8rem', cursor: 'pointer', padding: 0 }}>
                       {qNum}
                     </button>
                   );
@@ -1021,13 +1032,13 @@ export default function App() {
               </div>
 
               {showResults && activeStudentExam.solutionPdfFile && (
-                <button onClick={() => setViewingSolutionQ(true)} style={{ width: '100%', padding: '12px', borderRadius: '8px', border: 'none', backgroundColor: '#16a34a', color: '#ffffff', fontWeight: 'bold', fontSize: '0.95rem', cursor: 'pointer', marginBottom: '12px' }}>
-                  💡 {studentCurrentPage}. Sorunun Çözümünü Gör
+                <button onClick={() => setViewingSolutionQ(true)} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#ffffff', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', marginBottom: '10px' }}>
+                  💡 {studentCurrentPage}. Çözümü Gör
                 </button>
               )}
 
               {!isExamFinished && (
-                <button onClick={finishExam} style={{ width: '100%', padding: '12px', borderRadius: '8px', border: 'none', backgroundColor: '#dc2626', color: '#ffffff', fontWeight: 'bold', fontSize: '0.95rem', cursor: 'pointer' }}>
+                <button onClick={finishExam} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', backgroundColor: '#dc2626', color: '#ffffff', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer' }}>
                   {isDeneme ? 'Sınavı Bitir 🏁' : 'Testi Bitir 🏁'}
                 </button>
               )}
