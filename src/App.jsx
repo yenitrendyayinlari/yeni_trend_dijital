@@ -556,7 +556,7 @@ export default function App() {
                 <input type="text" value={adminActiveExam.name} onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
               </div>
 
-              {/* Yeni Eklenen Alan: Sınav Türü */}
+              {/* Sınav Türü */}
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
                 <input 
@@ -568,7 +568,7 @@ export default function App() {
                 />
               </div>
 
-              {/* Yeni Eklenen Alan: Ders Türü */}
+              {/* Ders Türü */}
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
                 <input 
@@ -663,7 +663,6 @@ export default function App() {
         return true;
       });
 
-      // Benzersiz kategori listesini dinamik üretelim
       const uniqueLessons = Array.from(new Set(exams.filter(e => e.isPublished).map(e => e.categoryLesson).filter(Boolean)));
       const uniqueExamTypes = Array.from(new Set(exams.filter(e => e.isPublished).map(e => e.categoryExamType).filter(Boolean)));
       const allCategories = ['Tümü', ...new Set([...uniqueExamTypes, ...uniqueLessons])];
@@ -674,7 +673,6 @@ export default function App() {
           {/* Udemy Tarzı Üst Header */}
           <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '12px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '24px', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)' }}>
             
-            {/* Logo ve Keşfedin */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
               <div style={{ fontSize: '1.4rem', fontWeight: '900', letterSpacing: '-0.05em', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <span style={{ backgroundColor: '#2563eb', color: '#fff', padding: '4px 8px', borderRadius: '6px', fontSize: '1rem' }}>YT</span>
@@ -685,7 +683,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Arama Çubuğu */}
             <div style={{ flex: 1, maxWidth: '700px', position: 'relative' }}>
               <span style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: '#64748b' }}>🔍</span>
               <input 
@@ -697,7 +694,6 @@ export default function App() {
               />
             </div>
 
-            {/* Sağ Butonlar / Profil */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               {user ? (
                 <>
@@ -746,7 +742,6 @@ export default function App() {
             ))}
           </div>
 
-          {/* Main Content Area */}
           <main style={{ maxWidth: '1000px', margin: '40px auto', padding: '0 20px' }}>
             <div style={{ marginBottom: '24px' }}>
               <h2 style={{ fontSize: '1.5rem', fontWeight: '700', color: '#0f172a', margin: '0 0 6px 0', letterSpacing: '-0.025em' }}>Sınavlar ve Testler</h2>
@@ -862,7 +857,6 @@ export default function App() {
             )}
           </main>
 
-          {/* Giriş / Kayıt Modal Penceresi */}
           {showAuthModal && (
             <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
               <div style={{ fontFamily: 'Inter, system-ui, sans-serif', width: '100%', maxWidth: '400px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', padding: '30px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', color: '#1e293b', position: 'relative' }}>
