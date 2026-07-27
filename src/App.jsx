@@ -509,7 +509,7 @@ export default function App() {
                           🎯 {exam.categoryExamType} / {exam.categoryLesson}
                         </span>
                         <span style={{ backgroundColor: exam.examType === 'deneme' ? '#dbeafe' : '#f3e8ff', color: exam.examType === 'deneme' ? '#1e40af' : '#6b21a8', padding: '2px 8px', borderRadius: '4px', fontWeight: 'bold' }}>
-                          {exam.examType === 'deneme' ? '📋 Deneme Sınavı' : '📚 Süresiz Test'}
+                          {exam.examType === 'deneme' ? '📋 Deneme Sınavı' : '📚 Test'}
                         </span>
                         <span>📄 {exam.numPages || '?'} Soru</span>
                         <span style={{ color: exam.isPublished ? '#16a34a' : '#ef4444', fontWeight: 'bold' }}>
@@ -585,7 +585,7 @@ export default function App() {
                   style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff' }}
                 >
                   <option value="deneme">Deneme Sınavı (Süreli Geri Sayım)</option>
-                  <option value="test">Süresiz Test / Soru Bankası (Kronometreli)</option>
+                  <option value="test">Test</option>
                 </select>
               </div>
 
@@ -785,7 +785,7 @@ export default function App() {
                             🎯 {exam.categoryExamType} / {exam.categoryLesson}
                           </span>
                           <span style={{ backgroundColor: isDeneme ? '#eff6ff' : '#f5f3ff', color: isDeneme ? '#1d4ed8' : '#7c3aed', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
-                            {isDeneme ? 'Deneme Sınavı' : 'Süresiz Test'}
+                            {isDeneme ? 'Deneme Sınavı' : 'Test'}
                           </span>
                           
                           {user && isCompleted ? (
