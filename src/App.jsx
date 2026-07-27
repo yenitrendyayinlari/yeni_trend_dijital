@@ -16,15 +16,13 @@ export default function App() {
 
   const [studentCurrentPage, setStudentCurrentPage] = useState(1);
   const [studentAnswers, setStudentAnswers] = useState({});
-  const [timeLeft, setTimeLeft] = useState(0); // Deneme için kalan süre, Test için geçen süre (kronometre)
+  const [timeLeft, setTimeLeft] = useState(0); 
   const [isExamFinished, setIsExamFinished] = useState(false);
   const [showResults, setShowResults] = useState(false);
   
-  // ÖĞRENCİ ÇÖZÜM İNCELEME MODU & SONUÇLARI
   const [viewingSolutionQ, setViewingSolutionQ] = useState(false);
   const [studentResultsMap, setStudentResultsMap] = useState({});
 
-  // OTURUM KONTROLÜ
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
@@ -67,7 +65,7 @@ export default function App() {
         id: item.id,
         name: item.name,
         duration: item.duration,
-        examType: item.exam_type || 'deneme', // 'deneme' veya 'test'
+        examType: item.exam_type || 'deneme',
         pdfFile: item.pdf_file,
         solutionPdfFile: item.solution_pdf_file,
         answerKey: item.answer_key || {},
@@ -102,7 +100,6 @@ export default function App() {
     }
   };
 
-  // GİRİŞ / KAYIT / ŞİFRE SIFIRLAMA İŞLEMLERİ
   const handleAuth = async (e) => {
     e.preventDefault();
     
@@ -177,12 +174,10 @@ export default function App() {
 
   const activeStudentExam = exams.find(e => e.id === activeStudentExamId);
   
-  // SAYAC YÖNETİMİ (Deneme için Geri Sayım, Test için Kronometre)
   useEffect(() => {
     if (appMode === 'student' && activeStudentExam && !isExamFinished && !showResults) {
       const timer = setInterval(() => {
         if (activeStudentExam.examType === 'deneme') {
-          // Geri Sayım
           setTimeLeft((prev) => {
             if (prev <= 1) {
               clearInterval(timer);
@@ -193,7 +188,6 @@ export default function App() {
             return prev - 1;
           });
         } else {
-          // Kronometre (İleri Sayım)
           setTimeLeft((prev) => prev + 1);
         }
       }, 1000);
@@ -207,7 +201,6 @@ export default function App() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // YENİ: Sınav PDF'ini Supabase Storage'a Yükleme (Base64 yerine)
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -276,7 +269,6 @@ export default function App() {
     }
   };
 
-  // YENİ: Çözüm PDF'ini Supabase Storage'a Yükleme
   const handleSolutionUpload = (e) => {
     const file = e.target.files[0];
     if (file && activeAdminExamId) {
@@ -666,67 +658,160 @@ export default function App() {
   }
 
   // ==========================================
-  // RENDER: ÖĞRENCİ EKRANI
+  // RENDER: ÖĞRENCİ EKRANI (Clean & Premium UI)
   // ==========================================
   if (appMode === 'student') {
     if (!activeStudentExamId) {
       const publishedExams = exams.filter(e => e.isPublished);
       return (
-        <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '800px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
-           <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '30px' }}>
-            <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#1e40af' }}>🎓 Sınav & Test Seçim Ekranı ({user.email})</h1>
-            <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
+        <div style={{ fontFamily: 'Inter, system-ui, sans-serif', minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b' }}>
+          {/* Modern Header */}
+          <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '16px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{ width: '36px', height: '36px', backgroundColor: '#2563eb', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem' }}>
+                📚
+              </div>
+              <div>
+                <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '700', color: '#0f172a', letterSpacing: '-0.025em' }}>Yayınevi Sınav Portalı</h1>
+                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Öğrenci Kontrol Paneli</span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f1f5f9', padding: '6px 12px', borderRadius: '20px', border: '1px solid #e2e8f0' }}>
+                <span style={{ width: '8px', height: '8px', backgroundColor: '#22c55e', borderRadius: '50%' }}></span>
+                <span style={{ fontSize: '0.85rem', fontWeight: '500', color: '#334155' }}>{user.email}</span>
+              </div>
+              <button 
+                onClick={handleLogout} 
+                style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', cursor: 'pointer', color: '#dc2626', fontWeight: '600', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                onMouseOver={(e) => e.target.style.backgroundColor = '#fee2e2'}
+                onMouseOut={(e) => e.target.style.backgroundColor = '#fef2f2'}
+              >
+                Çıkış Yap
+              </button>
+            </div>
           </header>
 
-          <h2 style={{ color: '#334155', marginBottom: '20px' }}>Aktif İçerikler</h2>
-          {publishedExams.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '40px', backgroundColor: '#f8fafc', borderRadius: '12px', border: '1px dashed #cbd5e1', color: '#64748b' }}>
-              Şu an yayında olan aktif bir sınav veya test bulunmamaktadır.
+          {/* Main Content Area */}
+          <main style={{ maxWidth: '1000px', margin: '40px auto', padding: '0 20px' }}>
+            <div style={{ marginBottom: '24px' }}>
+              <h2 style={{ fontSize: '1.5rem', fontWeight: '700', color: '#0f172a', margin: '0 0 6px 0', letterSpacing: '-0.025em' }}>Sınavlar ve Testler</h2>
+              <p style={{ margin: 0, color: '#64748b', fontSize: '0.95rem' }}>Çözmek istediğiniz içeriği seçerek başlayabilir veya tamamlanan sınavlarınızı inceleyebilirsiniz.</p>
             </div>
-          ) : (
-            <div style={{ display: 'grid', gap: '16px' }}>
-              {publishedExams.map(exam => {
-                const resData = studentResultsMap[exam.id];
-                const isCompleted = resData?.is_finished;
-                const isDeneme = exam.examType === 'deneme';
-                return (
-                  <div key={exam.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
-                    <div>
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' }}>
-                        <span style={{ backgroundColor: isDeneme ? '#dbeafe' : '#f3e8ff', color: isDeneme ? '#1e40af' : '#6b21a8', padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 'bold' }}>
-                          {isDeneme ? 'Deneme Sınavı' : 'Süresiz Test'}
-                        </span>
-                        {isCompleted && <span style={{ color: '#16a34a', fontSize: '0.85rem', fontWeight: 'bold' }}>(✅ Çözüldü - Net: {resData.net})</span>}
+
+            {publishedExams.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '60px 20px', backgroundColor: '#ffffff', borderRadius: '16px', border: '1px dashed #cbd5e1', boxShadow: '0 1px 3px 0 rgba(0,0,0,0.02)' }}>
+                <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>📂</div>
+                <h3 style={{ margin: '0 0 6px 0', color: '#334155', fontSize: '1.1rem' }}>Aktif İçerik Bulunmuyor</h3>
+                <p style={{ margin: 0, color: '#64748b', fontSize: '0.9rem' }}>Şu an yayında olan aktif bir sınav veya test bulunmamaktadır.</p>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: '16px' }}>
+                {publishedExams.map(exam => {
+                  const resData = studentResultsMap[exam.id];
+                  const isCompleted = resData?.is_finished;
+                  const isDeneme = exam.examType === 'deneme';
+
+                  return (
+                    <div 
+                      key={exam.id} 
+                      style={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between', 
+                        alignItems: 'center', 
+                        padding: '24px', 
+                        backgroundColor: '#ffffff', 
+                        borderRadius: '16px', 
+                        border: isCompleted ? '1px solid #bbf7d0' : '1px solid #e2e8f0', 
+                        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px -1px rgba(0, 0, 0, 0.02)',
+                        transition: 'transform 0.2s, box-shadow 0.2s',
+                        position: 'relative',
+                        overflow: 'hidden'
+                      }}
+                    >
+                      {/* Sol Kenar Durum Çubuğu Vurgusu */}
+                      <div style={{ 
+                        position: 'absolute', 
+                        left: 0, 
+                        top: 0, 
+                        bottom: 0, 
+                        width: '6px', 
+                        backgroundColor: isCompleted ? '#22c55e' : (isDeneme ? '#3b82f6' : '#8b5cf6') 
+                      }}></div>
+
+                      <div style={{ paddingLeft: '8px' }}>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+                          <span style={{ 
+                            backgroundColor: isDeneme ? '#eff6ff' : '#f5f3ff', 
+                            color: isDeneme ? '#1d4ed8' : '#7c3aed', 
+                            padding: '4px 10px', 
+                            borderRadius: '6px', 
+                            fontSize: '0.75rem', 
+                            fontWeight: '600',
+                            letterSpacing: '0.025em'
+                          }}>
+                            {isDeneme ? 'Deneme Sınavı' : 'Süresiz Test'}
+                          </span>
+                          
+                          {isCompleted ? (
+                            <span style={{ backgroundColor: '#f0fdf4', color: '#15803d', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
+                              ✓ Çözüldü (Net: {resData.net})
+                            </span>
+                          ) : (
+                            <span style={{ backgroundColor: '#fffbeb', color: '#b45309', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
+                              Bekliyor
+                            </span>
+                          )}
+                        </div>
+
+                        <h3 style={{ margin: '0 0 10px 0', color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
+                        
+                        <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem', color: '#64748b', fontWeight: '500' }}>
+                          {isDeneme && <span>⏱ Süre: {exam.duration} Dakika</span>}
+                          <span>📝 Soru Sayısı: {exam.numPages}</span>
+                          {exam.solutionPdfFile && <span style={{ color: '#2563eb', fontWeight: '600' }}>💡 Çözümlü</span>}
+                        </div>
                       </div>
-                      <h3 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>{exam.name}</h3>
-                      <div style={{ display: 'flex', gap: '16px', fontSize: '0.9rem', color: '#64748b' }}>
-                        {isDeneme && <span>⏱ {exam.duration} Dakika</span>}
-                        <span>📝 {exam.numPages} Soru</span>
-                        {exam.solutionPdfFile && <span style={{ color: '#2563eb', fontWeight: 'bold' }}>💡 Çözümlü</span>}
+
+                      <div>
+                        <button 
+                          onClick={() => {
+                            if (isCompleted) {
+                              setActiveStudentExamId(exam.id);
+                              setStudentAnswers(resData.answers || {});
+                              setStudentCurrentPage(1);
+                              setIsExamFinished(true);
+                              setShowResults(true);
+                              setViewingSolutionQ(false);
+                            } else {
+                              startExam(exam);
+                            }
+                          }} 
+                          style={{ 
+                            padding: '12px 24px', 
+                            borderRadius: '10px', 
+                            border: 'none', 
+                            backgroundColor: isCompleted ? '#475569' : '#2563eb', 
+                            color: '#fff', 
+                            fontWeight: '600', 
+                            fontSize: '0.9rem', 
+                            cursor: 'pointer',
+                            boxShadow: isCompleted ? 'none' : '0 4px 6px -1px rgba(37, 99, 235, 0.2)',
+                            transition: 'background-color 0.2s'
+                          }}
+                          onMouseOver={(e) => e.target.style.backgroundColor = isCompleted ? '#334155' : '#1d4ed8'}
+                          onMouseOut={(e) => e.target.style.backgroundColor = isCompleted ? '#475569' : '#2563eb'}
+                        >
+                          {isCompleted ? 'Sonuçları İncele 📊' : (isDeneme ? 'Sınava Başla ▶' : 'Teste Başla ▶')}
+                        </button>
                       </div>
                     </div>
-                    <button 
-                      onClick={() => {
-                        if (isCompleted) {
-                          setActiveStudentExamId(exam.id);
-                          setStudentAnswers(resData.answers || {});
-                          setStudentCurrentPage(1);
-                          setIsExamFinished(true);
-                          setShowResults(true);
-                          setViewingSolutionQ(false);
-                        } else {
-                          startExam(exam);
-                        }
-                      }} 
-                      style={{ padding: '12px 24px', borderRadius: '8px', border: 'none', backgroundColor: isCompleted ? '#475569' : '#2563eb', color: '#fff', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer' }}
-                    >
-                      {isCompleted ? 'Sonuçları İncele 📊' : (isDeneme ? 'Sınava Başla ▶' : 'Teste Başla ▶')}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                  );
+                })}
+              </div>
+            )}
+          </main>
         </div>
       );
     }
