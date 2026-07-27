@@ -3,9 +3,9 @@ import PdfViewer from './PdfViewer';
 import { supabase } from './supabase';
 
 export default function App() {
-  const [appMode, setAppMode] = useState('student'); // 'admin', 'student' (Artık user yokken de student/katalog görünümünde başlıyor)
-  const [authMode, setAuthMode] = useState('login'); // 'login', 'register', 'forgot'
-  const [showAuthModal, setShowAuthModal] = useState(false); // Giriş/Kayıt Modal kontrolü
+  const [appMode, setAppMode] = useState('student'); 
+  const [authMode, setAuthMode] = useState('login'); 
+  const [showAuthModal, setShowAuthModal] = useState(false); 
   const [user, setUser] = useState(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -23,6 +23,10 @@ export default function App() {
   
   const [viewingSolutionQ, setViewingSolutionQ] = useState(false);
   const [studentResultsMap, setStudentResultsMap] = useState({});
+  
+  // Arama ve Kategori Filtreleme State'leri
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('Tümü');
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -71,6 +75,8 @@ export default function App() {
         name: item.name,
         duration: item.duration,
         examType: item.exam_type || 'deneme',
+        categoryExamType: item.category_exam_type || 'Genel',
+        categoryLesson: item.category_lesson || 'Genel',
         pdfFile: item.pdf_file,
         solutionPdfFile: item.solution_pdf_file,
         answerKey: item.answer_key || {},
@@ -97,6 +103,8 @@ export default function App() {
         name: item.name,
         duration: item.duration,
         examType: item.exam_type || 'deneme',
+        categoryExamType: item.category_exam_type || 'Genel',
+        categoryLesson: item.category_lesson || 'Genel',
         pdfFile: item.pdf_file,
         solutionPdfFile: item.solution_pdf_file,
         answerKey: item.answer_key || {},
@@ -133,12 +141,10 @@ export default function App() {
 
   const handleAuth = async (e) => {
     e.preventDefault();
-    
     if (authMode === 'register' && password.length < 6) {
       alert("Şifre en az 6 haneli olmalıdır.");
       return;
     }
-
     setAuthLoading(true);
 
     if (authMode === 'register') {
@@ -189,6 +195,8 @@ export default function App() {
     if (updates.name !== undefined) dbUpdates.name = updates.name;
     if (updates.duration !== undefined) dbUpdates.duration = updates.duration;
     if (updates.examType !== undefined) dbUpdates.exam_type = updates.examType;
+    if (updates.categoryExamType !== undefined) dbUpdates.category_exam_type = updates.categoryExamType;
+    if (updates.categoryLesson !== undefined) dbUpdates.category_lesson = updates.categoryLesson;
     if (updates.pdfFile !== undefined) dbUpdates.pdf_file = updates.pdfFile;
     if (updates.solutionPdfFile !== undefined) dbUpdates.solution_pdf_file = updates.solutionPdfFile;
     if (updates.answerKey !== undefined) dbUpdates.answer_key = updates.answerKey;
@@ -263,6 +271,8 @@ export default function App() {
           name: file.name.replace('.pdf', ''),
           duration: 60,
           exam_type: 'deneme',
+          category_exam_type: 'Genel',
+          category_lesson: 'Genel',
           pdf_file: filePublicUrl,
           solution_pdf_file: null,
           answer_key: {},
@@ -287,6 +297,8 @@ export default function App() {
             name: inserted.name,
             duration: inserted.duration,
             examType: inserted.exam_type || 'deneme',
+            categoryExamType: inserted.category_exam_type || 'Genel',
+            categoryLesson: inserted.category_lesson || 'Genel',
             pdfFile: inserted.pdf_file,
             solutionPdfFile: inserted.solution_pdf_file,
             answerKey: inserted.answer_key || {},
@@ -297,7 +309,6 @@ export default function App() {
           setActiveAdminExamId(formatted.id);
         }
       };
-
       uploadExamFile();
     }
   };
@@ -330,7 +341,6 @@ export default function App() {
 
         await updateExamInDb(activeAdminExamId, { solutionPdfFile: solutionPublicUrl });
       };
-
       uploadSolutionFile();
     }
   };
@@ -360,11 +370,7 @@ export default function App() {
 
   const deleteExam = async (examId) => {
     if (window.confirm("Bu içeriği silmek istediğinize emin misiniz?")) {
-      const { error } = await supabase
-        .from('exams')
-        .delete()
-        .eq('id', examId);
-
+      const { error } = await supabase.from('exams').delete().eq('id', examId);
       if (error) {
         console.error("Silme hatası:", error);
       } else {
@@ -402,9 +408,7 @@ export default function App() {
 
   const calculateResults = () => {
     if (!activeStudentExam) return { correct: 0, wrong: 0, empty: 0, net: 0 };
-    let correct = 0;
-    let wrong = 0;
-    let empty = 0;
+    let correct = 0, wrong = 0, empty = 0;
     const numP = activeStudentExam.numPages;
 
     for (let i = 1; i <= numP; i++) {
@@ -427,7 +431,6 @@ export default function App() {
 
   const saveAndFinishExam = async () => {
     const results = calculateResults();
-    
     setIsExamFinished(true);
     setShowResults(true);
 
@@ -503,12 +506,13 @@ export default function App() {
                     <div>
                       <h3 style={{ margin: '0 0 8px 0' }}>{exam.name}</h3>
                       <div style={{ display: 'flex', gap: '12px', fontSize: '0.85rem', color: '#64748b' }}>
-                        <span style={{ backgroundColor: exam.examType === 'deneme' ? '#dbeafe' : '#f3e8ff', color: exam.examType === 'deneme' ? '#1e40af' : '#6b21a8', padding: '2px 8px', borderRadius: '4px', fontWeight: 'bold' }}>
-                          {exam.examType === 'deneme' ? '📋 Deneme Sınavı' : '📚 Süresiz Test / Soru Bankası'}
+                        <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '2px 8px', borderRadius: '4px', fontWeight: 'bold' }}>
+                          🎯 {exam.categoryExamType} / {exam.categoryLesson}
                         </span>
-                        {exam.examType === 'deneme' && <span>⏱ {exam.duration} Dk.</span>}
+                        <span style={{ backgroundColor: exam.examType === 'deneme' ? '#dbeafe' : '#f3e8ff', color: exam.examType === 'deneme' ? '#1e40af' : '#6b21a8', padding: '2px 8px', borderRadius: '4px', fontWeight: 'bold' }}>
+                          {exam.examType === 'deneme' ? '📋 Deneme Sınavı' : '📚 Süresiz Test'}
+                        </span>
                         <span>📄 {exam.numPages || '?'} Soru</span>
-                        <span>💡 Çözüm: {exam.solutionPdfFile ? '✅ Yüklendi' : '❌ Yüklenmedi'}</span>
                         <span style={{ color: exam.isPublished ? '#16a34a' : '#ef4444', fontWeight: 'bold' }}>
                           {exam.isPublished ? '● Yayında' : '○ Taslak'}
                         </span>
@@ -552,8 +556,32 @@ export default function App() {
                 <input type="text" value={adminActiveExam.name} onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
               </div>
 
+              {/* Yeni Eklenen Alan: Sınav Türü */}
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>İçerik Türü:</label>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
+                <input 
+                  type="text" 
+                  placeholder="Örn: LGS, YKS, KPSS, 8. Sınıf"
+                  value={adminActiveExam.categoryExamType || ''} 
+                  onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryExamType: e.target.value })} 
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                />
+              </div>
+
+              {/* Yeni Eklenen Alan: Ders Türü */}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
+                <input 
+                  type="text" 
+                  placeholder="Örn: Matematik, Türkçe, Fen Bilimleri"
+                  value={adminActiveExam.categoryLesson || ''} 
+                  onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryLesson: e.target.value })} 
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                />
+              </div>
+
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>İçerik Formatı:</label>
                 <select 
                   value={adminActiveExam.examType || 'deneme'} 
                   onChange={(e) => updateExamInDb(adminActiveExam.id, { examType: e.target.value })}
@@ -620,25 +648,56 @@ export default function App() {
   }
 
   // ==========================================
-  // RENDER: ÖĞRENCİ EKRANI (Katalog + Sınav Arayüzü)
+  // RENDER: ÖĞRENCİ EKRANI (Katalog + Üst Menü Düzeni)
   // ==========================================
   if (appMode === 'student') {
     if (!activeStudentExamId) {
-      const publishedExams = exams.filter(e => e.isPublished);
+      const publishedExams = exams.filter(e => {
+        if (!e.isPublished) return false;
+        if (selectedCategory !== 'Tümü' && e.categoryLesson !== selectedCategory && e.categoryExamType !== selectedCategory) {
+          return false;
+        }
+        if (searchQuery && !e.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+          return false;
+        }
+        return true;
+      });
+
+      // Benzersiz kategori listesini dinamik üretelim
+      const uniqueLessons = Array.from(new Set(exams.filter(e => e.isPublished).map(e => e.categoryLesson).filter(Boolean)));
+      const uniqueExamTypes = Array.from(new Set(exams.filter(e => e.isPublished).map(e => e.categoryExamType).filter(Boolean)));
+      const allCategories = ['Tümü', ...new Set([...uniqueExamTypes, ...uniqueLessons])];
+
       return (
         <div style={{ fontFamily: 'Inter, system-ui, sans-serif', minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b' }}>
-          {/* Modern Header */}
-          <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '16px 32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <div style={{ width: '36px', height: '36px', backgroundColor: '#2563eb', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 'bold', fontSize: '1.2rem' }}>
-                📚
+          
+          {/* Udemy Tarzı Üst Header */}
+          <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '12px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '24px', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)' }}>
+            
+            {/* Logo ve Keşfedin */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+              <div style={{ fontSize: '1.4rem', fontWeight: '900', letterSpacing: '-0.05em', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ backgroundColor: '#2563eb', color: '#fff', padding: '4px 8px', borderRadius: '6px', fontSize: '1rem' }}>YT</span>
+                YENİTREND
               </div>
-              <div>
-                <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '700', color: '#0f172a', letterSpacing: '-0.025em' }}>Yayınevi Sınav Portalı</h1>
-                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{user ? 'Öğrenci Kontrol Paneli' : 'Ziyaretçi Katalog Ekranı'}</span>
-              </div>
+              <button style={{ background: 'none', border: 'none', fontWeight: '600', color: '#334155', cursor: 'pointer', fontSize: '0.95rem' }}>
+                Keşfedin
+              </button>
             </div>
 
+            {/* Arama Çubuğu */}
+            <div style={{ flex: 1, maxWidth: '700px', position: 'relative' }}>
+              <span style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: '#64748b' }}>🔍</span>
+              <input 
+                type="text" 
+                placeholder="Ne öğrenmek veya çözmek istiyorsunuz?" 
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{ width: '100%', padding: '12px 16px 12px 46px', borderRadius: '9999px', border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', outline: 'none', fontSize: '0.95rem' }} 
+              />
+            </div>
+
+            {/* Sağ Butonlar / Profil */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               {user ? (
                 <>
@@ -646,31 +705,46 @@ export default function App() {
                     <span style={{ width: '8px', height: '8px', backgroundColor: '#22c55e', borderRadius: '50%' }}></span>
                     <span style={{ fontSize: '0.85rem', fontWeight: '500', color: '#334155' }}>{user.email}</span>
                   </div>
-                  <button 
-                    onClick={handleLogout} 
-                    style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', cursor: 'pointer', color: '#dc2626', fontWeight: '600', fontSize: '0.85rem', transition: 'all 0.2s' }}
-                  >
+                  <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', cursor: 'pointer', color: '#dc2626', fontWeight: '600', fontSize: '0.85rem' }}>
                     Çıkış Yap
                   </button>
                 </>
               ) : (
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  <button 
-                    onClick={() => { setAuthMode('login'); setShowAuthModal(true); }}
-                    style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #2563eb', backgroundColor: '#ffffff', color: '#2563eb', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}
-                  >
+                  <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #2563eb', backgroundColor: '#ffffff', color: '#2563eb', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
                     Giriş Yap
                   </button>
-                  <button 
-                    onClick={() => { setAuthMode('register'); setShowAuthModal(true); }}
-                    style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', backgroundColor: '#2563eb', color: '#ffffff', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}
-                  >
+                  <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', backgroundColor: '#2563eb', color: '#ffffff', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
                     Kayıt Ol
                   </button>
                 </div>
               )}
             </div>
           </header>
+
+          {/* Alt Kategori Menü Çubuğu */}
+          <div style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '0 32px', overflowX: 'auto', display: 'flex', gap: '24px' }}>
+            {allCategories.map(cat => (
+              <button 
+                key={cat}
+                onClick={() => setSelectedCategory(cat)}
+                style={{ 
+                  background: 'none', 
+                  border: 'none', 
+                  padding: '14px 4px', 
+                  fontSize: '0.9rem', 
+                  fontWeight: selectedCategory === cat ? '700' : '500', 
+                  color: selectedCategory === cat ? '#2563eb' : '#64748b', 
+                  borderBottom: selectedCategory === cat ? '2px solid #2563eb' : '2px solid transparent',
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  transition: 'color 0.2s'
+                }}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
 
           {/* Main Content Area */}
           <main style={{ maxWidth: '1000px', margin: '40px auto', padding: '0 20px' }}>
@@ -685,7 +759,7 @@ export default function App() {
               <div style={{ textAlign: 'center', padding: '60px 20px', backgroundColor: '#ffffff', borderRadius: '16px', border: '1px dashed #cbd5e1', boxShadow: '0 1px 3px 0 rgba(0,0,0,0.02)' }}>
                 <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>📂</div>
                 <h3 style={{ margin: '0 0 6px 0', color: '#334155', fontSize: '1.1rem' }}>Aktif İçerik Bulunmuyor</h3>
-                <p style={{ margin: 0, color: '#64748b', fontSize: '0.9rem' }}>Şu an yayında olan aktif bir sınav veya test bulunmamaktadır.</p>
+                <p style={{ margin: 0, color: '#64748b', fontSize: '0.9rem' }}>Seçilen kriterlere uygun aktif bir sınav veya test bulunmamaktadır.</p>
               </div>
             ) : (
               <div style={{ display: 'grid', gap: '16px' }}>
@@ -706,12 +780,10 @@ export default function App() {
                         borderRadius: '16px', 
                         border: isCompleted ? '1px solid #bbf7d0' : '1px solid #e2e8f0', 
                         boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px -1px rgba(0, 0, 0, 0.02)',
-                        transition: 'transform 0.2s, box-shadow 0.2s',
                         position: 'relative',
                         overflow: 'hidden'
                       }}
                     >
-                      {/* Sol Kenar Durum Çubuğu Vurgusu */}
                       <div style={{ 
                         position: 'absolute', 
                         left: 0, 
@@ -723,15 +795,10 @@ export default function App() {
 
                       <div style={{ paddingLeft: '8px' }}>
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
-                          <span style={{ 
-                            backgroundColor: isDeneme ? '#eff6ff' : '#f5f3ff', 
-                            color: isDeneme ? '#1d4ed8' : '#7c3aed', 
-                            padding: '4px 10px', 
-                            borderRadius: '6px', 
-                            fontSize: '0.75rem', 
-                            fontWeight: '600',
-                            letterSpacing: '0.025em'
-                          }}>
+                          <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
+                            🎯 {exam.categoryExamType} / {exam.categoryLesson}
+                          </span>
+                          <span style={{ backgroundColor: isDeneme ? '#eff6ff' : '#f5f3ff', color: isDeneme ? '#1d4ed8' : '#7c3aed', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
                             {isDeneme ? 'Deneme Sınavı' : 'Süresiz Test'}
                           </span>
                           
@@ -782,8 +849,7 @@ export default function App() {
                             fontWeight: '600', 
                             fontSize: '0.9rem', 
                             cursor: 'pointer',
-                            boxShadow: isCompleted ? 'none' : '0 4px 6px -1px rgba(37, 99, 235, 0.2)',
-                            transition: 'background-color 0.2s'
+                            boxShadow: isCompleted ? 'none' : '0 4px 6px -1px rgba(37, 99, 235, 0.2)'
                           }}
                         >
                           {!user ? 'Üye Ol / Başla ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isDeneme ? 'Sınava Başla ▶' : 'Teste Başla ▶'))}
@@ -800,12 +866,7 @@ export default function App() {
           {showAuthModal && (
             <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
               <div style={{ fontFamily: 'Inter, system-ui, sans-serif', width: '100%', maxWidth: '400px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', padding: '30px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', color: '#1e293b', position: 'relative' }}>
-                <button 
-                  onClick={() => setShowAuthModal(false)}
-                  style={{ position: 'absolute', top: '15px', right: '15px', background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#64748b' }}
-                >
-                  ✕
-                </button>
+                <button onClick={() => setShowAuthModal(false)} style={{ position: 'absolute', top: '15px', right: '15px', background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#64748b' }}>✕</button>
 
                 <h2 style={{ textAlign: 'center', color: '#0f172a', marginBottom: '24px' }}>
                   {authMode === 'login' && '🔑 Kullanıcı Girişi'}
@@ -816,47 +877,22 @@ export default function App() {
                 <form onSubmit={handleAuth}>
                   <div style={{ marginBottom: '16px' }}>
                     <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '6px' }}>E-posta Adresi:</label>
-                    <input 
-                      type="email" 
-                      required 
-                      value={email} 
-                      onChange={(e) => setEmail(e.target.value)} 
-                      placeholder="ornek@mail.com"
-                      style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
-                    />
+                    <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ornek@mail.com" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} />
                   </div>
 
                   {authMode !== 'forgot' && (
                     <div style={{ marginBottom: '20px' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                        <label style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Şifre {authMode === 'register' && <span style={{ fontWeight: 'normal', color: '#64748b', fontSize: '0.75rem' }}>(En az 6 karakter)</span>}:</label>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Şifre:</label>
                         {authMode === 'login' && (
-                          <button 
-                            type="button" 
-                            onClick={() => setAuthMode('forgot')} 
-                            style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}
-                          >
-                            Şifremi Unuttum?
-                          </button>
+                          <button type="button" onClick={() => setAuthMode('forgot')} style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}>Şifremi Unuttum?</button>
                         )}
                       </div>
-                      <input 
-                        type="password" 
-                        required 
-                        minLength={6}
-                        value={password} 
-                        onChange={(e) => setPassword(e.target.value)} 
-                        placeholder="••••••••"
-                        style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
-                      />
+                      <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} />
                     </div>
                   )}
 
-                  <button 
-                    type="submit" 
-                    disabled={authLoading}
-                    style={{ width: '100%', padding: '12px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer', marginBottom: '16px' }}
-                  >
+                  <button type="submit" disabled={authLoading} style={{ width: '100%', padding: '12px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer', marginBottom: '16px' }}>
                     {authLoading ? 'İşleniyor...' : (authMode === 'login' ? 'Giriş Yap' : authMode === 'register' ? 'Kayıt Ol' : 'Sıfırlama Bağlantısı Gönder')}
                   </button>
                 </form>
@@ -879,6 +915,7 @@ export default function App() {
       );
     }
 
+    // Sınav / Test Çözüm Ekranı
     const answeredCount = Object.keys(studentAnswers).length;
     const emptyCount = activeStudentExam.numPages - answeredCount;
     const results = showResults ? (studentResultsMap[activeStudentExamId] || calculateResults()) : null;
@@ -911,15 +948,8 @@ export default function App() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '12px 20px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px' }}>
               <span>Soru {studentCurrentPage} / {activeStudentExam.numPages}</span>
               {!showResults && (
-                <div style={{ 
-                  backgroundColor: isDeneme && timeLeft < 300 ? '#fef2f2' : '#ffffff', 
-                  color: isDeneme && timeLeft < 300 ? '#dc2626' : '#0f172a', 
-                  padding: '6px 14px', 
-                  borderRadius: '6px', 
-                  border: isDeneme && timeLeft < 300 ? '1px solid #fca5a5' : '1px solid #cbd5e1', 
-                  fontSize: '1rem' 
-                }}>
-                  {isDeneme ? `⏱️ Kalan Süre: ` : `⏳ Geçen Süre (Kronometre): `}
+                <div style={{ backgroundColor: '#ffffff', color: '#0f172a', padding: '6px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '1rem' }}>
+                  {isDeneme ? `⏱️ Kalan Süre: ` : `⏳ Kronometre: `}
                   <strong>{formatTime(timeLeft)}</strong>
                 </div>
               )}
