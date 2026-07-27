@@ -654,7 +654,7 @@ export default function App() {
     if (!activeStudentExamId) {
       const publishedExams = exams.filter(e => {
         if (!e.isPublished) return false;
-        if (selectedCategory !== 'Tümü' && e.categoryLesson !== selectedCategory && e.categoryExamType !== selectedCategory) {
+        if (selectedCategory !== 'Tümü' && e.categoryExamType !== selectedCategory) {
           return false;
         }
         if (searchQuery && !e.name.toLowerCase().includes(searchQuery.toLowerCase())) {
@@ -663,16 +663,21 @@ export default function App() {
         return true;
       });
 
-      const uniqueLessons = Array.from(new Set(exams.filter(e => e.isPublished).map(e => e.categoryLesson).filter(Boolean)));
-      const uniqueExamTypes = Array.from(new Set(exams.filter(e => e.isPublished).map(e => e.categoryExamType).filter(Boolean)));
+      // Kesin olarak sadece sınav türleri (categoryExamType) alınıyor, ders türleri (categoryLesson) dahil edilmiyor
+      const uniqueExamTypes = Array.from(
+        new Set(
+          exams
+            .filter(e => e.isPublished && e.categoryExamType)
+            .map(e => e.categoryExamType.trim())
+        )
+      );
       
-      const rawCategories = ['Tümü', ...uniqueExamTypes, ...uniqueLessons];
-      const allCategories = Array.from(new Set(rawCategories.map(cat => cat === 'Tümü' ? 'Tümü' : cat.trim())));
+      const allCategories = ['Tümü', ...uniqueExamTypes];
 
       return (
         <div style={{ fontFamily: 'Inter, system-ui, sans-serif', minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b' }}>
           
-          {/* Üst Header (Arama çubuğu genişliği sınırlandı, butonlarla çakışması önlendi) */}
+          {/* Üst Header */}
           <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '12px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '20px', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)', flexWrap: 'wrap' }}>
             
             <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
@@ -717,7 +722,7 @@ export default function App() {
             </div>
           </header>
 
-          {/* Alt Kategori Menü Çubuğu */}
+          {/* Alt Kategori Menü Çubuğu (Yalnızca Sınav Türleri) */}
           <div style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '0 32px', overflowX: 'auto', display: 'flex', gap: '24px' }}>
             {allCategories.map(cat => (
               <button 
