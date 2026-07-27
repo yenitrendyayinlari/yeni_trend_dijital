@@ -663,7 +663,6 @@ export default function App() {
         return true;
       });
 
-      // Kesin olarak sadece sınav türleri (categoryExamType) alınıyor, ders türleri (categoryLesson) dahil edilmiyor
       const uniqueExamTypes = Array.from(
         new Set(
           exams
@@ -747,13 +746,6 @@ export default function App() {
           </div>
 
           <main style={{ maxWidth: '1000px', margin: '40px auto', padding: '0 20px' }}>
-            <div style={{ marginBottom: '24px' }}>
-              <h2 style={{ fontSize: '1.5rem', fontWeight: '700', color: '#0f172a', margin: '0 0 6px 0', letterSpacing: '-0.025em' }}>Sınavlar ve Testler</h2>
-              <p style={{ margin: 0, color: '#64748b', fontSize: '0.95rem' }}>
-                {user ? "Çözmek istediğiniz içeriği seçerek başlayabilir veya tamamlanan sınavlarınızı inceleyebilirsiniz." : "Yayınevimizin sunduğu deneme ve testleri aşağıda inceleyebilirsiniz. Sınavları çözmek için lütfen giriş yapın veya kayıt olun."}
-              </p>
-            </div>
-
             {publishedExams.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px 20px', backgroundColor: '#ffffff', borderRadius: '16px', border: '1px dashed #cbd5e1', boxShadow: '0 1px 3px 0 rgba(0,0,0,0.02)' }}>
                 <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>📂</div>
@@ -805,11 +797,7 @@ export default function App() {
                             <span style={{ backgroundColor: '#f0fdf4', color: '#15803d', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
                               ✓ Çözüldü (Net: {resData.net})
                             </span>
-                          ) : (
-                            <span style={{ backgroundColor: '#fffbeb', color: '#b45309', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
-                              {user ? 'Bekliyor' : 'Çözmek İçin Üye Olun'}
-                            </span>
-                          )}
+                          ) : null}
                         </div>
 
                         <h3 style={{ margin: '0 0 10px 0', color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
@@ -817,7 +805,6 @@ export default function App() {
                         <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem', color: '#64748b', fontWeight: '500' }}>
                           {isDeneme && <span>⏱ Süre: {exam.duration} Dakika</span>}
                           <span>📝 Soru Sayısı: {exam.numPages}</span>
-                          {exam.solutionPdfFile && <span style={{ color: '#2563eb', fontWeight: '600' }}>💡 Çözümlü</span>}
                         </div>
                       </div>
 
