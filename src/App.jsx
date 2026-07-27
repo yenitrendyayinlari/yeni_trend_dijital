@@ -3,8 +3,9 @@ import PdfViewer from './PdfViewer';
 import { supabase } from './supabase';
 
 export default function App() {
-  const [appMode, setAppMode] = useState('home'); // 'home', 'admin', 'student'
+  const [appMode, setAppMode] = useState('student'); // 'admin', 'student' (Artık user yokken de student/katalog görünümünde başlıyor)
   const [authMode, setAuthMode] = useState('login'); // 'login', 'register', 'forgot'
+  const [showAuthModal, setShowAuthModal] = useState(false); // Giriş/Kayıt Modal kontrolü
   const [user, setUser] = useState(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -28,6 +29,8 @@ export default function App() {
       setUser(session?.user ?? null);
       if (session?.user) {
         checkUserRoleAndSetMode(session.user);
+      } else {
+        fetchPublicExams();
       }
     });
 
@@ -36,7 +39,8 @@ export default function App() {
       if (session?.user) {
         checkUserRoleAndSetMode(session.user);
       } else {
-        setAppMode('home');
+        setAppMode('student');
+        fetchPublicExams();
       }
     });
 
@@ -52,11 +56,38 @@ export default function App() {
     fetchExams(currentUser);
   };
 
-  const fetchExams = async (currentUser = user) => {
+  const fetchPublicExams = async () => {
     const { data, error } = await supabase
       .from('exams')
       .select('*')
+      .eq('is_published', true)
       .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error("Sınavlar yüklenirken hata oluştu:", error);
+    } else {
+      const formattedExams = data.map(item => ({
+        id: item.id,
+        name: item.name,
+        duration: item.duration,
+        examType: item.exam_type || 'deneme',
+        pdfFile: item.pdf_file,
+        solutionPdfFile: item.solution_pdf_file,
+        answerKey: item.answer_key || {},
+        isPublished: item.is_published,
+        numPages: item.num_pages || 0
+      }));
+      setExams(formattedExams);
+    }
+  };
+
+  const fetchExams = async (currentUser = user) => {
+    const query = supabase.from('exams').select('*').order('created_at', { ascending: false });
+    if (!currentUser || currentUser.email !== 'admin@yayinevi.com') {
+      query.eq('is_published', true);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.error("Sınavlar yüklenirken hata oluştu:", error);
@@ -125,6 +156,7 @@ export default function App() {
       } else {
         setUser(data.user);
         checkUserRoleAndSetMode(data.user);
+        setShowAuthModal(false);
       }
     } else if (authMode === 'forgot') {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
@@ -143,10 +175,11 @@ export default function App() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setUser(null);
-    setAppMode('home');
+    setAppMode('student');
     setActiveAdminExamId(null);
     setActiveStudentExamId(null);
     setStudentResultsMap({});
+    fetchPublicExams();
   };
 
   const updateExamInDb = async (id, updates) => {
@@ -175,7 +208,7 @@ export default function App() {
   const activeStudentExam = exams.find(e => e.id === activeStudentExamId);
   
   useEffect(() => {
-    if (appMode === 'student' && activeStudentExam && !isExamFinished && !showResults) {
+    if (user && appMode === 'student' && activeStudentExam && !isExamFinished && !showResults) {
       const timer = setInterval(() => {
         if (activeStudentExam.examType === 'deneme') {
           setTimeLeft((prev) => {
@@ -193,7 +226,7 @@ export default function App() {
       }, 1000);
       return () => clearInterval(timer);
     }
-  }, [appMode, activeStudentExam, isExamFinished, showResults, studentAnswers]);
+  }, [user, appMode, activeStudentExam, isExamFinished, showResults, studentAnswers]);
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -342,6 +375,10 @@ export default function App() {
   };
 
   const startExam = (exam) => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
     setActiveStudentExamId(exam.id);
     setStudentAnswers({});
     setStudentCurrentPage(1);
@@ -427,84 +464,9 @@ export default function App() {
   };
 
   // ==========================================
-  // RENDER: GİRİŞ / KAYIT / ŞİFRE SIFIRLAMA EKRANI (HOME)
-  // ==========================================
-  if (!user) {
-    return (
-      <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '400px', margin: '60px auto', padding: '30px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', color: '#1e293b' }}>
-        <h2 style={{ textAlign: 'center', color: '#0f172a', marginBottom: '24px' }}>
-          {authMode === 'login' && '🔑 Kullanıcı Girişi'}
-          {authMode === 'register' && '📝 Yeni Hesap Oluştur'}
-          {authMode === 'forgot' && '🔒 Şifremi Unuttum'}
-        </h2>
-
-        <form onSubmit={handleAuth}>
-          <div style={{ marginBottom: '16px' }}>
-            <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '6px' }}>E-posta Adresi:</label>
-            <input 
-              type="email" 
-              required 
-              value={email} 
-              onChange={(e) => setEmail(e.target.value)} 
-              placeholder="ornek@mail.com"
-              style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
-            />
-          </div>
-
-          {authMode !== 'forgot' && (
-            <div style={{ marginBottom: '20px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                <label style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Şifre {authMode === 'register' && <span style={{ fontWeight: 'normal', color: '#64748b', fontSize: '0.75rem' }}>(En az 6 karakter)</span>}:</label>
-                {authMode === 'login' && (
-                  <button 
-                    type="button" 
-                    onClick={() => setAuthMode('forgot')} 
-                    style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}
-                  >
-                    Şifremi Unuttum?
-                  </button>
-                )}
-              </div>
-              <input 
-                type="password" 
-                required 
-                minLength={6}
-                value={password} 
-                onChange={(e) => setPassword(e.target.value)} 
-                placeholder="••••••••"
-                style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
-              />
-            </div>
-          )}
-
-          <button 
-            type="submit" 
-            disabled={authLoading}
-            style={{ width: '100%', padding: '12px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer', marginBottom: '16px' }}
-          >
-            {authLoading ? 'İşleniyor...' : (authMode === 'login' ? 'Giriş Yap' : authMode === 'register' ? 'Kayıt Ol' : 'Sıfırlama Bağlantısı Gönder')}
-          </button>
-        </form>
-
-        <div style={{ textAlign: 'center', fontSize: '0.85rem' }}>
-          {authMode === 'login' && (
-            <span>Hesabınız yok mu? <button onClick={() => setAuthMode('register')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>Kayıt Olun</button></span>
-          )}
-          {authMode === 'register' && (
-            <span>Zaten hesabınız var mı? <button onClick={() => setAuthMode('login')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>Giriş Yapın</button></span>
-          )}
-          {authMode === 'forgot' && (
-            <span><button onClick={() => setAuthMode('login')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>◀ Giriş Ekranına Dön</button></span>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // ==========================================
   // RENDER: YÖNETİCİ EKRANI
   // ==========================================
-  if (appMode === 'admin') {
+  if (user && appMode === 'admin') {
     const adminActiveExam = exams.find(e => e.id === activeAdminExamId);
 
     return (
@@ -658,7 +620,7 @@ export default function App() {
   }
 
   // ==========================================
-  // RENDER: ÖĞRENCİ EKRANI (Clean & Premium UI)
+  // RENDER: ÖĞRENCİ EKRANI (Katalog + Sınav Arayüzü)
   // ==========================================
   if (appMode === 'student') {
     if (!activeStudentExamId) {
@@ -673,23 +635,40 @@ export default function App() {
               </div>
               <div>
                 <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '700', color: '#0f172a', letterSpacing: '-0.025em' }}>Yayınevi Sınav Portalı</h1>
-                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Öğrenci Kontrol Paneli</span>
+                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{user ? 'Öğrenci Kontrol Paneli' : 'Ziyaretçi Katalog Ekranı'}</span>
               </div>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f1f5f9', padding: '6px 12px', borderRadius: '20px', border: '1px solid #e2e8f0' }}>
-                <span style={{ width: '8px', height: '8px', backgroundColor: '#22c55e', borderRadius: '50%' }}></span>
-                <span style={{ fontSize: '0.85rem', fontWeight: '500', color: '#334155' }}>{user.email}</span>
-              </div>
-              <button 
-                onClick={handleLogout} 
-                style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', cursor: 'pointer', color: '#dc2626', fontWeight: '600', fontSize: '0.85rem', transition: 'all 0.2s' }}
-                onMouseOver={(e) => e.target.style.backgroundColor = '#fee2e2'}
-                onMouseOut={(e) => e.target.style.backgroundColor = '#fef2f2'}
-              >
-                Çıkış Yap
-              </button>
+              {user ? (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f1f5f9', padding: '6px 12px', borderRadius: '20px', border: '1px solid #e2e8f0' }}>
+                    <span style={{ width: '8px', height: '8px', backgroundColor: '#22c55e', borderRadius: '50%' }}></span>
+                    <span style={{ fontSize: '0.85rem', fontWeight: '500', color: '#334155' }}>{user.email}</span>
+                  </div>
+                  <button 
+                    onClick={handleLogout} 
+                    style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', cursor: 'pointer', color: '#dc2626', fontWeight: '600', fontSize: '0.85rem', transition: 'all 0.2s' }}
+                  >
+                    Çıkış Yap
+                  </button>
+                </>
+              ) : (
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button 
+                    onClick={() => { setAuthMode('login'); setShowAuthModal(true); }}
+                    style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #2563eb', backgroundColor: '#ffffff', color: '#2563eb', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}
+                  >
+                    Giriş Yap
+                  </button>
+                  <button 
+                    onClick={() => { setAuthMode('register'); setShowAuthModal(true); }}
+                    style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', backgroundColor: '#2563eb', color: '#ffffff', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}
+                  >
+                    Kayıt Ol
+                  </button>
+                </div>
+              )}
             </div>
           </header>
 
@@ -697,7 +676,9 @@ export default function App() {
           <main style={{ maxWidth: '1000px', margin: '40px auto', padding: '0 20px' }}>
             <div style={{ marginBottom: '24px' }}>
               <h2 style={{ fontSize: '1.5rem', fontWeight: '700', color: '#0f172a', margin: '0 0 6px 0', letterSpacing: '-0.025em' }}>Sınavlar ve Testler</h2>
-              <p style={{ margin: 0, color: '#64748b', fontSize: '0.95rem' }}>Çözmek istediğiniz içeriği seçerek başlayabilir veya tamamlanan sınavlarınızı inceleyebilirsiniz.</p>
+              <p style={{ margin: 0, color: '#64748b', fontSize: '0.95rem' }}>
+                {user ? "Çözmek istediğiniz içeriği seçerek başlayabilir veya tamamlanan sınavlarınızı inceleyebilirsiniz." : "Yayınevimizin sunduğu deneme ve testleri aşağıda inceleyebilirsiniz. Sınavları çözmek için lütfen giriş yapın veya kayıt olun."}
+              </p>
             </div>
 
             {publishedExams.length === 0 ? (
@@ -754,13 +735,13 @@ export default function App() {
                             {isDeneme ? 'Deneme Sınavı' : 'Süresiz Test'}
                           </span>
                           
-                          {isCompleted ? (
+                          {user && isCompleted ? (
                             <span style={{ backgroundColor: '#f0fdf4', color: '#15803d', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
                               ✓ Çözüldü (Net: {resData.net})
                             </span>
                           ) : (
                             <span style={{ backgroundColor: '#fffbeb', color: '#b45309', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
-                              Bekliyor
+                              {user ? 'Bekliyor' : 'Çözmek İçin Üye Olun'}
                             </span>
                           )}
                         </div>
@@ -777,6 +758,10 @@ export default function App() {
                       <div>
                         <button 
                           onClick={() => {
+                            if (!user) {
+                              setShowAuthModal(true);
+                              return;
+                            }
                             if (isCompleted) {
                               setActiveStudentExamId(exam.id);
                               setStudentAnswers(resData.answers || {});
@@ -800,10 +785,8 @@ export default function App() {
                             boxShadow: isCompleted ? 'none' : '0 4px 6px -1px rgba(37, 99, 235, 0.2)',
                             transition: 'background-color 0.2s'
                           }}
-                          onMouseOver={(e) => e.target.style.backgroundColor = isCompleted ? '#334155' : '#1d4ed8'}
-                          onMouseOut={(e) => e.target.style.backgroundColor = isCompleted ? '#475569' : '#2563eb'}
                         >
-                          {isCompleted ? 'Sonuçları İncele 📊' : (isDeneme ? 'Sınava Başla ▶' : 'Teste Başla ▶')}
+                          {!user ? 'Üye Ol / Başla ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isDeneme ? 'Sınava Başla ▶' : 'Teste Başla ▶'))}
                         </button>
                       </div>
                     </div>
@@ -812,6 +795,86 @@ export default function App() {
               </div>
             )}
           </main>
+
+          {/* Giriş / Kayıt Modal Penceresi */}
+          {showAuthModal && (
+            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
+              <div style={{ fontFamily: 'Inter, system-ui, sans-serif', width: '100%', maxWidth: '400px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', padding: '30px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', color: '#1e293b', position: 'relative' }}>
+                <button 
+                  onClick={() => setShowAuthModal(false)}
+                  style={{ position: 'absolute', top: '15px', right: '15px', background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#64748b' }}
+                >
+                  ✕
+                </button>
+
+                <h2 style={{ textAlign: 'center', color: '#0f172a', marginBottom: '24px' }}>
+                  {authMode === 'login' && '🔑 Kullanıcı Girişi'}
+                  {authMode === 'register' && '📝 Yeni Hesap Oluştur'}
+                  {authMode === 'forgot' && '🔒 Şifremi Unuttum'}
+                </h2>
+
+                <form onSubmit={handleAuth}>
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '6px' }}>E-posta Adresi:</label>
+                    <input 
+                      type="email" 
+                      required 
+                      value={email} 
+                      onChange={(e) => setEmail(e.target.value)} 
+                      placeholder="ornek@mail.com"
+                      style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+                    />
+                  </div>
+
+                  {authMode !== 'forgot' && (
+                    <div style={{ marginBottom: '20px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                        <label style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Şifre {authMode === 'register' && <span style={{ fontWeight: 'normal', color: '#64748b', fontSize: '0.75rem' }}>(En az 6 karakter)</span>}:</label>
+                        {authMode === 'login' && (
+                          <button 
+                            type="button" 
+                            onClick={() => setAuthMode('forgot')} 
+                            style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}
+                          >
+                            Şifremi Unuttum?
+                          </button>
+                        )}
+                      </div>
+                      <input 
+                        type="password" 
+                        required 
+                        minLength={6}
+                        value={password} 
+                        onChange={(e) => setPassword(e.target.value)} 
+                        placeholder="••••••••"
+                        style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+                      />
+                    </div>
+                  )}
+
+                  <button 
+                    type="submit" 
+                    disabled={authLoading}
+                    style={{ width: '100%', padding: '12px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer', marginBottom: '16px' }}
+                  >
+                    {authLoading ? 'İşleniyor...' : (authMode === 'login' ? 'Giriş Yap' : authMode === 'register' ? 'Kayıt Ol' : 'Sıfırlama Bağlantısı Gönder')}
+                  </button>
+                </form>
+
+                <div style={{ textAlign: 'center', fontSize: '0.85rem' }}>
+                  {authMode === 'login' && (
+                    <span>Hesabınız yok mu? <button onClick={() => setAuthMode('register')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>Kayıt Olun</button></span>
+                  )}
+                  {authMode === 'register' && (
+                    <span>Zaten hesabınız var mı? <button onClick={() => setAuthMode('login')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>Giriş Yapın</button></span>
+                  )}
+                  {authMode === 'forgot' && (
+                    <span><button onClick={() => setAuthMode('login')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>◀ Giriş Ekranına Dön</button></span>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
