@@ -27,10 +27,8 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tümü');
 
-  // Yeni eklendi: Öğrencinin verdiği yıldız puanı state'i
-  const [userRating, setUserRating] = useState(0);
-  const [hoverRating, setHoverRating] = useState(0);
-  const [ratingSubmitted, setRatingSubmitted] = useState(false);
+  // Tüm sınavların ortalama puanları ve oy sayıları (exam_id -> { average, count })
+  const [examRatingsMap, setExamRatingsMap] = useState({});
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -52,8 +50,38 @@ export default function App() {
       }
     });
 
+    fetchAllRatings();
+
     return () => subscription.unsubscribe();
   }, []);
+
+  const fetchAllRatings = async () => {
+    const { data, error } = await supabase
+      .from('student_exams')
+      .select('exam_id, rating')
+      .gt('rating', 0);
+
+    if (!error && data) {
+      const map = {};
+      data.forEach(item => {
+        if (!map[item.exam_id]) {
+          map[item.exam_id] = { total: 0, count: 0 };
+        }
+        map[item.exam_id].total += item.rating;
+        map[item.exam_id].count += 1;
+      });
+
+      const formattedMap = {};
+      Object.keys(map).forEach(id => {
+        const avg = map[id].total / map[id].count;
+        formattedMap[id] = {
+          average: avg.toFixed(1).replace('.', ','),
+          count: map[id].count.toLocaleString('tr-TR')
+        };
+      });
+      setExamRatingsMap(formattedMap);
+    }
+  };
 
   const checkUserRoleAndSetMode = (currentUser) => {
     if (currentUser.email === 'admin@yayinevi.com') {
@@ -227,7 +255,7 @@ export default function App() {
           setTimeLeft((prev) => {
             if (prev <= 1) {
               clearInterval(timer);
-              saveAndFinishExam();
+              saveAndFinishExam(0);
               alert("Süre doldu! Sınavınız otomatik olarak tamamlanmıştır.");
               return 0;
             }
@@ -397,8 +425,6 @@ export default function App() {
     setShowResults(false);
     setViewingSolutionQ(false);
     setTimeLeft(exam.examType === 'deneme' ? exam.duration * 60 : 0);
-    setUserRating(0);
-    setRatingSubmitted(false);
   };
 
   const handleAnswerSelect = (option) => {
@@ -441,7 +467,8 @@ export default function App() {
     setIsExamFinished(true);
     setShowResults(true);
 
-    const currentRating = ratingVal || userRating;
+    const existingRes = studentResultsMap[activeStudentExamId] || {};
+    const finalRating = ratingVal > 0 ? ratingVal : (existingRes.rating || 0);
 
     const { error } = await supabase
       .from('student_exams')
@@ -455,7 +482,7 @@ export default function App() {
           empty_count: results.empty,
           net: results.net,
           is_finished: true,
-          rating: currentRating
+          rating: finalRating
         }
       ], { onConflict: 'student_email, exam_id' });
 
@@ -464,8 +491,9 @@ export default function App() {
     } else {
       setStudentResultsMap(prev => ({
         ...prev,
-        [activeStudentExamId]: { is_finished: true, ...results, answers: studentAnswers, rating: currentRating }
+        [activeStudentExamId]: { is_finished: true, ...results, answers: studentAnswers, rating: finalRating }
       }));
+      fetchAllRatings();
     }
   };
 
@@ -476,10 +504,43 @@ export default function App() {
     }
   };
 
-  const handleRateExam = async (rate) => {
-    setUserRating(rate);
-    setRatingSubmitted(true);
-    await saveAndFinishExam(rate);
+  const handleRateExamFromList = async (examId, rate) => {
+    if (!user) {
+      setShowAuthModal(true);
+      return;
+    }
+
+    const existingRes = studentResultsMap[examId] || {};
+    const answersToSave = existingRes.answers || {};
+    const correctC = existingRes.correct || 0;
+    const wrongC = existingRes.wrong || 0;
+    const emptyC = existingRes.empty || 0;
+    const netC = existingRes.net || 0;
+    const isFin = existingRes.is_finished || false;
+
+    const { error } = await supabase
+      .from('student_exams')
+      .upsert([
+        {
+          student_email: user.email,
+          exam_id: examId,
+          answers: answersToSave,
+          correct_count: correctC,
+          wrong_count: wrongC,
+          empty_count: emptyC,
+          net: netC,
+          is_finished: isFin,
+          rating: rate
+        }
+      ], { onConflict: 'student_email, exam_id' });
+
+    if (!error) {
+      setStudentResultsMap(prev => ({
+        ...prev,
+        [examId]: { ...existingRes, rating: rate }
+      }));
+      fetchAllRatings();
+    }
   };
 
   // ==========================================
@@ -770,6 +831,8 @@ export default function App() {
                   const resData = studentResultsMap[exam.id];
                   const isCompleted = resData?.is_finished;
                   const isDeneme = exam.examType === 'deneme';
+                  const ratingInfo = examRatingsMap[exam.id] || { average: '0,0', count: '0' };
+                  const myUserRating = resData?.rating || 0;
 
                   return (
                     <div 
@@ -796,8 +859,8 @@ export default function App() {
                         backgroundColor: isCompleted ? '#22c55e' : (isDeneme ? '#3b82f6' : '#8b5cf6') 
                       }}></div>
 
-                      <div style={{ paddingLeft: '8px' }}>
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+                      <div style={{ paddingLeft: '8px', flex: 1, paddingRight: '16px' }}>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
                           <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
                             🎯 {exam.categoryExamType} / {exam.categoryLesson}
                           </span>
@@ -807,13 +870,49 @@ export default function App() {
                           
                           {user && isCompleted ? (
                             <span style={{ backgroundColor: '#f0fdf4', color: '#15803d', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
-                              ✓ Çözüldü (Net: {resData.net}) {resData.rating ? `⭐ ${resData.rating}/5` : ''}
+                              ✓ Çözüldü (Net: {resData.net})
                             </span>
                           ) : null}
                         </div>
 
-                        <h3 style={{ margin: '0 0 10px 0', color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
+                        <h3 style={{ margin: '0 0 6px 0', color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
                         
+                        {/* 🌟 LİSTEDE YILDIZ VE OY SAYISI GÖRÜNÜMÜ */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '0.9rem' }}>{ratingInfo.average}</span>
+                          <div style={{ display: 'flex', gap: '1px' }}>
+                            {[1, 2, 3, 4, 5].map((star) => {
+                              const activeStar = Number(ratingInfo.average.replace(',', '.')) >= star;
+                              return (
+                                <span key={star} style={{ color: activeStar ? '#eab308' : '#cbd5e1', fontSize: '0.95rem' }}>★</span>
+                              );
+                            })}
+                          </div>
+                          <span style={{ color: '#64748b', fontSize: '0.85rem' }}>({ratingInfo.count})</span>
+
+                          {/* Kullanıcının interaktif kendi oy verme alanı */}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '12px', borderLeft: '1px solid #cbd5e1', paddingLeft: '12px' }}>
+                            <span style={{ fontSize: '0.8rem', color: '#475569' }}>Puanın:</span>
+                            {[1, 2, 3, 4, 5].map((star) => (
+                              <button
+                                key={star}
+                                onClick={() => handleRateExamFromList(exam.id, star)}
+                                title={`${star} Yıldız Ver`}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  cursor: 'pointer',
+                                  fontSize: '1rem',
+                                  color: myUserRating >= star ? '#eab308' : '#cbd5e1',
+                                  padding: '0 1px'
+                                }}
+                              >
+                                ★
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
                         <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem', color: '#64748b', fontWeight: '500' }}>
                           {isDeneme && <span>⏱ Süre: {exam.duration} Dakika</span>}
                           <span>📝 Soru Sayısı: {exam.numPages}</span>
@@ -834,8 +933,6 @@ export default function App() {
                               setIsExamFinished(true);
                               setShowResults(true);
                               setViewingSolutionQ(false);
-                              setUserRating(resData.rating || 0);
-                              setRatingSubmitted(!!resData.rating);
                             } else {
                               startExam(exam);
                             }
@@ -931,48 +1028,11 @@ export default function App() {
           <div>
             <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', maxWidth: '700px', margin: '0 auto 24px auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
               <h2 style={{ textAlign: 'center', marginTop: 0, color: '#0f172a' }}>🎉 Sonuçlar</h2>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '20px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
                 <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#166534', fontWeight: 'bold' }}>DOĞRU</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#15803d' }}>{results.correct}</div></div>
                 <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 'bold' }}>YANLIŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#dc2626' }}>{results.wrong}</div></div>
                 <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#475569', fontWeight: 'bold' }}>BOŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#64748b' }}>{results.empty}</div></div>
                 <div style={{ backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#1e40af', fontWeight: 'bold' }}>NET</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#2563eb' }}>{results.net}</div></div>
-              </div>
-
-              {/* ⭐ YENİ EKLENEN YILDIZ PUANLAMA ALANI */}
-              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '16px', textAlign: 'center' }}>
-                <p style={{ margin: '0 0 8px 0', fontSize: '0.95rem', fontWeight: '600', color: '#334155' }}>
-                  {ratingSubmitted ? '✨ Değerlendirmeniz için teşekkürler!' : 'Bu testin / denemenin kalitesini puanlayın:'}
-                </p>
-                <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
-                  {[1, 2, 3, 4, 5].map((star) => {
-                    const activeState = hoverRating >= star || userRating >= star;
-                    return (
-                      <button
-                        key={star}
-                        type="button"
-                        onMouseEnter={() => setHoverRating(star)}
-                        onMouseLeave={() => setHoverRating(0)}
-                        onClick={() => handleRateExam(star)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          fontSize: '1.8rem',
-                          cursor: 'pointer',
-                          color: activeState ? '#eab308' : '#cbd5e1',
-                          transition: 'transform 0.1s ease',
-                          padding: '0 4px'
-                        }}
-                      >
-                        ★
-                      </button>
-                    );
-                  })}
-                </div>
-                {userRating > 0 && (
-                  <div style={{ fontSize: '0.8rem', color: '#16a34a', marginTop: '4px', fontWeight: 'bold' }}>
-                    {userRating} yıldız verdiniz.
-                  </div>
-                )}
               </div>
             </div>
           </div>
