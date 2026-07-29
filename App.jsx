@@ -24,7 +24,6 @@ export default function App() {
   const [viewingSolutionQ, setViewingSolutionQ] = useState(false);
   const [studentResultsMap, setStudentResultsMap] = useState({});
   
-  // Arama ve Kategori Filtreleme State'leri
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tümü');
 
@@ -473,7 +472,7 @@ export default function App() {
     const adminActiveExam = exams.find(e => e.id === activeAdminExamId);
 
     return (
-      <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '1200px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
+      <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', maxWidth: '1200px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px' }}>
           <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>⚙️ Yönetici Paneli ({user.email})</h1>
           <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
@@ -510,7 +509,7 @@ export default function App() {
                           🎯 {exam.categoryExamType} / {exam.categoryLesson}
                         </span>
                         <span style={{ backgroundColor: exam.examType === 'deneme' ? '#dbeafe' : '#f3e8ff', color: exam.examType === 'deneme' ? '#1e40af' : '#6b21a8', padding: '2px 8px', borderRadius: '4px', fontWeight: 'bold' }}>
-                          {exam.examType === 'deneme' ? '📋 Deneme Sınavı' : '📚 Süresiz Test'}
+                          {exam.examType === 'deneme' ? '📋 Deneme Sınavı' : '📚 Test'}
                         </span>
                         <span>📄 {exam.numPages || '?'} Soru</span>
                         <span style={{ color: exam.isPublished ? '#16a34a' : '#ef4444', fontWeight: 'bold' }}>
@@ -556,7 +555,6 @@ export default function App() {
                 <input type="text" value={adminActiveExam.name} onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
               </div>
 
-              {/* Sınav Türü */}
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
                 <input 
@@ -568,7 +566,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Ders Türü */}
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
                 <input 
@@ -588,7 +585,7 @@ export default function App() {
                   style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff' }}
                 >
                   <option value="deneme">Deneme Sınavı (Süreli Geri Sayım)</option>
-                  <option value="test">Süresiz Test / Soru Bankası (Kronometreli)</option>
+                  <option value="test">Test</option>
                 </select>
               </div>
 
@@ -648,7 +645,7 @@ export default function App() {
   }
 
   // ==========================================
-  // RENDER: ÖĞRENCİ EKRANI (Katalog + Üst Menü Düzeni)
+  // RENDER: ÖĞRENCİ EKRANI
   // ==========================================
   if (appMode === 'student') {
     if (!activeStudentExamId) {
@@ -663,53 +660,56 @@ export default function App() {
         return true;
       });
 
-      // Sadece sınav türleri (categoryExamType) listeleniyor, ders türleri hariç tutuldu
-      const uniqueExamTypes = Array.from(new Set(exams.filter(e => e.isPublished).map(e => e.categoryExamType).filter(Boolean)));
+      const uniqueExamTypes = Array.from(
+        new Set(
+          exams
+            .filter(e => e.isPublished && e.categoryExamType)
+            .map(e => e.categoryExamType.trim())
+        )
+      );
       
-      const rawCategories = ['Tümü', ...uniqueExamTypes];
-      const allCategories = Array.from(new Set(rawCategories.map(cat => cat === 'Tümü' ? 'Tümü' : cat.trim())));
+      const allCategories = ['Tümü', ...uniqueExamTypes];
 
       return (
-        <div style={{ fontFamily: 'Inter, system-ui, sans-serif', minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b' }}>
+        <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b' }}>
           
-          {/* Üst Header */}
-          <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '12px 32px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '20px', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)', flexWrap: 'wrap' }}>
+          <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '15px', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)', flexWrap: 'wrap' }}>
             
-            <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-              <div style={{ fontSize: '1.4rem', fontWeight: '900', letterSpacing: '-0.05em', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ backgroundColor: '#2563eb', color: '#fff', padding: '4px 8px', borderRadius: '6px', fontSize: '1rem' }}>YT</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '15px', flexShrink: 0 }}>
+              <div style={{ fontSize: '1.3rem', fontWeight: '900', letterSpacing: '-0.05em', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ backgroundColor: '#2563eb', color: '#fff', padding: '4px 8px', borderRadius: '6px', fontSize: '0.9rem' }}>YT</span>
                 YENİTREND
               </div>
             </div>
 
-            <div style={{ flex: '0 1 450px', position: 'relative', minWidth: '250px' }}>
+            <div style={{ flex: '1 1 300px', maxWidth: '450px', position: 'relative', minWidth: '200px' }}>
               <span style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: '#64748b' }}>🔍</span>
               <input 
                 type="text" 
                 placeholder="Ne öğrenmek veya çözmek istiyorsunuz?" 
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                style={{ width: '100%', padding: '12px 16px 12px 46px', borderRadius: '9999px', border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', outline: 'none', fontSize: '0.95rem', boxSizing: 'border-box' }} 
+                style={{ width: '100%', padding: '10px 16px 10px 42px', borderRadius: '9999px', border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', outline: 'none', fontSize: '0.9rem', boxSizing: 'border-box' }} 
               />
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
               {user ? (
                 <>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f1f5f9', padding: '6px 12px', borderRadius: '20px', border: '1px solid #e2e8f0' }}>
                     <span style={{ width: '8px', height: '8px', backgroundColor: '#22c55e', borderRadius: '50%' }}></span>
                     <span style={{ fontSize: '0.85rem', fontWeight: '500', color: '#334155' }}>{user.email}</span>
                   </div>
-                  <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', cursor: 'pointer', color: '#dc2626', fontWeight: '600', fontSize: '0.85rem' }}>
+                  <button onClick={handleLogout} style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', cursor: 'pointer', color: '#dc2626', fontWeight: '600', fontSize: '0.85rem' }}>
                     Çıkış Yap
                   </button>
                 </>
               ) : (
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #2563eb', backgroundColor: '#ffffff', color: '#2563eb', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
+                  <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #2563eb', backgroundColor: '#ffffff', color: '#2563eb', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
                     Giriş Yap
                   </button>
-                  <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', backgroundColor: '#2563eb', color: '#ffffff', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
+                  <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', backgroundColor: '#2563eb', color: '#ffffff', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
                     Kayıt Ol
                   </button>
                 </div>
@@ -717,7 +717,6 @@ export default function App() {
             </div>
           </header>
 
-          {/* Alt Kategori Menü Çubuğu (Yalnızca Sınav Türleri) */}
           <div style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '0 32px', overflowX: 'auto', display: 'flex', gap: '24px' }}>
             {allCategories.map(cat => (
               <button 
@@ -742,13 +741,6 @@ export default function App() {
           </div>
 
           <main style={{ maxWidth: '1000px', margin: '40px auto', padding: '0 20px' }}>
-            <div style={{ marginBottom: '24px' }}>
-              <h2 style={{ fontSize: '1.5rem', fontWeight: '700', color: '#0f172a', margin: '0 0 6px 0', letterSpacing: '-0.025em' }}>Sınavlar ve Testler</h2>
-              <p style={{ margin: 0, color: '#64748b', fontSize: '0.95rem' }}>
-                {user ? "Çözmek istediğiniz içeriği seçerek başlayabilir veya tamamlanan sınavlarınızı inceleyebilirsiniz." : "Yayınevimizin sunduğu deneme ve testleri aşağıda inceleyebilirsiniz. Sınavları çözmek için lütfen giriş yapın veya kayıt olun."}
-              </p>
-            </div>
-
             {publishedExams.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px 20px', backgroundColor: '#ffffff', borderRadius: '16px', border: '1px dashed #cbd5e1', boxShadow: '0 1px 3px 0 rgba(0,0,0,0.02)' }}>
                 <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>📂</div>
@@ -793,18 +785,14 @@ export default function App() {
                             🎯 {exam.categoryExamType} / {exam.categoryLesson}
                           </span>
                           <span style={{ backgroundColor: isDeneme ? '#eff6ff' : '#f5f3ff', color: isDeneme ? '#1d4ed8' : '#7c3aed', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
-                            {isDeneme ? 'Deneme Sınavı' : 'Süresiz Test'}
+                            {isDeneme ? 'Deneme Sınavı' : 'Test'}
                           </span>
                           
                           {user && isCompleted ? (
                             <span style={{ backgroundColor: '#f0fdf4', color: '#15803d', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
                               ✓ Çözüldü (Net: {resData.net})
                             </span>
-                          ) : (
-                            <span style={{ backgroundColor: '#fffbeb', color: '#b45309', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
-                              {user ? 'Bekliyor' : 'Çözmek İçin Üye Olun'}
-                            </span>
-                          )}
+                          ) : null}
                         </div>
 
                         <h3 style={{ margin: '0 0 10px 0', color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
@@ -812,7 +800,6 @@ export default function App() {
                         <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem', color: '#64748b', fontWeight: '500' }}>
                           {isDeneme && <span>⏱ Süre: {exam.duration} Dakika</span>}
                           <span>📝 Soru Sayısı: {exam.numPages}</span>
-                          {exam.solutionPdfFile && <span style={{ color: '#2563eb', fontWeight: '600' }}>💡 Çözümlü</span>}
                         </div>
                       </div>
 
@@ -858,7 +845,7 @@ export default function App() {
 
           {showAuthModal && (
             <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
-              <div style={{ fontFamily: 'Inter, system-ui, sans-serif', width: '100%', maxWidth: '400px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', padding: '30px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', color: '#1e293b', position: 'relative' }}>
+              <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', width: '100%', maxWidth: '400px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', padding: '30px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', color: '#1e293b', position: 'relative' }}>
                 <button onClick={() => setShowAuthModal(false)} style={{ position: 'absolute', top: '15px', right: '15px', background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#64748b' }}>✕</button>
 
                 <h2 style={{ textAlign: 'center', color: '#0f172a', marginBottom: '24px' }}>
@@ -908,15 +895,15 @@ export default function App() {
       );
     }
 
-    // Sınav / Test Çözüm Ekranı
+    // Sınav / Test Çözüm Ekranı (Daraltılmış Soru Paleti Düzeni)
     const answeredCount = Object.keys(studentAnswers).length;
     const emptyCount = activeStudentExam.numPages - answeredCount;
     const results = showResults ? (studentResultsMap[activeStudentExamId] || calculateResults()) : null;
     const isDeneme = activeStudentExam.examType === 'deneme';
 
     return (
-      <div style={{ fontFamily: 'Inter, system-ui, sans-serif', maxWidth: '1200px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px' }}>
+      <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', maxWidth: '1300px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
           <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>{activeStudentExam.name}</h1>
           <button onClick={() => setActiveStudentExamId(null)} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer' }}>İçerik Listesine Dön</button>
         </header>
@@ -935,10 +922,25 @@ export default function App() {
           </div>
         ) : null}
 
-        <div style={{ display: 'grid', gridTemplateColumns: (showResults && viewingSolutionQ) && activeStudentExam.solutionPdfFile ? '1fr 1fr' : '1fr 300px', gap: '24px', alignItems: 'start' }}>
+        {/* Soru alanı genişletildi, sağ palet daraltıldı (220px) */}
+        <style>{`
+          .exam-layout {
+            display: grid;
+            grid-template-columns: 1fr 220px;
+            gap: 20px;
+            align-items: start;
+          }
+          @media (max-width: 900px) {
+            .exam-layout {
+              grid-template-columns: 1fr !important;
+            }
+          }
+        `}</style>
+
+        <div className="exam-layout">
           
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '12px 20px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '12px 20px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
               <span>Soru {studentCurrentPage} / {activeStudentExam.numPages}</span>
               {!showResults && (
                 <div style={{ backgroundColor: '#ffffff', color: '#0f172a', padding: '6px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '1rem' }}>
@@ -972,32 +974,33 @@ export default function App() {
               </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '16px', gap: '10px' }}>
               <button disabled={studentCurrentPage <= 1} onClick={() => { setStudentCurrentPage(p => p - 1); setViewingSolutionQ(false); }} style={{ padding: '10px 24px', borderRadius: '6px', border: 'none', backgroundColor: studentCurrentPage <= 1 ? '#e2e8f0' : '#475569', color: studentCurrentPage <= 1 ? '#94a3b8' : '#ffffff', fontWeight: 'bold', cursor: studentCurrentPage <= 1 ? 'not-allowed' : 'pointer' }}>◀ Önceki Soru</button>
               <button disabled={studentCurrentPage >= activeStudentExam.numPages} onClick={() => { setStudentCurrentPage(p => p + 1); setViewingSolutionQ(false); }} style={{ padding: '10px 24px', borderRadius: '6px', border: 'none', backgroundColor: studentCurrentPage >= activeStudentExam.numPages ? '#e2e8f0' : '#2563eb', color: studentCurrentPage >= activeStudentExam.numPages ? '#94a3b8' : '#ffffff', fontWeight: 'bold', cursor: studentCurrentPage >= activeStudentExam.numPages ? 'not-allowed' : 'pointer' }}>Sonraki Soru ▶</button>
             </div>
           </div>
 
           {(showResults && viewingSolutionQ) && activeStudentExam.solutionPdfFile ? (
-            <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '16px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#dcfce7', padding: '12px 20px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', color: '#166534' }}>
-                <span>💡 {studentCurrentPage}. Soru Açıklamalı Çözümü</span>
-                <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: '#166534', color: '#fff', cursor: 'pointer', fontSize: '0.8rem' }}>Kapat</button>
+            <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#dcfce7', padding: '10px 14px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', color: '#166534', fontSize: '0.85rem' }}>
+                <span>💡 {studentCurrentPage}. Soru Çözümü</span>
+                <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '2px 8px', borderRadius: '4px', border: 'none', backgroundColor: '#166534', color: '#fff', cursor: 'pointer', fontSize: '0.75rem' }}>Kapat</button>
               </div>
               <PdfViewer file={activeStudentExam.solutionPdfFile} pageNumber={studentCurrentPage} />
             </div>
           ) : (
-            <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '16px', position: 'sticky', top: '20px' }}>
-              <h3 style={{ margin: '0 0 12px 0', fontSize: '1.1rem', color: '#0f172a', textAlign: 'center' }}>Soru Paleti</h3>
+            <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '12px' }}>
+              <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem', color: '#0f172a', textAlign: 'center' }}>Soru Paleti</h3>
               
               {!showResults ? (
-                <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: '16px', padding: '8px', backgroundColor: '#ffffff', borderRadius: '6px', border: '1px solid #f1f5f9', fontSize: '0.85rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: '12px', padding: '6px', backgroundColor: '#ffffff', borderRadius: '6px', border: '1px solid #f1f5f9', fontSize: '0.75rem' }}>
                   <span style={{ color: '#16a34a', fontWeight: 'bold' }}>● Çözüldü: {answeredCount}</span>
                   <span style={{ color: '#64748b', fontWeight: 'bold' }}>○ Boş: {emptyCount}</span>
                 </div>
               ) : null}
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '8px', maxHeight: '340px', overflowY: 'auto', paddingRight: '4px', marginBottom: '16px' }}>
+              {/* 4 sütunlu daha kompakt yapı */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '5px', maxHeight: '360px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
                 {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
                   const qNum = index + 1;
                   const isAnswered = !!studentAnswers[qNum];
@@ -1021,7 +1024,7 @@ export default function App() {
                   if (isCurrent) { btnBorder = '2px solid #2563eb'; }
 
                   return (
-                    <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '38px', borderRadius: '6px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.9rem', cursor: 'pointer' }}>
+                    <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '32px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.8rem', cursor: 'pointer', padding: 0 }}>
                       {qNum}
                     </button>
                   );
@@ -1029,13 +1032,13 @@ export default function App() {
               </div>
 
               {showResults && activeStudentExam.solutionPdfFile && (
-                <button onClick={() => setViewingSolutionQ(true)} style={{ width: '100%', padding: '12px', borderRadius: '8px', border: 'none', backgroundColor: '#16a34a', color: '#ffffff', fontWeight: 'bold', fontSize: '0.95rem', cursor: 'pointer', marginBottom: '12px' }}>
-                  💡 {studentCurrentPage}. Sorunun Çözümünü Gör
+                <button onClick={() => setViewingSolutionQ(true)} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#ffffff', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', marginBottom: '10px' }}>
+                  💡 {studentCurrentPage}. Çözümü Gör
                 </button>
               )}
 
               {!isExamFinished && (
-                <button onClick={finishExam} style={{ width: '100%', padding: '12px', borderRadius: '8px', border: 'none', backgroundColor: '#dc2626', color: '#ffffff', fontWeight: 'bold', fontSize: '0.95rem', cursor: 'pointer' }}>
+                <button onClick={finishExam} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', backgroundColor: '#dc2626', color: '#ffffff', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer' }}>
                   {isDeneme ? 'Sınavı Bitir 🏁' : 'Testi Bitir 🏁'}
                 </button>
               )}
