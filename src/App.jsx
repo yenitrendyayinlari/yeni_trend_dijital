@@ -503,7 +503,10 @@ export default function App() {
     }
   };
 
-  const handleRateExamFromList = async (examId, rate) => {
+  const handleRateExamFromList = async (e, examId, rate) => {
+    e.preventDefault();
+    e.stopPropagation();
+
     if (!user) {
       setShowAuthModal(true);
       return;
@@ -877,7 +880,7 @@ export default function App() {
                         <h3 style={{ margin: '0 0 12px 0', color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
                         
                         {/* 🌟 YILDIZ VE ORTALAMA PUAN GÖRÜNÜMÜ */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap', pointerEvents: 'auto', position: 'relative', zIndex: 10 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '0.95rem' }}>{ratingInfo.average}</span>
                           <div style={{ display: 'flex', gap: '1px' }}>
                             {[1, 2, 3, 4, 5].map((star) => {
@@ -897,24 +900,17 @@ export default function App() {
                                 <button
                                   key={star}
                                   type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleRateExamFromList(exam.id, star);
-                                  }}
+                                  onClick={(e) => handleRateExamFromList(e, exam.id, star)}
                                   title={`${star} Yıldız Ver`}
                                   style={{
-                                    background: 'none',
+                                    background: 'transparent',
                                     border: 'none',
                                     cursor: 'pointer',
-                                    fontSize: '1.2rem',
+                                    fontSize: '1.3rem',
                                     color: myUserRating >= star ? '#eab308' : '#cbd5e1',
-                                    padding: '4px 6px',
-                                    zIndex: 40,
-                                    position: 'relative',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    pointerEvents: 'auto'
+                                    padding: '2px 4px',
+                                    display: 'inline-block',
+                                    lineHeight: 1
                                   }}
                                 >
                                   ★
