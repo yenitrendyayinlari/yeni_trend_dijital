@@ -27,7 +27,6 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tümü');
 
-  // Tüm sınavların ortalama puanları ve oy sayıları (exam_id -> { average, count })
   const [examRatingsMap, setExamRatingsMap] = useState({});
 
   useEffect(() => {
@@ -890,27 +889,35 @@ export default function App() {
                           </div>
                           <span style={{ color: '#64748b', fontSize: '0.85rem' }}>({ratingInfo.count})</span>
 
-                          {/* Kullanıcının interaktif kendi oy verme alanı */}
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '12px', borderLeft: '1px solid #cbd5e1', paddingLeft: '12px' }}>
-                            <span style={{ fontSize: '0.8rem', color: '#475569' }}>Puanın:</span>
-                            {[1, 2, 3, 4, 5].map((star) => (
-                              <button
-                                key={star}
-                                onClick={() => handleRateExamFromList(exam.id, star)}
-                                title={`${star} Yıldız Ver`}
-                                style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  cursor: 'pointer',
-                                  fontSize: '1rem',
-                                  color: myUserRating >= star ? '#eab308' : '#cbd5e1',
-                                  padding: '0 1px'
-                                }}
-                              >
-                                ★
-                              </button>
-                            ))}
-                          </div>
+                          {/* SADECE GİRİŞ YAPILMIŞSA KULLANICININ KENDİ OY VERME ALANI GÖRÜNÜR */}
+                          {user && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '12px', borderLeft: '1px solid #cbd5e1', paddingLeft: '12px' }}>
+                              <span style={{ fontSize: '0.8rem', color: '#475569' }}>Puanın:</span>
+                              {[1, 2, 3, 4, 5].map((star) => (
+                                <button
+                                  key={star}
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRateExamFromList(exam.id, star);
+                                  }}
+                                  title={`${star} Yıldız Ver`}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    fontSize: '1.1rem',
+                                    color: myUserRating >= star ? '#eab308' : '#cbd5e1',
+                                    padding: '2px 3px',
+                                    zIndex: 10,
+                                    position: 'relative'
+                                  }}
+                                >
+                                  ★
+                                </button>
+                              ))}
+                            </div>
+                          )}
                         </div>
 
                         <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem', color: '#64748b', fontWeight: '500' }}>
