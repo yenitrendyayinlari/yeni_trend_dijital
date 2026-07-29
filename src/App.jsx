@@ -503,7 +503,8 @@ export default function App() {
     }
   };
 
-  const handleRateExamFromList = async (examId, rate) => {
+  const handleRateExamFromList = async (e, examId, rate) => {
+    e.stopPropagation(); // Olayın kartın diğer alanlarına veya dış elemanlara sıçramasını kesin olarak engeller
     if (!user) {
       setShowAuthModal(true);
       return;
@@ -859,6 +860,48 @@ export default function App() {
                       }}></div>
 
                       <div style={{ paddingLeft: '8px', flex: 1, paddingRight: '16px' }}>
+                        
+                        {/* 🌟 YILDIZLAR VE OY ALANI EN ÜSTE TAŞINDI */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '10px', backgroundColor: '#f8fafc', padding: '8px 12px', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '0.95rem' }}>{ratingInfo.average}</span>
+                            <div style={{ display: 'flex', gap: '1px' }}>
+                              {[1, 2, 3, 4, 5].map((star) => {
+                                const activeStar = Number(ratingInfo.average.replace(',', '.')) >= star;
+                                return (
+                                  <span key={star} style={{ color: activeStar ? '#eab308' : '#cbd5e1', fontSize: '0.95rem' }}>★</span>
+                                );
+                              })}
+                            </div>
+                            <span style={{ color: '#64748b', fontSize: '0.85rem' }}>({ratingInfo.count} Değerlendirme)</span>
+                          </div>
+
+                          {user && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span style={{ fontSize: '0.8rem', color: '#475569', fontWeight: '600' }}>Puanın:</span>
+                              <div style={{ display: 'flex', gap: '2px', backgroundColor: '#ffffff', padding: '2px 8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
+                                {[1, 2, 3, 4, 5].map((star) => (
+                                  <span
+                                    key={star}
+                                    onClick={(e) => handleRateExamFromList(e, exam.id, star)}
+                                    style={{
+                                      cursor: 'pointer',
+                                      fontSize: '1.2rem',
+                                      color: myUserRating >= star ? '#eab308' : '#cbd5e1',
+                                      padding: '0 2px',
+                                      userSelect: 'none',
+                                      display: 'inline-block'
+                                    }}
+                                    title={`${star} Yıldız Ver`}
+                                  >
+                                    ★
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
                           <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
                             🎯 {exam.categoryExamType} / {exam.categoryLesson}
@@ -875,42 +918,6 @@ export default function App() {
                         </div>
 
                         <h3 style={{ margin: '0 0 12px 0', color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
-                        
-                        {/* 🌟 YILDIZ VE KULLANICI OY VERME ALANI */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                          <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '0.95rem' }}>{ratingInfo.average}</span>
-                          <div style={{ display: 'flex', gap: '1px' }}>
-                            {[1, 2, 3, 4, 5].map((star) => {
-                              const activeStar = Number(ratingInfo.average.replace(',', '.')) >= star;
-                              return (
-                                <span key={star} style={{ color: activeStar ? '#eab308' : '#cbd5e1', fontSize: '0.95rem' }}>★</span>
-                              );
-                            })}
-                          </div>
-                          <span style={{ color: '#64748b', fontSize: '0.85rem' }}>({ratingInfo.count} Değerlendirme)</span>
-
-                          {user && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '12px', borderLeft: '1px solid #cbd5e1', paddingLeft: '12px' }}>
-                              <span style={{ fontSize: '0.8rem', color: '#475569' }}>Puanın:</span>
-                              {[1, 2, 3, 4, 5].map((star) => (
-                                <span
-                                  key={star}
-                                  onClick={() => handleRateExamFromList(exam.id, star)}
-                                  style={{
-                                    cursor: 'pointer',
-                                    fontSize: '1.4rem',
-                                    color: myUserRating >= star ? '#eab308' : '#cbd5e1',
-                                    padding: '0 2px',
-                                    userSelect: 'none',
-                                    display: 'inline-block'
-                                  }}
-                                >
-                                  ★
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
 
                         <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem', color: '#64748b', fontWeight: '500' }}>
                           {isDeneme && <span>⏱ Süre: {exam.duration} Dakika</span>}
