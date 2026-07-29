@@ -1004,6 +1004,39 @@ export default function App() {
         {showResults ? (
           <div>
             <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', maxWidth: '700px', margin: '0 auto 24px auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
+              
+              {/* ⭐ YENİ YÖNTEM: PUANLAMA KUTUSU ARTIK SONUÇ EKRANININ EN ÜSTÜNDE VE SORUNSUZ TIKLANABİLİR */}
+              {user && (
+                <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#0f172a', marginBottom: '6px' }}>Bu içeriği nasıl buldunuz? Puanlayın:</div>
+                  <div style={{ display: 'flex', justifyContent: 'center', gap: '4px' }}>
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <span
+                        key={star}
+                        onClick={() => handleRateExamInActiveScreen(star)}
+                        style={{
+                          cursor: 'pointer',
+                          fontSize: '2rem',
+                          color: myActiveRating >= star ? '#eab308' : '#cbd5e1',
+                          padding: '0 4px',
+                          userSelect: 'none',
+                          display: 'inline-block',
+                          transition: 'transform 0.1s'
+                        }}
+                        title={`${star} Yıldız Ver`}
+                      >
+                        ★
+                      </span>
+                    ))}
+                  </div>
+                  {myActiveRating > 0 && (
+                    <div style={{ fontSize: '0.8rem', color: '#16a34a', fontWeight: '600', marginTop: '6px' }}>
+                      ✓ Puanınız kaydedildi ({myActiveRating} Yıldız)
+                    </div>
+                  )}
+                </div>
+              )}
+
               <h2 style={{ textAlign: 'center', marginTop: 0, color: '#0f172a' }}>🎉 Sonuçlar</h2>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
                 <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#166534', fontWeight: 'bold' }}>DOĞRU</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#15803d' }}>{results.correct}</div></div>
@@ -1121,32 +1154,6 @@ export default function App() {
                   );
                 })}
               </div>
-
-              {/* ⭐ PUANLAMA ALANI: ÖĞRENCİNİN İŞARETLEYEBİLECEĞİ YER (SAĞ PANELDE EN ALTA TAŞINDI) */}
-              {user && (
-                <div style={{ marginBottom: '14px', padding: '10px', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#475569', marginBottom: '4px' }}>Bu içeriği puanla:</div>
-                  <div style={{ display: 'flex', justifyContent: 'center', gap: '2px' }}>
-                    {[1, 2, 3, 4, 5].map((star) => (
-                      <span
-                        key={star}
-                        onClick={() => handleRateExamInActiveScreen(star)}
-                        style={{
-                          cursor: 'pointer',
-                          fontSize: '1.4rem',
-                          color: myActiveRating >= star ? '#eab308' : '#cbd5e1',
-                          padding: '0 2px',
-                          userSelect: 'none',
-                          display: 'inline-block'
-                        }}
-                        title={`${star} Yıldız Ver`}
-                      >
-                        ★
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
 
               {showResults && activeStudentExam.solutionPdfFile && (
                 <button onClick={() => setViewingSolutionQ(true)} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#ffffff', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', marginBottom: '10px' }}>
