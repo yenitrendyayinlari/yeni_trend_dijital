@@ -877,7 +877,7 @@ export default function App() {
                         <h3 style={{ margin: '0 0 12px 0', color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
                         
                         {/* 🌟 YILDIZ VE ORTALAMA PUAN GÖRÜNÜMÜ */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap', pointerEvents: 'auto', position: 'relative', zIndex: 10 }}>
                           <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '0.95rem' }}>{ratingInfo.average}</span>
                           <div style={{ display: 'flex', gap: '1px' }}>
                             {[1, 2, 3, 4, 5].map((star) => {
@@ -891,7 +891,7 @@ export default function App() {
 
                           {/* SADECE GİRİŞ YAPILMIŞsa KULLANICININ KENDİ OY VERME ALANI GÖRÜNÜR */}
                           {user && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: '12px', borderLeft: '1px solid #cbd5e1', paddingLeft: '12px', position: 'relative', zIndex: 10 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: '12px', borderLeft: '1px solid #cbd5e1', paddingLeft: '12px' }}>
                               <span style={{ fontSize: '0.8rem', color: '#475569' }}>Puanın:</span>
                               {[1, 2, 3, 4, 5].map((star) => (
                                 <button
@@ -909,11 +909,12 @@ export default function App() {
                                     fontSize: '1.2rem',
                                     color: myUserRating >= star ? '#eab308' : '#cbd5e1',
                                     padding: '4px 6px',
-                                    zIndex: 30,
+                                    zIndex: 40,
                                     position: 'relative',
                                     display: 'inline-flex',
                                     alignItems: 'center',
-                                    justifyContent: 'center'
+                                    justifyContent: 'center',
+                                    pointerEvents: 'auto'
                                   }}
                                 >
                                   ★
