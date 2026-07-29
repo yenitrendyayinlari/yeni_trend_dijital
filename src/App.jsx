@@ -503,10 +503,7 @@ export default function App() {
     }
   };
 
-  const handleRateExamFromList = async (e, examId, rate) => {
-    e.preventDefault();
-    e.stopPropagation();
-
+  const handleRateExamFromList = async (examId, rate) => {
     if (!user) {
       setShowAuthModal(true);
       return;
@@ -879,7 +876,7 @@ export default function App() {
 
                         <h3 style={{ margin: '0 0 12px 0', color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
                         
-                        {/* 🌟 YILDIZ VE ORTALAMA PUAN GÖRÜNÜMÜ */}
+                        {/* 🌟 YILDIZ VE KULLANICI OY VERME ALANI */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
                           <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '0.95rem' }}>{ratingInfo.average}</span>
                           <div style={{ display: 'flex', gap: '1px' }}>
@@ -892,29 +889,24 @@ export default function App() {
                           </div>
                           <span style={{ color: '#64748b', fontSize: '0.85rem' }}>({ratingInfo.count} Değerlendirme)</span>
 
-                          {/* SADECE GİRİŞ YAPILMIŞsa KULLANICININ KENDİ OY VERME ALANI GÖRÜNÜR */}
                           {user && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: '12px', borderLeft: '1px solid #cbd5e1', paddingLeft: '12px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '12px', borderLeft: '1px solid #cbd5e1', paddingLeft: '12px' }}>
                               <span style={{ fontSize: '0.8rem', color: '#475569' }}>Puanın:</span>
                               {[1, 2, 3, 4, 5].map((star) => (
-                                <button
+                                <span
                                   key={star}
-                                  type="button"
-                                  onClick={(e) => handleRateExamFromList(e, exam.id, star)}
-                                  title={`${star} Yıldız Ver`}
+                                  onClick={() => handleRateExamFromList(exam.id, star)}
                                   style={{
-                                    background: 'transparent',
-                                    border: 'none',
                                     cursor: 'pointer',
-                                    fontSize: '1.3rem',
+                                    fontSize: '1.4rem',
                                     color: myUserRating >= star ? '#eab308' : '#cbd5e1',
-                                    padding: '2px 4px',
-                                    display: 'inline-block',
-                                    lineHeight: 1
+                                    padding: '0 2px',
+                                    userSelect: 'none',
+                                    display: 'inline-block'
                                   }}
                                 >
                                   ★
-                                </button>
+                                </span>
                               ))}
                             </div>
                           )}
