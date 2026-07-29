@@ -871,7 +871,6 @@ export default function App() {
                           ) : null}
                         </div>
 
-                        {/* 🌟 SINAV ADININ YANINDA SADECE ORTALAMA YILDIZLAR */}
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '12px' }}>
                           <h3 style={{ margin: 0, color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
                           
@@ -1002,48 +1001,45 @@ export default function App() {
         </header>
 
         {showResults ? (
-          <div>
-            <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', maxWidth: '700px', margin: '0 auto 24px auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
-              
-              {/* ⭐ YENİ YÖNTEM: PUANLAMA KUTUSU ARTIK SONUÇ EKRANININ EN ÜSTÜNDE VE SORUNSUZ TIKLANABİLİR */}
-              {user && (
-                <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#0f172a', marginBottom: '6px' }}>Bu içeriği nasıl buldunuz? Puanlayın:</div>
-                  <div style={{ display: 'flex', justifyContent: 'center', gap: '4px' }}>
-                    {[1, 2, 3, 4, 5].map((star) => (
-                      <span
-                        key={star}
-                        onClick={() => handleRateExamInActiveScreen(star)}
-                        style={{
-                          cursor: 'pointer',
-                          fontSize: '2rem',
-                          color: myActiveRating >= star ? '#eab308' : '#cbd5e1',
-                          padding: '0 4px',
-                          userSelect: 'none',
-                          display: 'inline-block',
-                          transition: 'transform 0.1s'
-                        }}
-                        title={`${star} Yıldız Ver`}
-                      >
-                        ★
-                      </span>
-                    ))}
-                  </div>
-                  {myActiveRating > 0 && (
-                    <div style={{ fontSize: '0.8rem', color: '#16a34a', fontWeight: '600', marginTop: '6px' }}>
-                      ✓ Puanınız kaydedildi ({myActiveRating} Yıldız)
-                    </div>
-                  )}
+          <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', maxWidth: '700px', margin: '0 auto 24px auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
+            
+            {/* ⭐ KESİN ÇÖZÜM: YILDIZLAR BAŞLIĞIN HEMEN ALTINDA VE PDF ALANINDAN TAMAMEN BAĞIMSIZ */}
+            {user && (
+              <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.95rem', fontWeight: 'bold', color: '#0f172a', marginBottom: '8px' }}>Bu içeriği nasıl buldunuz? Puanlayın:</div>
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '6px' }}>
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <span
+                      key={star}
+                      onClick={() => handleRateExamInActiveScreen(star)}
+                      style={{
+                        cursor: 'pointer',
+                        fontSize: '2.4rem',
+                        color: myActiveRating >= star ? '#eab308' : '#cbd5e1',
+                        padding: '0 4px',
+                        userSelect: 'none',
+                        display: 'inline-block'
+                      }}
+                      title={`${star} Yıldız Ver`}
+                    >
+                      ★
+                    </span>
+                  ))}
                 </div>
-              )}
-
-              <h2 style={{ textAlign: 'center', marginTop: 0, color: '#0f172a' }}>🎉 Sonuçlar</h2>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
-                <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#166534', fontWeight: 'bold' }}>DOĞRU</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#15803d' }}>{results.correct}</div></div>
-                <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 'bold' }}>YANLIŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#dc2626' }}>{results.wrong}</div></div>
-                <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#475569', fontWeight: 'bold' }}>BOŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#64748b' }}>{results.empty}</div></div>
-                <div style={{ backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#1e40af', fontWeight: 'bold' }}>NET</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#2563eb' }}>{results.net}</div></div>
+                {myActiveRating > 0 && (
+                  <div style={{ fontSize: '0.85rem', color: '#16a34a', fontWeight: '600', marginTop: '8px' }}>
+                    ✓ Puanınız kaydedildi ({myActiveRating} Yıldız)
+                  </div>
+                )}
               </div>
+            )}
+
+            <h2 style={{ textAlign: 'center', marginTop: 0, color: '#0f172a' }}>🎉 Sonuçlar</h2>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
+              <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#166534', fontWeight: 'bold' }}>DOĞRU</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#15803d' }}>{results.correct}</div></div>
+              <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 'bold' }}>YANLIŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#dc2626' }}>{results.wrong}</div></div>
+              <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#475569', fontWeight: 'bold' }}>BOŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#64748b' }}>{results.empty}</div></div>
+              <div style={{ backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#1e40af', fontWeight: 'bold' }}>NET</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#2563eb' }}>{results.net}</div></div>
             </div>
           </div>
         ) : null}
