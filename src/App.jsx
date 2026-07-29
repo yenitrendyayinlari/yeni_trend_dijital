@@ -503,27 +503,23 @@ export default function App() {
     }
   };
 
-  const handleRateExamFromList = async (e, examId, rate) => {
-    e.stopPropagation(); // Olayın kartın diğer alanlarına veya dış elemanlara sıçramasını kesin olarak engeller
-    if (!user) {
-      setShowAuthModal(true);
-      return;
-    }
+  const handleRateExamInActiveScreen = async (rate) => {
+    if (!user || !activeStudentExamId) return;
 
-    const existingRes = studentResultsMap[examId] || {};
-    const answersToSave = existingRes.answers || {};
-    const correctC = existingRes.correct || 0;
-    const wrongC = existingRes.wrong || 0;
-    const emptyC = existingRes.empty || 0;
-    const netC = existingRes.net || 0;
-    const isFin = existingRes.is_finished || false;
+    const existingRes = studentResultsMap[activeStudentExamId] || {};
+    const answersToSave = existingRes.answers || studentAnswers;
+    const correctC = existingRes.correct ?? 0;
+    const wrongC = existingRes.wrong ?? 0;
+    const emptyC = existingRes.empty ?? 0;
+    const netC = existingRes.net ?? 0;
+    const isFin = existingRes.is_finished ?? false;
 
     const { error } = await supabase
       .from('student_exams')
       .upsert([
         {
           student_email: user.email,
-          exam_id: examId,
+          exam_id: activeStudentExamId,
           answers: answersToSave,
           correct_count: correctC,
           wrong_count: wrongC,
@@ -537,7 +533,7 @@ export default function App() {
     if (!error) {
       setStudentResultsMap(prev => ({
         ...prev,
-        [examId]: { ...existingRes, rating: rate }
+        [activeStudentExamId]: { ...existingRes, rating: rate }
       }));
       fetchAllRatings();
     }
@@ -832,7 +828,6 @@ export default function App() {
                   const isCompleted = resData?.is_finished;
                   const isDeneme = exam.examType === 'deneme';
                   const ratingInfo = examRatingsMap[exam.id] || { average: '0,0', count: '0' };
-                  const myUserRating = resData?.rating || 0;
 
                   return (
                     <div 
@@ -861,47 +856,6 @@ export default function App() {
 
                       <div style={{ paddingLeft: '8px', flex: 1, paddingRight: '16px' }}>
                         
-                        {/* 🌟 YILDIZLAR VE OY ALANI EN ÜSTE TAŞINDI */}
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '10px', backgroundColor: '#f8fafc', padding: '8px 12px', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '0.95rem' }}>{ratingInfo.average}</span>
-                            <div style={{ display: 'flex', gap: '1px' }}>
-                              {[1, 2, 3, 4, 5].map((star) => {
-                                const activeStar = Number(ratingInfo.average.replace(',', '.')) >= star;
-                                return (
-                                  <span key={star} style={{ color: activeStar ? '#eab308' : '#cbd5e1', fontSize: '0.95rem' }}>★</span>
-                                );
-                              })}
-                            </div>
-                            <span style={{ color: '#64748b', fontSize: '0.85rem' }}>({ratingInfo.count} Değerlendirme)</span>
-                          </div>
-
-                          {user && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <span style={{ fontSize: '0.8rem', color: '#475569', fontWeight: '600' }}>Puanın:</span>
-                              <div style={{ display: 'flex', gap: '2px', backgroundColor: '#ffffff', padding: '2px 8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}>
-                                {[1, 2, 3, 4, 5].map((star) => (
-                                  <span
-                                    key={star}
-                                    onClick={(e) => handleRateExamFromList(e, exam.id, star)}
-                                    style={{
-                                      cursor: 'pointer',
-                                      fontSize: '1.2rem',
-                                      color: myUserRating >= star ? '#eab308' : '#cbd5e1',
-                                      padding: '0 2px',
-                                      userSelect: 'none',
-                                      display: 'inline-block'
-                                    }}
-                                    title={`${star} Yıldız Ver`}
-                                  >
-                                    ★
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
                         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
                           <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
                             🎯 {exam.categoryExamType} / {exam.categoryLesson}
@@ -917,7 +871,23 @@ export default function App() {
                           ) : null}
                         </div>
 
-                        <h3 style={{ margin: '0 0 12px 0', color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
+                        {/* 🌟 SINAV ADININ YANINDA SADECE ORTALAMA YILDIZLAR */}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '12px' }}>
+                          <h3 style={{ margin: 0, color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
+                          
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#f8fafc', padding: '4px 10px', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
+                            <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '0.9rem' }}>{ratingInfo.average}</span>
+                            <div style={{ display: 'flex', gap: '1px' }}>
+                              {[1, 2, 3, 4, 5].map((star) => {
+                                const activeStar = Number(ratingInfo.average.replace(',', '.')) >= star;
+                                return (
+                                  <span key={star} style={{ color: activeStar ? '#eab308' : '#cbd5e1', fontSize: '0.9rem' }}>★</span>
+                                );
+                              })}
+                            </div>
+                            <span style={{ color: '#64748b', fontSize: '0.8rem' }}>({ratingInfo.count})</span>
+                          </div>
+                        </div>
 
                         <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem', color: '#64748b', fontWeight: '500' }}>
                           {isDeneme && <span>⏱ Süre: {exam.duration} Dakika</span>}
@@ -1022,6 +992,7 @@ export default function App() {
     const emptyCount = activeStudentExam.numPages - answeredCount;
     const results = showResults ? (studentResultsMap[activeStudentExamId] || calculateResults()) : null;
     const isDeneme = activeStudentExam.examType === 'deneme';
+    const myActiveRating = studentResultsMap[activeStudentExamId]?.rating || 0;
 
     return (
       <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', maxWidth: '1300px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
@@ -1150,6 +1121,32 @@ export default function App() {
                   );
                 })}
               </div>
+
+              {/* ⭐ PUANLAMA ALANI: ÖĞRENCİNİN İŞARETLEYEBİLECEĞİ YER (SAĞ PANELDE EN ALTA TAŞINDI) */}
+              {user && (
+                <div style={{ marginBottom: '14px', padding: '10px', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#475569', marginBottom: '4px' }}>Bu içeriği puanla:</div>
+                  <div style={{ display: 'flex', justifyContent: 'center', gap: '2px' }}>
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <span
+                        key={star}
+                        onClick={() => handleRateExamInActiveScreen(star)}
+                        style={{
+                          cursor: 'pointer',
+                          fontSize: '1.4rem',
+                          color: myActiveRating >= star ? '#eab308' : '#cbd5e1',
+                          padding: '0 2px',
+                          userSelect: 'none',
+                          display: 'inline-block'
+                        }}
+                        title={`${star} Yıldız Ver`}
+                      >
+                        ★
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {showResults && activeStudentExam.solutionPdfFile && (
                 <button onClick={() => setViewingSolutionQ(true)} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#ffffff', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', marginBottom: '10px' }}>
