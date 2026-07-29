@@ -876,9 +876,27 @@ export default function App() {
 
                         <h3 style={{ margin: '0 0 6px 0', color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
                         
-                        {/* 🌟 LİSTEDE YILDIZ VE OY SAYISI GÖRÜNÜMÜ */}
+                        {/* 🌟 ENERJİ VE BESİN DEĞERLERİ BENZERİ ŞIK ETİKET TASARIMI */}
+                        <div style={{ marginBottom: '8px' }}>
+                          <span style={{ 
+                            display: 'inline-flex', 
+                            alignItems: 'center', 
+                            gap: '4px', 
+                            backgroundColor: '#f1f5f9', 
+                            color: '#334155', 
+                            padding: '4px 10px', 
+                            borderRadius: '8px', 
+                            fontSize: '0.8rem', 
+                            fontWeight: '600',
+                            border: '1px solid #e2e8f0'
+                          }}>
+                            {exam.categoryLesson} Konu Detayları &amp; Bilgiler &gt;
+                          </span>
+                        </div>
+
+                        {/* 🌟 YILDIZ VE ORTALAMA PUAN GÖRÜNÜMÜ */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
-                          <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '0.9rem' }}>{ratingInfo.average}</span>
+                          <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '0.95rem' }}>{ratingInfo.average}</span>
                           <div style={{ display: 'flex', gap: '1px' }}>
                             {[1, 2, 3, 4, 5].map((star) => {
                               const activeStar = Number(ratingInfo.average.replace(',', '.')) >= star;
@@ -887,11 +905,11 @@ export default function App() {
                               );
                             })}
                           </div>
-                          <span style={{ color: '#64748b', fontSize: '0.85rem' }}>({ratingInfo.count})</span>
+                          <span style={{ color: '#64748b', fontSize: '0.85rem' }}>({ratingInfo.count} Değerlendirme)</span>
 
                           {/* SADECE GİRİŞ YAPILMIŞSA KULLANICININ KENDİ OY VERME ALANI GÖRÜNÜR */}
                           {user && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '12px', borderLeft: '1px solid #cbd5e1', paddingLeft: '12px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginLeft: '12px', borderLeft: '1px solid #cbd5e1', paddingLeft: '12px', position: 'relative', zIndex: 10 }}>
                               <span style={{ fontSize: '0.8rem', color: '#475569' }}>Puanın:</span>
                               {[1, 2, 3, 4, 5].map((star) => (
                                 <button
@@ -906,11 +924,14 @@ export default function App() {
                                     background: 'none',
                                     border: 'none',
                                     cursor: 'pointer',
-                                    fontSize: '1.1rem',
+                                    fontSize: '1.2rem',
                                     color: myUserRating >= star ? '#eab308' : '#cbd5e1',
-                                    padding: '2px 3px',
-                                    zIndex: 10,
-                                    position: 'relative'
+                                    padding: '4px 6px',
+                                    zIndex: 30,
+                                    position: 'relative',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center'
                                   }}
                                 >
                                   ★
