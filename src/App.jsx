@@ -27,6 +27,11 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tümü');
 
+  // Yeni eklendi: Öğrencinin verdiği yıldız puanı state'i
+  const [userRating, setUserRating] = useState(0);
+  const [hoverRating, setHoverRating] = useState(0);
+  const [ratingSubmitted, setRatingSubmitted] = useState(false);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
@@ -130,7 +135,8 @@ export default function App() {
             correct: res.correct_count,
             wrong: res.wrong_count,
             empty: res.empty_count,
-            net: res.net
+            net: res.net,
+            rating: res.rating || 0
           };
         });
         setStudentResultsMap(resultMap);
@@ -391,6 +397,8 @@ export default function App() {
     setShowResults(false);
     setViewingSolutionQ(false);
     setTimeLeft(exam.examType === 'deneme' ? exam.duration * 60 : 0);
+    setUserRating(0);
+    setRatingSubmitted(false);
   };
 
   const handleAnswerSelect = (option) => {
@@ -428,10 +436,12 @@ export default function App() {
     return { correct, wrong, empty, net };
   };
 
-  const saveAndFinishExam = async () => {
+  const saveAndFinishExam = async (ratingVal = 0) => {
     const results = calculateResults();
     setIsExamFinished(true);
     setShowResults(true);
+
+    const currentRating = ratingVal || userRating;
 
     const { error } = await supabase
       .from('student_exams')
@@ -444,7 +454,8 @@ export default function App() {
           wrong_count: results.wrong,
           empty_count: results.empty,
           net: results.net,
-          is_finished: true
+          is_finished: true,
+          rating: currentRating
         }
       ], { onConflict: 'student_email, exam_id' });
 
@@ -453,7 +464,7 @@ export default function App() {
     } else {
       setStudentResultsMap(prev => ({
         ...prev,
-        [activeStudentExamId]: { is_finished: true, ...results, answers: studentAnswers }
+        [activeStudentExamId]: { is_finished: true, ...results, answers: studentAnswers, rating: currentRating }
       }));
     }
   };
@@ -461,8 +472,14 @@ export default function App() {
   const finishExam = () => {
     const confirmText = activeStudentExam.examType === 'deneme' ? "Sınavı bitirmek istediğinize emin misiniz?" : "Testi bitirmek ve sonuçları görmek istediğinize emin misiniz?";
     if (window.confirm(confirmText)) {
-      saveAndFinishExam();
+      saveAndFinishExam(0);
     }
+  };
+
+  const handleRateExam = async (rate) => {
+    setUserRating(rate);
+    setRatingSubmitted(true);
+    await saveAndFinishExam(rate);
   };
 
   // ==========================================
@@ -790,7 +807,7 @@ export default function App() {
                           
                           {user && isCompleted ? (
                             <span style={{ backgroundColor: '#f0fdf4', color: '#15803d', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
-                              ✓ Çözüldü (Net: {resData.net})
+                              ✓ Çözüldü (Net: {resData.net}) {resData.rating ? `⭐ ${resData.rating}/5` : ''}
                             </span>
                           ) : null}
                         </div>
@@ -817,6 +834,8 @@ export default function App() {
                               setIsExamFinished(true);
                               setShowResults(true);
                               setViewingSolutionQ(false);
+                              setUserRating(resData.rating || 0);
+                              setRatingSubmitted(!!resData.rating);
                             } else {
                               startExam(exam);
                             }
@@ -895,7 +914,7 @@ export default function App() {
       );
     }
 
-    // Sınav / Test Çözüm Ekranı (Daraltılmış Soru Paleti Düzeni)
+    // Sınav / Test Çözüm Ekranı
     const answeredCount = Object.keys(studentAnswers).length;
     const emptyCount = activeStudentExam.numPages - answeredCount;
     const results = showResults ? (studentResultsMap[activeStudentExamId] || calculateResults()) : null;
@@ -918,11 +937,47 @@ export default function App() {
                 <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#475569', fontWeight: 'bold' }}>BOŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#64748b' }}>{results.empty}</div></div>
                 <div style={{ backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#1e40af', fontWeight: 'bold' }}>NET</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#2563eb' }}>{results.net}</div></div>
               </div>
+
+              {/* ⭐ YENİ EKLENEN YILDIZ PUANLAMA ALANI */}
+              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '16px', textAlign: 'center' }}>
+                <p style={{ margin: '0 0 8px 0', fontSize: '0.95rem', fontWeight: '600', color: '#334155' }}>
+                  {ratingSubmitted ? '✨ Değerlendirmeniz için teşekkürler!' : 'Bu testin / denemenin kalitesini puanlayın:'}
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '8px' }}>
+                  {[1, 2, 3, 4, 5].map((star) => {
+                    const activeState = hoverRating >= star || userRating >= star;
+                    return (
+                      <button
+                        key={star}
+                        type="button"
+                        onMouseEnter={() => setHoverRating(star)}
+                        onMouseLeave={() => setHoverRating(0)}
+                        onClick={() => handleRateExam(star)}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          fontSize: '1.8rem',
+                          cursor: 'pointer',
+                          color: activeState ? '#eab308' : '#cbd5e1',
+                          transition: 'transform 0.1s ease',
+                          padding: '0 4px'
+                        }}
+                      >
+                        ★
+                      </button>
+                    );
+                  })}
+                </div>
+                {userRating > 0 && (
+                  <div style={{ fontSize: '0.8rem', color: '#16a34a', marginTop: '4px', fontWeight: 'bold' }}>
+                    {userRating} yıldız verdiniz.
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         ) : null}
 
-        {/* Soru alanı genişletildi, sağ palet daraltıldı (220px) */}
         <style>{`
           .exam-layout {
             display: grid;
@@ -999,7 +1054,6 @@ export default function App() {
                 </div>
               ) : null}
 
-              {/* 4 sütunlu daha kompakt yapı */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '5px', maxHeight: '360px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
                 {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
                   const qNum = index + 1;
