@@ -23,6 +23,7 @@ export default function App() {
   
   const [viewingSolutionQ, setViewingSolutionQ] = useState(false);
   const [studentResultsMap, setStudentResultsMap] = useState({});
+  const [studentPurchases, setStudentPurchases] = useState({}); // Satın alınan sınavlar
   
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tümü');
@@ -89,6 +90,22 @@ export default function App() {
       setAppMode('student');
     }
     fetchExams(currentUser);
+    fetchUserPurchases(currentUser.email);
+  };
+
+  const fetchUserPurchases = async (userEmail) => {
+    const { data, error } = await supabase
+      .from('student_purchases')
+      .select('exam_id')
+      .eq('student_email', userEmail);
+
+    if (!error && data) {
+      const purchasedMap = {};
+      data.forEach(p => {
+        purchasedMap[p.exam_id] = true;
+      });
+      setStudentPurchases(purchasedMap);
+    }
   };
 
   const fetchPublicExams = async () => {
@@ -112,7 +129,8 @@ export default function App() {
         solutionPdfFile: item.solution_pdf_file,
         answerKey: item.answer_key || {},
         isPublished: item.is_published,
-        numPages: item.num_pages || 0
+        numPages: item.num_pages || 0,
+        price: item.price || 0
       }));
       setExams(formattedExams);
     }
@@ -140,7 +158,8 @@ export default function App() {
         solutionPdfFile: item.solution_pdf_file,
         answerKey: item.answer_key || {},
         isPublished: item.is_published,
-        numPages: item.num_pages || 0
+        numPages: item.num_pages || 0,
+        price: item.price || 0
       }));
       setExams(formattedExams);
     }
@@ -217,6 +236,7 @@ export default function App() {
     setActiveAdminExamId(null);
     setActiveStudentExamId(null);
     setStudentResultsMap({});
+    setStudentPurchases({});
     fetchPublicExams();
   };
 
@@ -234,6 +254,7 @@ export default function App() {
     if (updates.answerKey !== undefined) dbUpdates.answer_key = updates.answerKey;
     if (updates.isPublished !== undefined) dbUpdates.is_published = updates.isPublished;
     if (updates.numPages !== undefined) dbUpdates.num_pages = updates.numPages;
+    if (updates.price !== undefined) dbUpdates.price = updates.price;
 
     const { error } = await supabase
       .from('exams')
@@ -309,7 +330,8 @@ export default function App() {
           solution_pdf_file: null,
           answer_key: {},
           is_published: false,
-          num_pages: 0
+          num_pages: 0,
+          price: 0
         };
 
         const { data, error } = await supabase
@@ -335,7 +357,8 @@ export default function App() {
             solutionPdfFile: inserted.solution_pdf_file,
             answerKey: inserted.answer_key || {},
             isPublished: inserted.is_published,
-            numPages: inserted.num_pages || 0
+            numPages: inserted.num_pages || 0,
+            price: inserted.price || 0
           };
           setExams(prev => [formatted, ...prev]);
           setActiveAdminExamId(formatted.id);
@@ -417,6 +440,16 @@ export default function App() {
       setShowAuthModal(true);
       return;
     }
+
+    // Ücret kontrolü (Eğer fiyatı varsa ve satın alınmadıysa İyzico ödemesini tetikle)
+    const isFree = !exam.price || exam.price <= 0;
+    const isPurchased = studentPurchases[exam.id];
+
+    if (!isFree && !isPurchased) {
+      handleIyzicoPayment(exam);
+      return;
+    }
+
     setActiveStudentExamId(exam.id);
     setStudentAnswers({});
     setStudentCurrentPage(1);
@@ -424,6 +457,33 @@ export default function App() {
     setShowResults(false);
     setViewingSolutionQ(false);
     setTimeLeft(exam.examType === 'deneme' ? exam.duration * 60 : 0);
+  };
+
+  // İyzico Ödeme Başlatma Simülasyonu / Entegrasyonu
+  const handleIyzicoPayment = async (exam) => {
+    const confirmed = window.confirm(`"${exam.name}" isimli sınav ücretli (${exam.price} TL). İyzico ile ödeme sayfasına yönlendirileceksiniz. Onaylıyor musunuz?`);
+    if (!confirmed) return;
+
+    // Test/Simülasyon amaçlı başarılı ödeme simülasyonu
+    const paymentId = 'PAY_' + Math.random().toString(36).substring(2, 10).toUpperCase();
+
+    const { error } = await supabase
+      .from('student_purchases')
+      .insert([
+        {
+          student_email: user.email,
+          exam_id: exam.id,
+          payment_id: paymentId
+        }
+      ]);
+
+    if (error) {
+      alert("Ödeme kayıt hatası: " + error.message);
+    } else {
+      alert("Ödemeniz başarıyla gerçekleşti! Sınavınız açılıyor.");
+      setStudentPurchases(prev => ({ ...prev, [exam.id]: true }));
+      startExam(exam);
+    }
   };
 
   const handleAnswerSelect = (option) => {
@@ -585,6 +645,9 @@ export default function App() {
                         <span style={{ backgroundColor: exam.examType === 'deneme' ? '#dbeafe' : '#f3e8ff', color: exam.examType === 'deneme' ? '#1e40af' : '#6b21a8', padding: '2px 8px', borderRadius: '4px', fontWeight: 'bold' }}>
                           {exam.examType === 'deneme' ? '📋 Deneme Sınavı' : '📚 Test'}
                         </span>
+                        <span style={{ backgroundColor: '#fef3c7', color: '#b45309', padding: '2px 8px', borderRadius: '4px', fontWeight: 'bold' }}>
+                          💰 {exam.price > 0 ? `${exam.price} TL` : 'Ücretsiz'}
+                        </span>
                         <span>📄 {exam.numPages || '?'} Soru</span>
                         <span style={{ color: exam.isPublished ? '#16a34a' : '#ef4444', fontWeight: 'bold' }}>
                           {exam.isPublished ? '● Yayında' : '○ Taslak'}
@@ -630,10 +693,21 @@ export default function App() {
               </div>
 
               <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Fiyat (TL):</label>
+                <input 
+                  type="number" 
+                  min="0"
+                  value={adminActiveExam.price || 0} 
+                  onChange={(e) => updateExamInDb(adminActiveExam.id, { price: Number(e.target.value) })} 
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                />
+              </div>
+
+              <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
                 <input 
                   type="text" 
-                  placeholder="Örn: LGS, YKS, KPSS, 8. Sınıf"
+                  placeholder="Örn: LGS, YKS, KPSS, 2. Sınıf"
                   value={adminActiveExam.categoryExamType || ''} 
                   onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryExamType: e.target.value })} 
                   style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
@@ -644,7 +718,7 @@ export default function App() {
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
                 <input 
                   type="text" 
-                  placeholder="Örn: Matematik, Türkçe, Fen Bilimleri"
+                  placeholder="Örn: Matematik, Hayat Bilgisi"
                   value={adminActiveExam.categoryLesson || ''} 
                   onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryLesson: e.target.value })} 
                   style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
@@ -828,6 +902,8 @@ export default function App() {
                   const isCompleted = resData?.is_finished;
                   const isDeneme = exam.examType === 'deneme';
                   const ratingInfo = examRatingsMap[exam.id] || { average: '0,0', count: '0' };
+                  const isPaid = exam.price && exam.price > 0;
+                  const isPurchased = studentPurchases[exam.id];
 
                   return (
                     <div 
@@ -864,6 +940,10 @@ export default function App() {
                             {isDeneme ? 'Deneme Sınavı' : 'Test'}
                           </span>
                           
+                          <span style={{ backgroundColor: isPaid ? '#fef3c7' : '#f0fdf4', color: isPaid ? '#b45309' : '#15803d', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
+                            {isPaid ? `${exam.price} TL` : 'Ücretsiz'}
+                          </span>
+
                           {user && isCompleted ? (
                             <span style={{ backgroundColor: '#f0fdf4', color: '#15803d', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
                               ✓ Çözüldü (Net: {resData.net})
@@ -916,7 +996,7 @@ export default function App() {
                             padding: '12px 24px', 
                             borderRadius: '10px', 
                             border: 'none', 
-                            backgroundColor: isCompleted ? '#475569' : '#2563eb', 
+                            backgroundColor: isCompleted ? '#475569' : (isPaid && !isPurchased ? '#d97706' : '#2563eb'), 
                             color: '#fff', 
                             fontWeight: '600', 
                             fontSize: '0.9rem', 
@@ -924,7 +1004,7 @@ export default function App() {
                             boxShadow: isCompleted ? 'none' : '0 4px 6px -1px rgba(37, 99, 235, 0.2)'
                           }}
                         >
-                          {!user ? 'Üye Ol / Başla ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isDeneme ? 'Sınava Başla ▶' : 'Teste Başla ▶'))}
+                          {!user ? 'Üye Ol / Başla ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isPaid && !isPurchased ? `Satın Al (${exam.price} TL) 💳` : (isDeneme ? 'Sınava Başla ▶' : 'Teste Başla ▶')))}
                         </button>
                       </div>
                     </div>
@@ -1003,7 +1083,6 @@ export default function App() {
         {showResults ? (
           <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', maxWidth: '700px', margin: '0 auto 24px auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
             
-            {/* ⭐ KESİN ÇÖZÜM: YILDIZLAR BAŞLIĞIN HEMEN ALTINDA VE PDF ALANINDAN TAMAMEN BAĞIMSIZ */}
             {user && (
               <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
                 <div style={{ fontSize: '0.95rem', fontWeight: 'bold', color: '#0f172a', marginBottom: '8px' }}>Bu içeriği nasıl buldunuz? Puanlayın:</div>
