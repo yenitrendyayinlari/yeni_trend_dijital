@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import PdfViewer from './PdfViewer';
 import { supabase } from './supabase';
-import { initializePayment } from './iyzipayService'; //[cite: 1]
+import { initializePayment } from './iyzipayService';[cite: 1]
 
 export default function App() {
   const [appMode, setAppMode] = useState('student'); 
@@ -1133,7 +1133,7 @@ export default function App() {
         <style>{`
           .exam-layout {
             display: grid;
-            grid-template-columns: 1fr 220px;
+            grid-template-columns: 1fr 320px;
             gap: 20px;
             align-items: start;
           }
@@ -1188,7 +1188,7 @@ export default function App() {
           </div>
 
           {(showResults && viewingSolutionQ) && activeStudentExam.solutionPdfFile ? (
-            <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '14px' }}>
+            <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '14px', width: '100%' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#dcfce7', padding: '10px 14px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', color: '#166534', fontSize: '0.85rem' }}>
                 <span>💡 {studentCurrentPage}. Soru Çözümü</span>
                 <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '2px 8px', borderRadius: '4px', border: 'none', backgroundColor: '#166534', color: '#fff', cursor: 'pointer', fontSize: '0.75rem' }}>Kapat</button>
@@ -1206,7 +1206,7 @@ export default function App() {
                 </div>
               ) : null}
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '5px', maxHeight: '360px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '5px', maxHeight: '360px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
                 {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
                   const qNum = index + 1;
                   const isAnswered = !!studentAnswers[qNum];
