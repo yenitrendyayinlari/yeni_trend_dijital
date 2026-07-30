@@ -1081,7 +1081,7 @@ export default function App() {
     const myActiveRating = studentResultsMap[activeStudentExamId]?.rating || 0;
 
     return (
-      <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', maxWidth: '1300px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
+      <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', maxWidth: '1400px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
           <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>{activeStudentExam.name}</h1>
           <button onClick={() => setActiveStudentExamId(null)} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer' }}>İçerik Listesine Dön</button>
@@ -1133,7 +1133,7 @@ export default function App() {
         <style>{`
           .exam-layout {
             display: grid;
-            grid-template-columns: 1fr 320px;
+            grid-template-columns: 1fr 420px;
             gap: 20px;
             align-items: start;
           }
@@ -1206,7 +1206,7 @@ export default function App() {
                 </div>
               ) : null}
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '5px', maxHeight: '360px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px', maxHeight: '420px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
                 {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
                   const qNum = index + 1;
                   const isAnswered = !!studentAnswers[qNum];
@@ -1230,7 +1230,7 @@ export default function App() {
                   if (isCurrent) { btnBorder = '2px solid #2563eb'; }
 
                   return (
-                    <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '32px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.8rem', cursor: 'pointer', padding: 0 }}>
+                    <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '36px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', padding: 0 }}>
                       {qNum}
                     </button>
                   );
