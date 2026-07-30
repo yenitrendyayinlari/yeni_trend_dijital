@@ -5,9 +5,14 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>dijital-sinav</title>
+    <!-- iyzico ödeme formu için gerekli harici script veya eklemeler buraya gelebilir -->
   </head>
   <body>
     <div id="root"></div>
+    
+    <!-- iyzico formunun yükleneceği alan (Gerekirse dinamik olarak script ile de basılabilir) -->
+    <div id="iyzipay-checkout-form" class="popup"></div>
+
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
