@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import PdfViewer from './PdfViewer';
 import { supabase } from './supabase';
-import { initializePayment } from './iyzipayService';[cite: 1]
+import { initializePayment } from './iyzipayService';
 
 export default function App() {
   const [appMode, setAppMode] = useState('student'); 
