@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
 import { initializePayment } from './iyzipayService';
 
-const PaymentButton = () => {
+const PaymentButton = ({ price, examId }) => {
   const [loading, setLoading] = useState(false);
 
   const handlePayment = () => {
     setLoading(true);
 
-    // Ödeme verileri (örneğin 100 TL)
+    // Dışarıdan gelen gerçek fiyatı ve sınav ID'sini backend'e gönderiyoruz
     const paymentData = {
-      price: "100.00"
+      price: price.toString(),
+      examId: examId
     };
 
     initializePayment(paymentData, (err, result) => {
@@ -22,13 +23,11 @@ const PaymentButton = () => {
       }
 
       if (result.status === 'success') {
-        // iyzico'nun döndürdüğü HTML/JS içeriğini index.html'deki div alanına yerleştiriyoruz
         const checkoutDiv = document.getElementById('iyzipay-checkout-form');
         if (checkoutDiv) {
           checkoutDiv.innerHTML = result.checkoutFormContent;
         }
 
-        // iyzico formunun görünmesini sağlayan script tetiklemesi
         if (window.iyzipayCheckout && typeof window.iyzipayCheckout.show === 'function') {
           window.iyzipayCheckout.show();
         }
@@ -39,21 +38,21 @@ const PaymentButton = () => {
   };
 
   return (
-    <div style={{ textAlign: 'center', padding: '20px' }}>
+    <div style={{ textAlign: 'center' }}>
       <button 
         onClick={handlePayment} 
         disabled={loading}
         style={{
-          padding: '12px 24px',
-          backgroundColor: '#00cc99',
+          padding: '10px 20px',
+          backgroundColor: '#d97706',
           color: '#fff',
           border: 'none',
           borderRadius: '4px',
-          fontSize: '16px',
+          fontSize: '15px',
           cursor: 'pointer'
         }}
       >
-        {loading ? "Yükleniyor..." : "100 TL Öde"}
+        {loading ? "Yükleniyor..." : `Satın Al (₺${price})`}
       </button>
     </div>
   );
