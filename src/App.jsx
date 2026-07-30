@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import PdfViewer from './PdfViewer';
 import { supabase } from './supabase';
+import { initializePayment } from './iyzipayService'; //[cite: 1]
 
 export default function App() {
   const [appMode, setAppMode] = useState('student'); 
@@ -430,29 +431,34 @@ export default function App() {
     setTimeLeft(exam.examType === 'deneme' ? exam.duration * 60 : 0);
   };
 
-  const handleIyzicoPayment = async (exam) => {
-    const confirmed = window.confirm(`"${exam.name}" isimli sınav ücretli (₺${exam.price}). İyzico ile ödeme sayfasına yönlendirileceksiniz. Onaylıyor musunuz?`);
+  const handleIyzicoPayment = (exam) => {
+    const confirmed = window.confirm(`"${exam.name}" isimli sınav ücretli (₺${exam.price}). İyzico ödeme formu açılacaktır. Onaylıyor musunuz?`);
     if (!confirmed) return;
 
-    const paymentId = 'PAY_' + Math.random().toString(36).substring(2, 10).toUpperCase();
+    const paymentData = {
+      price: exam.price.toString()
+    };
 
-    const { error } = await supabase
-      .from('student_purchases')
-      .insert([
-        {
-          student_email: user.email,
-          exam_id: exam.id,
-          payment_id: paymentId
+    initializePayment(paymentData, (err, result) => {
+      if (err) {
+        console.error("Ödeme hatası:", err);
+        alert("Ödeme başlatılırken bir hata oluştu.");
+        return;
+      }
+
+      if (result.status === 'success') {
+        const checkoutDiv = document.getElementById('iyzipay-checkout-form');
+        if (checkoutDiv) {
+          checkoutDiv.innerHTML = result.checkoutFormContent;
         }
-      ]);
 
-    if (error) {
-      alert("Ödeme kayıt hatası: " + error.message);
-    } else {
-      alert("Ödemeniz başarıyla gerçekleşti! Sınavınız açılıyor.");
-      setStudentPurchases(prev => ({ ...prev, [exam.id]: true }));
-      startExam(exam);
-    }
+        if (window.iyzipayCheckout && typeof window.iyzipayCheckout.show === 'function') {
+          window.iyzipayCheckout.show();
+        }
+      } else {
+        alert("İşlem başarısız: " + result.errorMessage);
+      }
+    });
   };
 
   const handleAnswerSelect = (option) => {
