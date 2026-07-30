@@ -23,7 +23,7 @@ export default function App() {
   
   const [viewingSolutionQ, setViewingSolutionQ] = useState(false);
   const [studentResultsMap, setStudentResultsMap] = useState({});
-  const [studentPurchases, setStudentPurchases] = useState({}); // Satın alınan sınavlar
+  const [studentPurchases, setStudentPurchases] = useState({}); 
   
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tümü');
@@ -108,6 +108,22 @@ export default function App() {
     }
   };
 
+  const formatExamData = (item) => ({
+    id: item.id,
+    name: item.name,
+    duration: item.duration,
+    examType: item.exam_type || 'deneme',
+    categoryExamType: item.category_exam_type || 'Genel',
+    categoryLesson: item.category_lesson || 'Genel',
+    pdfFile: item.pdf_file,
+    solutionPdfFile: item.solution_pdf_file,
+    answerKey: item.answer_key || {},
+    isPublished: item.is_published,
+    numPages: item.num_pages || 0,
+    price: item.price || 0,
+    originalPrice: item.original_price || 0
+  });
+
   const fetchPublicExams = async () => {
     const { data, error } = await supabase
       .from('exams')
@@ -118,21 +134,7 @@ export default function App() {
     if (error) {
       console.error("Sınavlar yüklenirken hata oluştu:", error);
     } else {
-      const formattedExams = data.map(item => ({
-        id: item.id,
-        name: item.name,
-        duration: item.duration,
-        examType: item.exam_type || 'deneme',
-        categoryExamType: item.category_exam_type || 'Genel',
-        categoryLesson: item.category_lesson || 'Genel',
-        pdfFile: item.pdf_file,
-        solutionPdfFile: item.solution_pdf_file,
-        answerKey: item.answer_key || {},
-        isPublished: item.is_published,
-        numPages: item.num_pages || 0,
-        price: item.price || 0
-      }));
-      setExams(formattedExams);
+      setExams(data.map(formatExamData));
     }
   };
 
@@ -147,21 +149,7 @@ export default function App() {
     if (error) {
       console.error("Sınavlar yüklenirken hata oluştu:", error);
     } else {
-      const formattedExams = data.map(item => ({
-        id: item.id,
-        name: item.name,
-        duration: item.duration,
-        examType: item.exam_type || 'deneme',
-        categoryExamType: item.category_exam_type || 'Genel',
-        categoryLesson: item.category_lesson || 'Genel',
-        pdfFile: item.pdf_file,
-        solutionPdfFile: item.solution_pdf_file,
-        answerKey: item.answer_key || {},
-        isPublished: item.is_published,
-        numPages: item.num_pages || 0,
-        price: item.price || 0
-      }));
-      setExams(formattedExams);
+      setExams(data.map(formatExamData));
     }
 
     if (currentUser && currentUser.email !== 'admin@yayinevi.com') {
@@ -255,6 +243,7 @@ export default function App() {
     if (updates.isPublished !== undefined) dbUpdates.is_published = updates.isPublished;
     if (updates.numPages !== undefined) dbUpdates.num_pages = updates.numPages;
     if (updates.price !== undefined) dbUpdates.price = updates.price;
+    if (updates.originalPrice !== undefined) dbUpdates.original_price = updates.originalPrice;
 
     const { error } = await supabase
       .from('exams')
@@ -318,20 +307,19 @@ export default function App() {
           .from('exam-files')
           .getPublicUrl(fileName);
 
-        const filePublicUrl = publicURLData.publicUrl;
-
         const newExamData = {
           name: file.name.replace('.pdf', ''),
           duration: 60,
           exam_type: 'deneme',
           category_exam_type: 'Genel',
           category_lesson: 'Genel',
-          pdf_file: filePublicUrl,
+          pdf_file: publicURLData.publicUrl,
           solution_pdf_file: null,
           answer_key: {},
           is_published: false,
           num_pages: 0,
-          price: 0
+          price: 0,
+          original_price: 0
         };
 
         const { data, error } = await supabase
@@ -345,21 +333,7 @@ export default function App() {
           console.error("Sınav veritabanı kayıt hatası:", error);
           alert("Sınav veritabanına kaydedilemedi: " + error.message);
         } else if (data && data.length > 0) {
-          const inserted = data[0];
-          const formatted = {
-            id: inserted.id,
-            name: inserted.name,
-            duration: inserted.duration,
-            examType: inserted.exam_type || 'deneme',
-            categoryExamType: inserted.category_exam_type || 'Genel',
-            categoryLesson: inserted.category_lesson || 'Genel',
-            pdfFile: inserted.pdf_file,
-            solutionPdfFile: inserted.solution_pdf_file,
-            answerKey: inserted.answer_key || {},
-            isPublished: inserted.is_published,
-            numPages: inserted.num_pages || 0,
-            price: inserted.price || 0
-          };
+          const formatted = formatExamData(data[0]);
           setExams(prev => [formatted, ...prev]);
           setActiveAdminExamId(formatted.id);
         }
@@ -391,10 +365,8 @@ export default function App() {
           .from('exam-files')
           .getPublicUrl(fileName);
 
-        const solutionPublicUrl = publicURLData.publicUrl;
         setAuthLoading(false);
-
-        await updateExamInDb(activeAdminExamId, { solutionPdfFile: solutionPublicUrl });
+        await updateExamInDb(activeAdminExamId, { solutionPdfFile: publicURLData.publicUrl });
       };
       uploadSolutionFile();
     }
@@ -441,7 +413,6 @@ export default function App() {
       return;
     }
 
-    // Ücret kontrolü (Eğer fiyatı varsa ve satın alınmadıysa İyzico ödemesini tetikle)
     const isFree = !exam.price || exam.price <= 0;
     const isPurchased = studentPurchases[exam.id];
 
@@ -459,12 +430,10 @@ export default function App() {
     setTimeLeft(exam.examType === 'deneme' ? exam.duration * 60 : 0);
   };
 
-  // İyzico Ödeme Başlatma Simülasyonu / Entegrasyonu
   const handleIyzicoPayment = async (exam) => {
-    const confirmed = window.confirm(`"${exam.name}" isimli sınav ücretli (${exam.price} TL). İyzico ile ödeme sayfasına yönlendirileceksiniz. Onaylıyor musunuz?`);
+    const confirmed = window.confirm(`"${exam.name}" isimli sınav ücretli (₺${exam.price}). İyzico ile ödeme sayfasına yönlendirileceksiniz. Onaylıyor musunuz?`);
     if (!confirmed) return;
 
-    // Test/Simülasyon amaçlı başarılı ödeme simülasyonu
     const paymentId = 'PAY_' + Math.random().toString(36).substring(2, 10).toUpperCase();
 
     const { error } = await supabase
@@ -646,7 +615,7 @@ export default function App() {
                           {exam.examType === 'deneme' ? '📋 Deneme Sınavı' : '📚 Test'}
                         </span>
                         <span style={{ backgroundColor: '#fef3c7', color: '#b45309', padding: '2px 8px', borderRadius: '4px', fontWeight: 'bold' }}>
-                          💰 {exam.price > 0 ? `${exam.price} TL` : 'Ücretsiz'}
+                          💰 {exam.price > 0 ? `₺${exam.price}` : 'Ücretsiz'}
                         </span>
                         <span>📄 {exam.numPages || '?'} Soru</span>
                         <span style={{ color: exam.isPublished ? '#16a34a' : '#ef4444', fontWeight: 'bold' }}>
@@ -692,15 +661,30 @@ export default function App() {
                 <input type="text" value={adminActiveExam.name} onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
               </div>
 
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Fiyat (TL):</label>
-                <input 
-                  type="number" 
-                  min="0"
-                  value={adminActiveExam.price || 0} 
-                  onChange={(e) => updateExamInDb(adminActiveExam.id, { price: Number(e.target.value) })} 
-                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
-                />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Güncel Fiyat (₺):</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    step="0.01"
+                    value={adminActiveExam.price || 0} 
+                    onChange={(e) => updateExamInDb(adminActiveExam.id, { price: Number(e.target.value) })} 
+                    style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Eski Fiyat (Üstü Çizili):</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    step="0.01"
+                    placeholder="İsteğe bağlı"
+                    value={adminActiveExam.originalPrice || 0} 
+                    onChange={(e) => updateExamInDb(adminActiveExam.id, { originalPrice: Number(e.target.value) })} 
+                    style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                  />
+                </div>
               </div>
 
               <div style={{ marginBottom: '16px' }}>
@@ -939,10 +923,6 @@ export default function App() {
                           <span style={{ backgroundColor: isDeneme ? '#eff6ff' : '#f5f3ff', color: isDeneme ? '#1d4ed8' : '#7c3aed', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
                             {isDeneme ? 'Deneme Sınavı' : 'Test'}
                           </span>
-                          
-                          <span style={{ backgroundColor: isPaid ? '#fef3c7' : '#f0fdf4', color: isPaid ? '#b45309' : '#15803d', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
-                            {isPaid ? `${exam.price} TL` : 'Ücretsiz'}
-                          </span>
 
                           {user && isCompleted ? (
                             <span style={{ backgroundColor: '#f0fdf4', color: '#15803d', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
@@ -968,10 +948,31 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem', color: '#64748b', fontWeight: '500' }}>
+                        <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem', color: '#64748b', fontWeight: '500', marginBottom: '12px', alignItems: 'center' }}>
                           {isDeneme && <span>⏱ Süre: {exam.duration} Dakika</span>}
                           <span>📝 Soru Sayısı: {exam.numPages}</span>
                         </div>
+
+                        {/* Fiyat Alanı En Altta */}
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+                          {isPaid ? (
+                            <>
+                              <span style={{ fontSize: '1.25rem', fontWeight: '800', color: '#0f172a' }}>
+                                ₺{exam.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </span>
+                              {exam.originalPrice && exam.originalPrice > exam.price ? (
+                                <span style={{ fontSize: '0.95rem', fontWeight: '500', color: '#94a3b8', textDecoration: 'line-through' }}>
+                                  ₺{exam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </span>
+                              ) : null}
+                            </>
+                          ) : (
+                            <span style={{ fontSize: '1.1rem', fontWeight: '700', color: '#16a34a' }}>
+                              Ücretsiz
+                            </span>
+                          )}
+                        </div>
+
                       </div>
 
                       <div>
@@ -1004,7 +1005,7 @@ export default function App() {
                             boxShadow: isCompleted ? 'none' : '0 4px 6px -1px rgba(37, 99, 235, 0.2)'
                           }}
                         >
-                          {!user ? 'Üye Ol / Başla ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isPaid && !isPurchased ? `Satın Al (${exam.price} TL) 💳` : (isDeneme ? 'Sınava Başla ▶' : 'Teste Başla ▶')))}
+                          {!user ? 'Üye Ol / Başla ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isPaid && !isPurchased ? `Satın Al (₺${exam.price}) 💳` : (isDeneme ? 'Sınava Başla ▶' : 'Teste Başla ▶')))}
                         </button>
                       </div>
                     </div>
