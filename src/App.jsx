@@ -122,7 +122,9 @@ export default function App() {
     isPublished: item.is_published,
     numPages: item.num_pages || 0,
     price: item.price || 0,
-    originalPrice: item.original_price || 0
+    originalPrice: item.original_price || 0,
+    isParent: item.is_parent || false,
+    parentId: item.parent_id || null
   });
 
   const fetchPublicExams = async () => {
@@ -341,6 +343,72 @@ export default function App() {
       };
       uploadExamFile();
     }
+  };
+
+  const handleCreateParentExam = async () => {
+    const name = window.prompt("Ana Sınav Paketi adını girin (Örn: LGS Türkiye Geneli Deneme 1):");
+    if (!name) return;
+
+    setAuthLoading(true);
+    const newParentData = {
+      name: name,
+      exam_type: 'deneme',
+      category_exam_type: 'Genel',
+      category_lesson: 'Genel',
+      is_published: false,
+      price: 0,
+      is_parent: true
+    };
+
+    const { data, error } = await supabase.from('exams').insert([newParentData]).select();
+    setAuthLoading(false);
+
+    if (error) {
+      alert("Ana sınav oluşturulamadı: " + error.message);
+    } else if (data && data.length > 0) {
+      setExams(prev => [formatExamData(data[0]), ...prev]);
+    }
+  };
+
+  const handleChildFileUpload = (e, parentId) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const uploadChild = async () => {
+      setAuthLoading(true);
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
+
+      const { error: storageError } = await supabase.storage.from('exam-files').upload(fileName, file);
+
+      if (storageError) {
+        alert("Dosya yüklenemedi: " + storageError.message);
+        setAuthLoading(false);
+        return;
+      }
+
+      const { data: publicURLData } = supabase.storage.from('exam-files').getPublicUrl(fileName);
+
+      const newChildData = {
+        name: file.name.replace('.pdf', ''),
+        duration: 40, 
+        exam_type: 'deneme',
+        pdf_file: publicURLData.publicUrl,
+        is_published: false,
+        is_parent: false,
+        parent_id: parentId
+      };
+
+      const { data, error } = await supabase.from('exams').insert([newChildData]).select();
+      setAuthLoading(false);
+
+      if (error) {
+        alert("Alt oturum kaydedilemedi: " + error.message);
+      } else if (data && data.length > 0) {
+        setExams(prev => [...prev, formatExamData(data[0])]);
+      }
+    };
+    uploadChild();
   };
 
   const handleSolutionUpload = (e) => {
@@ -595,12 +663,17 @@ export default function App() {
 
         {!adminActiveExam ? (
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h2 style={{ margin: 0 }}>Tüm Sınavlar ve Testler</h2>
-              <label style={{ padding: '10px 20px', backgroundColor: '#2563eb', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
-                + Yeni İçerik Yükle (PDF)
-                <input type="file" accept="application/pdf" onChange={handleFileUpload} style={{ display: 'none' }} />
-              </label>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2 style={{ margin: 0 }}>Tüm Sınavlar ve Paketler</h2>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button onClick={handleCreateParentExam} style={{ padding: '10px 20px', backgroundColor: '#8b5cf6', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', border: 'none' }}>
+                  + Ana Sınav Paketi Oluştur
+                </button>
+                <label style={{ padding: '10px 20px', backgroundColor: '#2563eb', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
+                  + Tekil İçerik Yükle (PDF)
+                  <input type="file" accept="application/pdf" onChange={handleFileUpload} style={{ display: 'none' }} />
+                </label>
+              </div>
             </div>
 
             {exams.length === 0 ? (
@@ -609,33 +682,58 @@ export default function App() {
               </div>
             ) : (
               <div style={{ display: 'grid', gap: '16px' }}>
-                {exams.map(exam => (
-                  <div key={exam.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-                    <div>
-                      <h3 style={{ margin: '0 0 8px 0' }}>{exam.name}</h3>
-                      <div style={{ display: 'flex', gap: '12px', fontSize: '0.85rem', color: '#64748b' }}>
-                        <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '2px 8px', borderRadius: '4px', fontWeight: 'bold' }}>
-                          🎯 {exam.categoryExamType} / {exam.categoryLesson}
-                        </span>
-                        <span style={{ backgroundColor: exam.examType === 'deneme' ? '#dbeafe' : '#f3e8ff', color: exam.examType === 'deneme' ? '#1e40af' : '#6b21a8', padding: '2px 8px', borderRadius: '4px', fontWeight: 'bold' }}>
-                          {exam.examType === 'deneme' ? '📋 Deneme Sınavı' : '📚 Test'}
-                        </span>
-                        <span style={{ backgroundColor: '#fef3c7', color: '#b45309', padding: '2px 8px', borderRadius: '4px', fontWeight: 'bold' }}>
-                          💰 {exam.price > 0 ? `₺${exam.price}` : 'Ücretsiz'}
-                        </span>
-                        <span>📄 {exam.numPages || '?'} Soru</span>
-                        <span style={{ color: exam.isPublished ? '#16a34a' : '#ef4444', fontWeight: 'bold' }}>
-                          {exam.isPublished ? '● Yayında' : '○ Taslak'}
-                        </span>
+                {exams.filter(e => !e.parentId).map(parentExam => (
+                  <div key={parentExam.id} style={{ backgroundColor: '#ffffff', borderRadius: '8px', border: parentExam.isParent ? '2px solid #8b5cf6' : '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
+                    
+                    {/* Ana Sınav / Tekil Sınav Başlığı */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', backgroundColor: parentExam.isParent ? '#f5f3ff' : '#ffffff' }}>
+                      <div>
+                        <h3 style={{ margin: '0 0 8px 0', color: parentExam.isParent ? '#6b21a8' : '#0f172a' }}>
+                          {parentExam.isParent ? '📦 Paket: ' : ''}{parentExam.name}
+                        </h3>
+                        <div style={{ display: 'flex', gap: '12px', fontSize: '0.85rem', color: '#64748b' }}>
+                          <span style={{ color: parentExam.isPublished ? '#16a34a' : '#ef4444', fontWeight: 'bold' }}>
+                            {parentExam.isPublished ? '● Yayında' : '○ Taslak'}
+                          </span>
+                          {!parentExam.isParent && <span>📄 {parentExam.numPages || '?'} Soru</span>}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        {parentExam.isParent && (
+                          <label style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#e0e7ff', color: '#4338ca', cursor: 'pointer', fontWeight: 'bold', border: '1px dashed #4338ca' }}>
+                            + Alt Oturum Ekle
+                            <input type="file" accept="application/pdf" onChange={(e) => handleChildFileUpload(e, parentExam.id)} style={{ display: 'none' }} />
+                          </label>
+                        )}
+                        <button onClick={() => togglePublish(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: parentExam.isPublished ? '#f59e0b' : '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 'bold' }}>
+                          {parentExam.isPublished ? 'Yayından Kaldır' : 'Yayınla'}
+                        </button>
+                        <button onClick={() => setActiveAdminExamId(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Ayarlar</button>
+                        <button onClick={() => deleteExam(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: '#ef4444', color: '#fff', cursor: 'pointer' }}>Sil</button>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button onClick={() => togglePublish(exam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: exam.isPublished ? '#f59e0b' : '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 'bold' }}>
-                        {exam.isPublished ? 'Yayından Kaldır' : 'Yayınla'}
-                      </button>
-                      <button onClick={() => setActiveAdminExamId(exam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Düzenle</button>
-                      <button onClick={() => deleteExam(exam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: '#ef4444', color: '#fff', cursor: 'pointer' }}>Sil</button>
-                    </div>
+
+                    {/* Alt Oturumları Listeleme */}
+                    {parentExam.isParent && (
+                      <div style={{ padding: '0 16px 16px 16px', backgroundColor: '#f5f3ff' }}>
+                        {exams.filter(child => child.parentId === parentExam.id).length > 0 ? (
+                           <div style={{ display: 'grid', gap: '8px', marginTop: '10px' }}>
+                             {exams.filter(child => child.parentId === parentExam.id).map(childExam => (
+                               <div key={childExam.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', backgroundColor: '#ffffff', borderRadius: '6px', border: '1px solid #e2e8f0', marginLeft: '20px' }}>
+                                  <div style={{ fontWeight: '500' }}>↳ {childExam.name} <span style={{ fontSize: '0.8rem', color: '#64748b' }}>({childExam.numPages || '?'} Soru)</span></div>
+                                  <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button onClick={() => setActiveAdminExamId(childExam.id)} style={{ padding: '4px 10px', fontSize: '0.85rem', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}>Düzenle (Cevap Anh.)</button>
+                                    <button onClick={() => deleteExam(childExam.id)} style={{ padding: '4px 10px', fontSize: '0.85rem', borderRadius: '4px', border: 'none', backgroundColor: '#ef4444', color: '#fff', cursor: 'pointer' }}>Sil</button>
+                                  </div>
+                               </div>
+                             ))}
+                           </div>
+                        ) : (
+                          <div style={{ fontSize: '0.85rem', color: '#6b21a8', marginLeft: '20px', fontStyle: 'italic' }}>Henüz bu pakete alt oturum eklenmemiş.</div>
+                        )}
+                      </div>
+                    )}
+
                   </div>
                 ))}
               </div>
