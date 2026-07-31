@@ -287,86 +287,32 @@ export default function App() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleFileUpload = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const uploadExamFile = async () => {
-        setAuthLoading(true);
-        const fileExt = file.name.split('.').pop();
-        const fileName = `${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
-
-        const { error: storageError } = await supabase.storage
-          .from('exam-files')
-          .upload(fileName, file);
-
-        if (storageError) {
-          console.error("Storage yükleme hatası:", storageError);
-          alert("Dosya depolama alanına yüklenemedi: " + storageError.message);
-          setAuthLoading(false);
-          return;
-        }
-
-        const { data: publicURLData } = supabase.storage
-          .from('exam-files')
-          .getPublicUrl(fileName);
-
-        const newExamData = {
-          name: file.name.replace('.pdf', ''),
-          duration: 60,
-          exam_type: 'deneme',
-          category_exam_type: 'Genel',
-          category_lesson: 'Genel',
-          pdf_file: publicURLData.publicUrl,
-          solution_pdf_file: null,
-          answer_key: {},
-          is_published: false,
-          num_pages: 0,
-          price: 0,
-          original_price: 0
-        };
-
-        const { data, error } = await supabase
-          .from('exams')
-          .insert([newExamData])
-          .select();
-
-        setAuthLoading(false);
-
-        if (error) {
-          console.error("Sınav veritabanı kayıt hatası:", error);
-          alert("Sınav veritabanına kaydedilemedi: " + error.message);
-        } else if (data && data.length > 0) {
-          const formatted = formatExamData(data[0]);
-          setExams(prev => [formatted, ...prev]);
-          setActiveAdminExamId(formatted.id);
-        }
-      };
-      uploadExamFile();
-    }
-  };
-
-  const handleCreateParentExam = async () => {
-    const name = window.prompt("Ana Sınav Paketi adını girin (Örn: LGS Türkiye Geneli Deneme 1):");
+  const handleCreateExam = async () => {
+    const name = window.prompt("Sınav veya Paket adını girin (Örn: LGS Türkiye Geneli Deneme 1):");
     if (!name) return;
 
     setAuthLoading(true);
-    const newParentData = {
+    const newExamData = {
       name: name,
+      duration: 60,
       exam_type: 'deneme',
       category_exam_type: 'Genel',
       category_lesson: 'Genel',
       is_published: false,
       price: 0,
+      original_price: 0,
       is_parent: true
     };
 
-    const { data, error } = await supabase.from('exams').insert([newParentData]).select();
+    const { data, error } = await supabase.from('exams').insert([newExamData]).select();
     setAuthLoading(false);
 
     if (error) {
-      alert("Ana sınav oluşturulamadı: " + error.message);
+      alert("Sınav oluşturulamadı: " + error.message);
     } else if (data && data.length > 0) {
-      setExams(prev => [formatExamData(data[0]), ...prev]);
+      const formatted = formatExamData(data[0]);
+      setExams(prev => [formatted, ...prev]);
+      setActiveAdminExamId(formatted.id);
     }
   };
 
@@ -403,7 +349,7 @@ export default function App() {
       setAuthLoading(false);
 
       if (error) {
-        alert("Alt oturum kaydedilemedi: " + error.message);
+        alert("Oturum kaydedilemedi: " + error.message);
       } else if (data && data.length > 0) {
         setExams(prev => [...prev, formatExamData(data[0])]);
       }
@@ -665,15 +611,9 @@ export default function App() {
           <div>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h2 style={{ margin: 0 }}>Tüm Sınavlar ve Paketler</h2>
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <button onClick={handleCreateParentExam} style={{ padding: '10px 20px', backgroundColor: '#8b5cf6', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', border: 'none' }}>
-                  + Ana Sınav Paketi Oluştur
-                </button>
-                <label style={{ padding: '10px 20px', backgroundColor: '#2563eb', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
-                  + Tekil İçerik Yükle (PDF)
-                  <input type="file" accept="application/pdf" onChange={handleFileUpload} style={{ display: 'none' }} />
-                </label>
-              </div>
+              <button onClick={handleCreateExam} style={{ padding: '10px 20px', backgroundColor: '#2563eb', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', border: 'none' }}>
+                + Yeni Sınav / Paket Oluştur
+              </button>
             </div>
 
             {exams.length === 0 ? (
@@ -683,28 +623,26 @@ export default function App() {
             ) : (
               <div style={{ display: 'grid', gap: '16px' }}>
                 {exams.filter(e => !e.parentId).map(parentExam => (
-                  <div key={parentExam.id} style={{ backgroundColor: '#ffffff', borderRadius: '8px', border: parentExam.isParent ? '2px solid #8b5cf6' : '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
+                  <div key={parentExam.id} style={{ backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
                     
-                    {/* Ana Sınav / Tekil Sınav Başlığı */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', backgroundColor: parentExam.isParent ? '#f5f3ff' : '#ffffff' }}>
+                    {/* Sınav / Paket Ana Başlığı */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', backgroundColor: '#f8fafc' }}>
                       <div>
-                        <h3 style={{ margin: '0 0 8px 0', color: parentExam.isParent ? '#6b21a8' : '#0f172a' }}>
-                          {parentExam.isParent ? '📦 Paket: ' : ''}{parentExam.name}
+                        <h3 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>
+                          📦 {parentExam.name}
                         </h3>
                         <div style={{ display: 'flex', gap: '12px', fontSize: '0.85rem', color: '#64748b' }}>
                           <span style={{ color: parentExam.isPublished ? '#16a34a' : '#ef4444', fontWeight: 'bold' }}>
                             {parentExam.isPublished ? '● Yayında' : '○ Taslak'}
                           </span>
-                          {!parentExam.isParent && <span>📄 {parentExam.numPages || '?'} Soru</span>}
+                          <span>₺{parentExam.price || 0}</span>
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        {parentExam.isParent && (
-                          <label style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#e0e7ff', color: '#4338ca', cursor: 'pointer', fontWeight: 'bold', border: '1px dashed #4338ca' }}>
-                            + Alt Oturum Ekle
-                            <input type="file" accept="application/pdf" onChange={(e) => handleChildFileUpload(e, parentExam.id)} style={{ display: 'none' }} />
-                          </label>
-                        )}
+                        <label style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#e0e7ff', color: '#4338ca', cursor: 'pointer', fontWeight: 'bold', border: '1px dashed #4338ca' }}>
+                          + Oturum Ekle (PDF)
+                          <input type="file" accept="application/pdf" onChange={(e) => handleChildFileUpload(e, parentExam.id)} style={{ display: 'none' }} />
+                        </label>
                         <button onClick={() => togglePublish(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: parentExam.isPublished ? '#f59e0b' : '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 'bold' }}>
                           {parentExam.isPublished ? 'Yayından Kaldır' : 'Yayınla'}
                         </button>
@@ -714,25 +652,23 @@ export default function App() {
                     </div>
 
                     {/* Alt Oturumları Listeleme */}
-                    {parentExam.isParent && (
-                      <div style={{ padding: '0 16px 16px 16px', backgroundColor: '#f5f3ff' }}>
-                        {exams.filter(child => child.parentId === parentExam.id).length > 0 ? (
-                           <div style={{ display: 'grid', gap: '8px', marginTop: '10px' }}>
-                             {exams.filter(child => child.parentId === parentExam.id).map(childExam => (
-                               <div key={childExam.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', backgroundColor: '#ffffff', borderRadius: '6px', border: '1px solid #e2e8f0', marginLeft: '20px' }}>
-                                  <div style={{ fontWeight: '500' }}>↳ {childExam.name} <span style={{ fontSize: '0.8rem', color: '#64748b' }}>({childExam.numPages || '?'} Soru)</span></div>
-                                  <div style={{ display: 'flex', gap: '8px' }}>
-                                    <button onClick={() => setActiveAdminExamId(childExam.id)} style={{ padding: '4px 10px', fontSize: '0.85rem', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}>Düzenle (Cevap Anh.)</button>
-                                    <button onClick={() => deleteExam(childExam.id)} style={{ padding: '4px 10px', fontSize: '0.85rem', borderRadius: '4px', border: 'none', backgroundColor: '#ef4444', color: '#fff', cursor: 'pointer' }}>Sil</button>
-                                  </div>
+                    <div style={{ padding: '0 16px 16px 16px', backgroundColor: '#ffffff' }}>
+                      {exams.filter(child => child.parentId === parentExam.id).length > 0 ? (
+                         <div style={{ display: 'grid', gap: '8px', marginTop: '10px' }}>
+                           {exams.filter(child => child.parentId === parentExam.id).map(childExam => (
+                             <div key={childExam.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', backgroundColor: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0', marginLeft: '20px' }}>
+                               <div style={{ fontWeight: '500' }}>↳ Oturum: {childExam.name} <span style={{ fontSize: '0.8rem', color: '#64748b' }}>({childExam.numPages || '?'} Soru, {childExam.duration} Dk)</span></div>
+                               <div style={{ display: 'flex', gap: '8px' }}>
+                                 <button onClick={() => setActiveAdminExamId(childExam.id)} style={{ padding: '4px 10px', fontSize: '0.85rem', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}>Düzenle (Cevap Anh. / Süre)</button>
+                                 <button onClick={() => deleteExam(childExam.id)} style={{ padding: '4px 10px', fontSize: '0.85rem', borderRadius: '4px', border: 'none', backgroundColor: '#ef4444', color: '#fff', cursor: 'pointer' }}>Sil</button>
                                </div>
-                             ))}
-                           </div>
-                        ) : (
-                          <div style={{ fontSize: '0.85rem', color: '#6b21a8', marginLeft: '20px', fontStyle: 'italic' }}>Henüz bu pakete alt oturum eklenmemiş.</div>
-                        )}
-                      </div>
-                    )}
+                             </div>
+                           ))}
+                         </div>
+                      ) : (
+                        <div style={{ fontSize: '0.85rem', color: '#64748b', marginLeft: '20px', fontStyle: 'italic', padding: '10px 0' }}>Henüz bu sınava alt oturum eklenmemiş. Yukarıdaki "+ Oturum Ekle" butonunu kullanabilirsiniz.</div>
+                      )}
+                    </div>
 
                   </div>
                 ))}
@@ -740,78 +676,90 @@ export default function App() {
             )}
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '24px', alignItems: 'start' }}>
-            <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                <button onClick={() => setActiveAdminExamId(null)} style={{ padding: '6px 12px', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}>◀ Listeye Dön</button>
-                <strong>Soru Sayısı/Sayfa: {adminActiveExam.numPages || 'Yükleniyor...'}</strong>
+          <div style={{ display: 'grid', gridTemplateColumns: adminActiveExam.pdfFile ? '1fr 380px' : '1fr', gap: '24px', alignItems: 'start' }}>
+            {adminActiveExam.pdfFile && (
+              <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <button onClick={() => setActiveAdminExamId(null)} style={{ padding: '6px 12px', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}>◀ Listeye Dön</button>
+                  <strong>Soru Sayısı/Sayfa: {adminActiveExam.numPages || 'Yükleniyor...'}</strong>
+                </div>
+                <PdfViewer 
+                  file={adminActiveExam.pdfFile} 
+                  pageNumber={1} 
+                  onDocumentLoadSuccess={({ numPages }) => {
+                    if (adminActiveExam.numPages !== numPages) {
+                      updateExamInDb(adminActiveExam.id, { numPages });
+                    }
+                  }} 
+                />
               </div>
-              <PdfViewer 
-                file={adminActiveExam.pdfFile} 
-                pageNumber={1} 
-                onDocumentLoadSuccess={({ numPages }) => {
-                  if (adminActiveExam.numPages !== numPages) {
-                    updateExamInDb(adminActiveExam.id, { numPages });
-                  }
-                }} 
-              />
-            </div>
+            )}
 
             <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px', position: 'sticky', top: '20px' }}>
-              <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>İçerik Ayarları</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>
+                <h3 style={{ margin: 0 }}>İçerik Ayarları</h3>
+                {!adminActiveExam.pdfFile && (
+                  <button onClick={() => setActiveAdminExamId(null)} style={{ padding: '4px 10px', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}>◀ Listeye Dön</button>
+                )}
+              </div>
               
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>İçerik Adı:</label>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav / Oturum Adı:</label>
                 <input type="text" value={adminActiveExam.name} onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
-                <div>
-                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Güncel Fiyat (₺):</label>
-                  <input 
-                    type="number" 
-                    min="0"
-                    step="0.01"
-                    value={adminActiveExam.price || 0} 
-                    onChange={(e) => updateExamInDb(adminActiveExam.id, { price: Number(e.target.value) })} 
-                    style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Eski Fiyat (Üstü Çizili):</label>
-                  <input 
-                    type="number" 
-                    min="0"
-                    step="0.01"
-                    placeholder="İsteğe bağlı"
-                    value={adminActiveExam.originalPrice || 0} 
-                    onChange={(e) => updateExamInDb(adminActiveExam.id, { originalPrice: Number(e.target.value) })} 
-                    style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
-                  />
-                </div>
-              </div>
+              {/* Sadece Ana Pakette Fiyat ve Genel Kategoriler Görünür */}
+              {adminActiveExam.isParent && (
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+                    <div>
+                      <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Güncel Fiyat (₺):</label>
+                      <input 
+                        type="number" 
+                        min="0"
+                        step="0.01"
+                        value={adminActiveExam.price || 0} 
+                        onChange={(e) => updateExamInDb(adminActiveExam.id, { price: Number(e.target.value) })} 
+                        style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Eski Fiyat (Üstü Çizili):</label>
+                      <input 
+                        type="number" 
+                        min="0"
+                        step="0.01"
+                        placeholder="İsteğe bağlı"
+                        value={adminActiveExam.originalPrice || 0} 
+                        onChange={(e) => updateExamInDb(adminActiveExam.id, { originalPrice: Number(e.target.value) })} 
+                        style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                      />
+                    </div>
+                  </div>
 
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
-                <input 
-                  type="text" 
-                  placeholder="Örn: LGS, YKS, KPSS, 2. Sınıf"
-                  value={adminActiveExam.categoryExamType || ''} 
-                  onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryExamType: e.target.value })} 
-                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
-                />
-              </div>
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
+                    <input 
+                      type="text" 
+                      placeholder="Örn: LGS, YKS, KPSS, 2. Sınıf"
+                      value={adminActiveExam.categoryExamType || ''} 
+                      onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryExamType: e.target.value })} 
+                      style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                    />
+                  </div>
 
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
-                <input 
-                  type="text" 
-                  placeholder="Örn: Matematik, Hayat Bilgisi"
-                  value={adminActiveExam.categoryLesson || ''} 
-                  onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryLesson: e.target.value })} 
-                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
-                />
-              </div>
+                  <div style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
+                    <input 
+                      type="text" 
+                      placeholder="Örn: Matematik, Hayat Bilgisi"
+                      value={adminActiveExam.categoryLesson || ''} 
+                      onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryLesson: e.target.value })} 
+                      style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                    />
+                  </div>
+                </>
+              )}
 
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>İçerik Formatı:</label>
@@ -832,46 +780,50 @@ export default function App() {
                 </div>
               )}
 
-              <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '6px', color: '#0f172a' }}>💡 Açıklamalı Çözüm PDF'i:</label>
-                <input type="file" accept="application/pdf" onChange={handleSolutionUpload} style={{ fontSize: '0.85rem', width: '100%' }} />
-                {adminActiveExam.solutionPdfFile && (
-                  <div style={{ fontSize: '0.8rem', color: '#16a34a', marginTop: '6px', fontWeight: 'bold' }}>
-                    ✓ Çözüm PDF başarıyla eklendi.
+              {adminActiveExam.pdfFile && (
+                <>
+                  <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '6px', color: '#0f172a' }}>💡 Açıklamalı Çözüm PDF'i:</label>
+                    <input type="file" accept="application/pdf" onChange={handleSolutionUpload} style={{ fontSize: '0.85rem', width: '100%' }} />
+                    {adminActiveExam.solutionPdfFile && (
+                      <div style={{ fontSize: '0.8rem', color: '#16a34a', marginTop: '6px', fontWeight: 'bold' }}>
+                        ✓ Çözüm PDF başarıyla eklendi.
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
 
-              <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>Hızlı Cevap Anahtarı</h3>
-              <div style={{ marginBottom: '20px' }}>
-                <textarea 
-                  placeholder="Örn: ABCDECAD..."
-                  value={
-                    Array.from(
-                      { length: adminActiveExam.numPages || 120 }, 
-                      function (_, i) {
-                        return adminActiveExam.answerKey && adminActiveExam.answerKey[i + 1] ? adminActiveExam.answerKey[i + 1] : '';
+                  <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>Hızlı Cevap Anahtarı</h3>
+                  <div style={{ marginBottom: '20px' }}>
+                    <textarea 
+                      placeholder="Örn: ABCDECAD..."
+                      value={
+                        Array.from(
+                          { length: adminActiveExam.numPages || 120 }, 
+                          function (_, i) {
+                            return adminActiveExam.answerKey && adminActiveExam.answerKey[i + 1] ? adminActiveExam.answerKey[i + 1] : '';
+                          }
+                        ).join('').toUpperCase()
                       }
-                    ).join('').toUpperCase()
-                  }
-                  onChange={(e) => handleFastKeyEntry(e.target.value)}
-                  style={{ 
-                    width: '100%', 
-                    height: '100px', 
-                    padding: '10px', 
-                    borderRadius: '6px', 
-                    border: '1px solid #cbd5e1',
-                    fontSize: '1rem',
-                    letterSpacing: '3px',
-                    fontFamily: 'monospace',
-                    textTransform: 'uppercase',
-                    resize: 'none'
-                  }} 
-                />
-                <div style={{ fontSize: '0.85rem', color: '#16a34a', fontWeight: 'bold', marginTop: '8px', textAlign: 'right' }}>
-                  Girilen: {Object.keys(adminActiveExam.answerKey || {}).length} / {adminActiveExam.numPages || 0}
-                </div>
-              </div>
+                      onChange={(e) => handleFastKeyEntry(e.target.value)}
+                      style={{ 
+                        width: '100%', 
+                        height: '100px', 
+                        padding: '10px', 
+                        borderRadius: '6px', 
+                        border: '1px solid #cbd5e1',
+                        fontSize: '1rem',
+                        letterSpacing: '3px',
+                        fontFamily: 'monospace',
+                        textTransform: 'uppercase',
+                        resize: 'none'
+                      }} 
+                    />
+                    <div style={{ fontSize: '0.85rem', color: '#16a34a', fontWeight: 'bold', marginTop: '8px', textAlign: 'right' }}>
+                      Girilen: {Object.keys(adminActiveExam.answerKey || {}).length} / {adminActiveExam.numPages || 0}
+                    </div>
+                  </div>
+                </>
+              )}
 
             </div>
           </div>
@@ -1015,7 +967,7 @@ export default function App() {
                         top: 0, 
                         bottom: 0, 
                         width: '6px', 
-                        backgroundColor: isCompleted ? '#22c55e' : (isDeneme ? '#3b82f6' : '#8b5cf6') 
+                        backgroundColor: isCompleted ? '#22c55e' : '#2563eb' 
                       }}></div>
 
                       <div style={{ paddingLeft: '8px', flex: 1, paddingRight: '16px' }}>
