@@ -16,7 +16,6 @@ export default function App() {
   const [activeAdminExamId, setActiveAdminExamId] = useState(null);
   const [activeStudentExamId, setActiveStudentExamId] = useState(null);
   
-  // Yeni: Öğrencinin detayını incelediği paket/sınav ID'si
   const [inspectingExamId, setInspectingExamId] = useState(null);
 
   const [studentCurrentPage, setStudentCurrentPage] = useState(1);
@@ -122,6 +121,7 @@ export default function App() {
     pdfFile: item.pdf_file,
     solutionPdfFile: item.solution_pdf_file,
     answerKey: item.answer_key || {},
+    sections: item.sections || [], // Sınav içi bölümler ve soru aralıkları (Örn: GY 1-60, GK 61-120)
     isPublished: item.is_published,
     numPages: item.num_pages || 0,
     price: item.price || 0,
@@ -247,6 +247,7 @@ export default function App() {
     if (updates.pdfFile !== undefined) dbUpdates.pdf_file = updates.pdfFile;
     if (updates.solutionPdfFile !== undefined) dbUpdates.solution_pdf_file = updates.solutionPdfFile;
     if (updates.answerKey !== undefined) dbUpdates.answer_key = updates.answerKey;
+    if (updates.sections !== undefined) dbUpdates.sections = updates.sections;
     if (updates.isPublished !== undefined) dbUpdates.is_published = updates.isPublished;
     if (updates.numPages !== undefined) dbUpdates.num_pages = updates.numPages;
     if (updates.price !== undefined) dbUpdates.price = updates.price;
@@ -292,20 +293,21 @@ export default function App() {
   };
 
   const handleCreateExam = async () => {
-    const name = window.prompt("Sınav veya Paket adını girin (Örn: LGS Türkiye Geneli Deneme 1):");
+    const name = window.prompt("Sınav veya Paket adını girin (Örn: KPSS Lisans Genel Yetenek Genel Kültür Denemesi):");
     if (!name) return;
 
     setAuthLoading(true);
     const newExamData = {
       name: name,
-      duration: 60,
+      duration: 130,
       exam_type: 'deneme',
-      category_exam_type: 'Genel',
-      category_lesson: 'Genel',
+      category_exam_type: 'KPSS',
+      category_lesson: 'Genel Yetenek - Genel Kültür',
       is_published: false,
       price: 0,
       original_price: 0,
-      is_parent: true
+      is_parent: true,
+      sections: []
     };
 
     const { data, error } = await supabase.from('exams').insert([newExamData]).select();
@@ -344,7 +346,7 @@ export default function App() {
         duration: 40, 
         exam_type: 'deneme',
         pdf_file: publicURLData.publicUrl,
-        is_published: true, // Alt oturumlar otomatik yayında olsun ki paket yayınlanınca gözüksün
+        is_published: true,
         is_parent: false,
         parent_id: parentId
       };
@@ -630,7 +632,6 @@ export default function App() {
                 {exams.filter(e => !e.parentId).map(parentExam => (
                   <div key={parentExam.id} style={{ backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
                     
-                    {/* Sınav / Paket Ana Başlığı */}
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', backgroundColor: '#f8fafc' }}>
                       <div>
                         <h3 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>
@@ -656,7 +657,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Alt Oturumları Listeleme */}
                     <div style={{ padding: '0 16px 16px 16px', backgroundColor: '#ffffff' }}>
                       {exams.filter(child => child.parentId === parentExam.id).length > 0 ? (
                          <div style={{ display: 'grid', gap: '8px', marginTop: '10px' }}>
@@ -671,7 +671,7 @@ export default function App() {
                            ))}
                          </div>
                       ) : (
-                        <div style={{ fontSize: '0.85rem', color: '#64748b', marginLeft: '20px', fontStyle: 'italic', padding: '10px 0' }}>Henüz bu sınava alt oturum eklenmemiş. Ana pakete ait direkt PDF yükleyebilir ya da yukarıdaki "+ Oturum Ekle" butonunu kullanabilirsiniz.</div>
+                        <div style={{ fontSize: '0.85rem', color: '#64748b', marginLeft: '20px', fontStyle: 'italic', padding: '10px 0' }}>Tek PDF üzerinden yapılandırılmış sınav / test içeriği.</div>
                       )}
                     </div>
 
@@ -686,7 +686,7 @@ export default function App() {
               <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                   <button onClick={() => setActiveAdminExamId(null)} style={{ padding: '6px 12px', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}>◀ Listeye Dön</button>
-                  <strong>Soru Sayısı/Sayfa: {adminActiveExam.numPages || 'Yükleniyor...'}</strong>
+                  <strong>Toplam Soru Sayısı/Sayfa: {adminActiveExam.numPages || 'Yükleniyor...'}</strong>
                 </div>
                 <PdfViewer 
                   file={adminActiveExam.pdfFile} 
@@ -713,57 +713,53 @@ export default function App() {
                 <input type="text" value={adminActiveExam.name} onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
               </div>
 
-              {adminActiveExam.isParent && (
-                <>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
-                    <div>
-                      <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Güncel Fiyat (₺):</label>
-                      <input 
-                        type="number" 
-                        min="0"
-                        step="0.01"
-                        value={adminActiveExam.price || 0} 
-                        onChange={(e) => updateExamInDb(adminActiveExam.id, { price: Number(e.target.value) })} 
-                        style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Eski Fiyat (Üstü Çizili):</label>
-                      <input 
-                        type="number" 
-                        min="0"
-                        step="0.01"
-                        placeholder="İsteğe bağlı"
-                        value={adminActiveExam.originalPrice || 0} 
-                        onChange={(e) => updateExamInDb(adminActiveExam.id, { originalPrice: Number(e.target.value) })} 
-                        style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
-                      />
-                    </div>
-                  </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Güncel Fiyat (₺):</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    step="0.01"
+                    value={adminActiveExam.price || 0} 
+                    onChange={(e) => updateExamInDb(adminActiveExam.id, { price: Number(e.target.value) })} 
+                    style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Eski Fiyat (Üstü Çizili):</label>
+                  <input 
+                    type="number" 
+                    min="0"
+                    step="0.01"
+                    placeholder="İsteğe bağlı"
+                    value={adminActiveExam.originalPrice || 0} 
+                    onChange={(e) => updateExamInDb(adminActiveExam.id, { originalPrice: Number(e.target.value) })} 
+                    style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                  />
+                </div>
+              </div>
 
-                  <div style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
-                    <input 
-                      type="text" 
-                      placeholder="Örn: LGS, YKS, KPSS, 2. Sınıf"
-                      value={adminActiveExam.categoryExamType || ''} 
-                      onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryExamType: e.target.value })} 
-                      style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
-                    />
-                  </div>
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
+                <input 
+                  type="text" 
+                  placeholder="Örn: KPSS, LGS, YKS"
+                  value={adminActiveExam.categoryExamType || ''} 
+                  onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryExamType: e.target.value })} 
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                />
+              </div>
 
-                  <div style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
-                    <input 
-                      type="text" 
-                      placeholder="Örn: Matematik, Hayat Bilgisi"
-                      value={adminActiveExam.categoryLesson || ''} 
-                      onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryLesson: e.target.value })} 
-                      style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
-                    />
-                  </div>
-                </>
-              )}
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
+                <input 
+                  type="text" 
+                  placeholder="Örn: Genel Yetenek - Genel Kültür"
+                  value={adminActiveExam.categoryLesson || ''} 
+                  onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryLesson: e.target.value })} 
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                />
+              </div>
 
               <div style={{ marginBottom: '16px' }}>
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>İçerik Formatı:</label>
@@ -783,6 +779,68 @@ export default function App() {
                   <input type="number" value={adminActiveExam.duration} onChange={(e) => updateExamInDb(adminActiveExam.id, { duration: Number(e.target.value) })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
                 </div>
               )}
+
+              {/* YENİ: Sınav İçi Bölüm / Kitapçık Tanımları (Kazanım ve Ders Ayrımı İçin) */}
+              <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '6px', color: '#0f172a' }}>📚 Sınav İçi Bölümler (Örn: GY 1-60, GK 61-120):</label>
+                <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '8px' }}>Tek PDF içindeki soru gruplarını ve soru aralıklarını buraya ekleyerek paletin bölümlenmesini sağlayabilirsiniz.</div>
+                
+                {(adminActiveExam.sections || []).map((sec, idx) => (
+                  <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 60px 30px', gap: '6px', marginBottom: '6px', alignItems: 'center' }}>
+                    <input 
+                      type="text" 
+                      placeholder="Bölüm Adı (Örn: Genel Yetenek)" 
+                      value={sec.name} 
+                      onChange={(e) => {
+                        const newSections = [...adminActiveExam.sections];
+                        newSections[idx].name = e.target.value;
+                        updateExamInDb(adminActiveExam.id, { sections: newSections });
+                      }}
+                      style={{ padding: '6px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
+                    />
+                    <input 
+                      type="number" 
+                      placeholder="Start" 
+                      value={sec.start} 
+                      onChange={(e) => {
+                        const newSections = [...adminActiveExam.sections];
+                        newSections[idx].start = Number(e.target.value);
+                        updateExamInDb(adminActiveExam.id, { sections: newSections });
+                      }}
+                      style={{ padding: '6px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
+                    />
+                    <input 
+                      type="number" 
+                      placeholder="End" 
+                      value={sec.end} 
+                      onChange={(e) => {
+                        const newSections = [...adminActiveExam.sections];
+                        newSections[idx].end = Number(e.target.value);
+                        updateExamInDb(adminActiveExam.id, { sections: newSections });
+                      }}
+                      style={{ padding: '6px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
+                    />
+                    <button 
+                      onClick={() => {
+                        const newSections = adminActiveExam.sections.filter((_, i) => i !== idx);
+                        updateExamInDb(adminActiveExam.id, { sections: newSections });
+                      }}
+                      style={{ backgroundColor: '#ef4444', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', padding: '6px', fontSize: '0.8rem' }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <button 
+                  onClick={() => {
+                    const newSections = [...(adminActiveExam.sections || []), { name: '', start: 1, end: 60 }];
+                    updateExamInDb(adminActiveExam.id, { sections: newSections });
+                  }}
+                  style={{ width: '100%', padding: '6px', backgroundColor: '#e0e7ff', color: '#4338ca', border: '1px dashed #4338ca', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.8rem', marginTop: '4px' }}
+                >
+                  + Yeni Bölüm Aralığı Ekle
+                </button>
+              </div>
 
               {adminActiveExam.pdfFile && (
                 <>
@@ -841,7 +899,6 @@ export default function App() {
   // ==========================================
   if (appMode === 'student') {
     
-    // Eğer bir sınav/paket inceleniyorsa (Detay Sayfası)
     if (inspectingExamId) {
       const inspectExam = exams.find(e => e.id === inspectingExamId);
       const childExams = exams.filter(e => e.parentId === inspectingExamId);
@@ -888,9 +945,22 @@ export default function App() {
               </div>
 
               <div style={{ backgroundColor: '#f8fafc', padding: '16px', borderRadius: '12px', border: '1px solid #e2e8f0', marginBottom: '24px' }}>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '1.05rem', color: '#0f172a' }}>📚 Bu Sınav / Paketin İçeriği (Oturumlar)</h3>
+                <h3 style={{ margin: '0 0 12px 0', fontSize: '1.05rem', color: '#0f172a' }}>📚 Sınav Bilgileri ve Bölümler</h3>
                 
-                {childExams.length > 0 ? (
+                {inspectExam.sections && inspectExam.sections.length > 0 ? (
+                  <div style={{ display: 'grid', gap: '10px' }}>
+                    {inspectExam.sections.map((sec, index) => (
+                      <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                        <div>
+                          <strong style={{ color: '#1e293b' }}>{sec.name}</strong>
+                        </div>
+                        <div style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: '600' }}>
+                          <span>Soru Aralığı: {sec.start} - {sec.end}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : childExams.length > 0 ? (
                   <div style={{ display: 'grid', gap: '10px' }}>
                     {childExams.map((child, index) => (
                       <div key={child.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
@@ -911,10 +981,9 @@ export default function App() {
                 )}
               </div>
 
-              {/* Fiyat ve Satın Al / Başla Butonu */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #e2e8f0', paddingTop: '20px', flexWrap: 'wrap', gap: '16px' }}>
                 <div>
-                  <div style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '4px' }}>İçerik Fiyatı</div>
+                  <div style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '4px' }}>Sınav Fiyatı</div>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
                     {isPaid ? (
                       <>
@@ -965,7 +1034,7 @@ export default function App() {
                     boxShadow: '0 4px 6px -1px rgba(37, 99, 235, 0.2)'
                   }}
                 >
-                  {!user ? 'Üye Ol ve İncele ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isPaid && !isPurchased ? `Hemen Satın Al (₺${inspectExam.price}) 💳` : 'Sınava / Oturuma Başla ▶'))}
+                  {!user ? 'Üye Ol ve İncele ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isPaid && !isPurchased ? `Hemen Satın Al (₺${inspectExam.price}) 💳` : 'Sınava Başla ▶'))}
                 </button>
               </div>
 
@@ -978,7 +1047,7 @@ export default function App() {
     if (!activeStudentExamId) {
       const publishedExams = exams.filter(e => {
         if (!e.isPublished) return false;
-        if (e.parentId) return false; // Listede sadece ana paketler/sınavlar görünsün
+        if (e.parentId) return false;
         if (selectedCategory !== 'Tümü' && e.categoryExamType !== selectedCategory) {
           return false;
         }
@@ -1122,7 +1191,7 @@ export default function App() {
                             🎯 {exam.categoryExamType} / {exam.categoryLesson}
                           </span>
                           <span style={{ backgroundColor: isDeneme ? '#eff6ff' : '#f5f3ff', color: isDeneme ? '#1d4ed8' : '#7c3aed', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
-                            {childCount > 0 ? `${childCount} Oturumlu Paket` : (isDeneme ? 'Deneme Sınavı' : 'Test')}
+                            {isDeneme ? 'Deneme Sınavı' : 'Test'}
                           </span>
 
                           {user && isCompleted ? (
@@ -1150,9 +1219,8 @@ export default function App() {
                         </div>
 
                         <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem', color: '#64748b', fontWeight: '500', marginBottom: '12px', alignItems: 'center' }}>
-                          {isDeneme && !childCount && <span>⏱ Süre: {exam.duration} Dakika</span>}
-                          {childCount > 0 && <span>📚 Oturum Sayısı: {childCount}</span>}
-                          <span>📝 Toplam Soru: {exam.numPages || 'Paket'}</span>
+                          {isDeneme && <span>⏱ Süre: {exam.duration} Dakika</span>}
+                          <span>📝 Toplam Soru: {exam.numPages || 0}</span>
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
@@ -1389,35 +1457,78 @@ export default function App() {
                 </div>
               ) : null}
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px', maxHeight: '420px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
-                {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
-                  const qNum = index + 1;
-                  const isAnswered = !!studentAnswers[qNum];
-                  const isCurrent = studentCurrentPage === qNum;
-                  let btnBg = '#ffffff', btnColor = '#334155', btnBorder = '1px solid #cbd5e1';
-                  
-                  if (showResults) {
-                    const studentAns = studentAnswers[qNum];
-                    const correctAns = activeStudentExam.answerKey[qNum];
-                    if (studentAns && studentAns === correctAns) {
-                      btnBg = '#dcfce7'; btnColor = '#15803d'; btnBorder = '1px solid #16a34a';
-                    } else if (studentAns && studentAns !== correctAns) {
-                      btnBg = '#fee2e2'; btnColor = '#dc2626'; btnBorder = '1px solid #ef4444';
-                    } else {
-                      btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #e2e8f0';
-                    }
-                  } else {
-                    if (isAnswered) { btnBg = '#16a34a'; btnColor = '#ffffff'; btnBorder = '1px solid #16a34a'; }
-                  }
+              <div style={{ maxHeight: '420px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
+                {activeStudentExam.sections && activeStudentExam.sections.length > 0 ? (
+                  activeStudentExam.sections.map((sec, sIdx) => (
+                    <div key={sIdx} style={{ marginBottom: '12px' }}>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#1e40af', marginBottom: '4px', backgroundColor: '#eff6ff', padding: '4px 8px', borderRadius: '4px' }}>
+                        {sec.name} ({sec.start}-{sec.end})
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
+                        {Array.from({ length: (sec.end - sec.start + 1) }, (_, index) => {
+                          const qNum = sec.start + index;
+                          if (qNum > activeStudentExam.numPages) return null;
+                          const isAnswered = !!studentAnswers[qNum];
+                          const isCurrent = studentCurrentPage === qNum;
+                          let btnBg = '#ffffff', btnColor = '#334155', btnBorder = '1px solid #cbd5e1';
+                          
+                          if (showResults) {
+                            const studentAns = studentAnswers[qNum];
+                            const correctAns = activeStudentExam.answerKey[qNum];
+                            if (studentAns && studentAns === correctAns) {
+                              btnBg = '#dcfce7'; btnColor = '#15803d'; btnBorder = '1px solid #16a34a';
+                            } else if (studentAns && studentAns !== correctAns) {
+                              btnBg = '#fee2e2'; btnColor = '#dc2626'; btnBorder = '1px solid #ef4444';
+                            } else {
+                              btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #e2e8f0';
+                            }
+                          } else {
+                            if (isAnswered) { btnBg = '#16a34a'; btnColor = '#ffffff'; btnBorder = '1px solid #16a34a'; }
+                          }
 
-                  if (isCurrent) { btnBorder = '2px solid #2563eb'; }
+                          if (isCurrent) { btnBorder = '2px solid #2563eb'; }
 
-                  return (
-                    <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '36px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', padding: 0 }}>
-                      {qNum}
-                    </button>
-                  );
-                })}
+                          return (
+                            <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '36px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', padding: 0 }}>
+                              {qNum}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
+                    {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
+                      const qNum = index + 1;
+                      const isAnswered = !!studentAnswers[qNum];
+                      const isCurrent = studentCurrentPage === qNum;
+                      let btnBg = '#ffffff', btnColor = '#334155', btnBorder = '1px solid #cbd5e1';
+                      
+                      if (showResults) {
+                        const studentAns = studentAnswers[qNum];
+                        const correctAns = activeStudentExam.answerKey[qNum];
+                        if (studentAns && studentAns === correctAns) {
+                          btnBg = '#dcfce7'; btnColor = '#15803d'; btnBorder = '1px solid #16a34a';
+                        } else if (studentAns && studentAns !== correctAns) {
+                          btnBg = '#fee2e2'; btnColor = '#dc2626'; btnBorder = '1px solid #ef4444';
+                        } else {
+                          btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #e2e8f0';
+                        }
+                      } else {
+                        if (isAnswered) { btnBg = '#16a34a'; btnColor = '#ffffff'; btnBorder = '1px solid #16a34a'; }
+                      }
+
+                      if (isCurrent) { btnBorder = '2px solid #2563eb'; }
+
+                      return (
+                        <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '36px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', padding: 0 }}>
+                          {qNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {showResults && activeStudentExam.solutionPdfFile && (
