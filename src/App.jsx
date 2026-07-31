@@ -14,6 +14,21 @@ export default function App() {
 
   const [exams, setExams] = useState([]);
   const [activeAdminExamId, setActiveAdminExamId] = useState(null);
+  const [isCreatingExam, setIsCreatingExam] = useState(false);
+  const [newExamForm, setNewExamForm] = useState({
+    name: '',
+    duration: '',
+    examType: 'deneme',
+    categoryExamType: '',
+    categoryLesson: '',
+    price: 0,
+    originalPrice: 0,
+    isParent: true,
+    answerKey: {},
+    sections: [],
+    numPages: 0
+  });
+
   const [activeStudentExamId, setActiveStudentExamId] = useState(null);
   
   const [inspectingExamId, setInspectingExamId] = useState(null);
@@ -228,6 +243,7 @@ export default function App() {
     setUser(null);
     setAppMode('student');
     setActiveAdminExamId(null);
+    setIsCreatingExam(false);
     setActiveStudentExamId(null);
     setInspectingExamId(null);
     setStudentResultsMap({});
@@ -292,17 +308,35 @@ export default function App() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const handleCreateExam = async () => {
+  const handleStartCreateExam = () => {
+    setNewExamForm({
+      name: '',
+      duration: '',
+      examType: 'deneme',
+      categoryExamType: '',
+      categoryLesson: '',
+      price: 0,
+      originalPrice: 0,
+      isParent: true,
+      answerKey: {},
+      sections: [],
+      numPages: 0
+    });
+    setIsCreatingExam(true);
+    setActiveAdminExamId(null);
+  };
+
+  const handleSaveNewExam = async () => {
     setAuthLoading(true);
     const newExamData = {
-      name: "Yeni Sınav / Paket",
-      duration: 130,
-      exam_type: 'deneme',
-      category_exam_type: 'KPSS',
-      category_lesson: 'Genel Yetenek - Genel Kültür',
+      name: newExamForm.name || 'İsimsiz Sınav',
+      duration: Number(newExamForm.duration) || 0,
+      exam_type: newExamForm.examType,
+      category_exam_type: newExamForm.categoryExamType,
+      category_lesson: newExamForm.categoryLesson,
       is_published: false,
-      price: 0,
-      original_price: 0,
+      price: Number(newExamForm.price) || 0,
+      original_price: Number(newExamForm.originalPrice) || 0,
       is_parent: true,
       sections: []
     };
@@ -315,7 +349,7 @@ export default function App() {
     } else if (data && data.length > 0) {
       const formatted = formatExamData(data[0]);
       setExams(prev => [formatted, ...prev]);
-      setActiveAdminExamId(formatted.id);
+      setIsCreatingExam(false);
     }
   };
 
@@ -611,11 +645,11 @@ export default function App() {
           </div>
         )}
 
-        {!adminActiveExam ? (
+        {!adminActiveExam && !isCreatingExam ? (
           <div>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h2 style={{ margin: 0 }}>Tüm Sınavlar ve Paketler</h2>
-              <button onClick={handleCreateExam} style={{ padding: '10px 20px', backgroundColor: '#2563eb', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', border: 'none' }}>
+              <button onClick={handleStartCreateExam} style={{ padding: '10px 20px', backgroundColor: '#2563eb', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', border: 'none' }}>
                 + Yeni Sınav / Paket Oluştur
               </button>
             </div>
@@ -677,12 +711,115 @@ export default function App() {
               </div>
             )}
           </div>
+        ) : isCreatingExam ? (
+          <div style={{ maxWidth: '600px', margin: '0 auto', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px' }}>
+            <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>İçerik Ayarları</h3>
+            
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav / Oturum Adı:</label>
+              <input 
+                type="text" 
+                placeholder="Yeni Sınav / Paket"
+                value={newExamForm.name} 
+                onChange={(e) => setNewExamForm({ ...newExamForm, name: e.target.value })} 
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+              <div>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Güncel Fiyat (₺):</label>
+                <input 
+                  type="number" 
+                  min="0"
+                  step="0.01"
+                  value={newExamForm.price} 
+                  onChange={(e) => setNewExamForm({ ...newExamForm, price: Number(e.target.value) })} 
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Eski Fiyat (Üstü Çizili):</label>
+                <input 
+                  type="number" 
+                  min="0"
+                  step="0.01"
+                  placeholder="İsteğe bağlı"
+                  value={newExamForm.originalPrice} 
+                  onChange={(e) => setNewExamForm({ ...newExamForm, originalPrice: Number(e.target.value) })} 
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+                />
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
+              <input 
+                type="text" 
+                placeholder="Örn: KPSS, LGS, YKS"
+                value={newExamForm.categoryExamType} 
+                onChange={(e) => setNewExamForm({ ...newExamForm, categoryExamType: e.target.value })} 
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+              />
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
+              <input 
+                type="text" 
+                placeholder="Örn: Genel Yetenek - Genel Kültür"
+                value={newExamForm.categoryLesson} 
+                onChange={(e) => setNewExamForm({ ...newExamForm, categoryLesson: e.target.value })} 
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+              />
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>İçerik Formatı:</label>
+              <select 
+                value={newExamForm.examType} 
+                onChange={(e) => setNewExamForm({ ...newExamForm, examType: e.target.value })}
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', boxSizing: 'border-box' }}
+              >
+                <option value="deneme">Deneme Sınavı (Süreli Geri Sayım)</option>
+                <option value="test">Test</option>
+              </select>
+            </div>
+
+            {newExamForm.examType === 'deneme' && (
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Süre (Dakika):</label>
+                <input 
+                  type="number" 
+                  value={newExamForm.duration} 
+                  onChange={(e) => setNewExamForm({ ...newExamForm, duration: Number(e.target.value) })} 
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+                />
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '10px', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
+              <button
+                type="button"
+                onClick={handleSaveNewExam}
+                style={{ flex: 1, padding: '12px', fontSize: '0.95rem', fontWeight: 'bold', color: '#ffffff', backgroundColor: '#2563eb', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
+              >
+                Kaydet
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsCreatingExam(false)}
+                style={{ flex: 1, padding: '12px', fontSize: '0.95rem', fontWeight: 'bold', color: '#334155', backgroundColor: '#f1f5f9', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'pointer' }}
+              >
+                Listeye Dön
+              </button>
+            </div>
+          </div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: adminActiveExam.pdfFile ? '1fr 380px' : '1fr', gap: '24px', alignItems: 'start' }}>
             {adminActiveExam.pdfFile && (
               <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                  <button onClick={() => setActiveAdminExamId(null)} style={{ padding: '6px 12px', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}>◀ Listeye Dön</button>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '12px' }}>
                   <strong>Toplam Soru Sayısı/Sayfa: {adminActiveExam.numPages || 'Yükleniyor...'}</strong>
                 </div>
                 <PdfViewer 
@@ -700,9 +837,6 @@ export default function App() {
             <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px', position: 'sticky', top: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>
                 <h3 style={{ margin: 0 }}>İçerik Ayarları</h3>
-                {!adminActiveExam.pdfFile && (
-                  <button onClick={() => setActiveAdminExamId(null)} style={{ padding: '4px 10px', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}>◀ Listeye Dön</button>
-                )}
               </div>
               
               <div style={{ marginBottom: '16px' }}>
@@ -828,7 +962,7 @@ export default function App() {
                   onClick={() => setActiveAdminExamId(null)}
                   style={{ width: '100%', padding: '10px', fontSize: '0.9rem', fontWeight: 'bold', color: '#ffffff', backgroundColor: '#2563eb', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
                 >
-                  Tamamla ve Listeye Dön
+                  Listeye Dön
                 </button>
               </div>
 
