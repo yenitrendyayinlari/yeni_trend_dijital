@@ -30,7 +30,6 @@ export default function App() {
   });
 
   const [activeStudentExamId, setActiveStudentExamId] = useState(null);
-  
   const [inspectingExamId, setInspectingExamId] = useState(null);
 
   const [studentCurrentPage, setStudentCurrentPage] = useState(1);
@@ -353,45 +352,38 @@ export default function App() {
     }
   };
 
-  const handleChildFileUpload = (e, parentId) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  const handleOpenDefinitionScreen = (examId) => {
+    setActiveAdminExamId(examId);
+    setIsCreatingExam(false);
+  };
 
-    const uploadChild = async () => {
+  const handleExamPdfUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file || !activeAdminExamId) return;
+
+    const uploadPdf = async () => {
       setAuthLoading(true);
       const fileExt = file.name.split('.').pop();
-      const fileName = `${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
+      const fileName = `exam_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
 
-      const { error: storageError } = await supabase.storage.from('exam-files').upload(fileName, file);
+      const { error: storageError } = await supabase.storage
+        .from('exam-files')
+        .upload(fileName, file);
 
       if (storageError) {
-        alert("Dosya yüklenemedi: " + storageError.message);
+        alert("Sınav PDF'i yüklenemedi: " + storageError.message);
         setAuthLoading(false);
         return;
       }
 
-      const { data: publicURLData } = supabase.storage.from('exam-files').getPublicUrl(fileName);
+      const { data: publicURLData } = supabase.storage
+        .from('exam-files')
+        .getPublicUrl(fileName);
 
-      const newChildData = {
-        name: file.name.replace('.pdf', ''),
-        duration: 40, 
-        exam_type: 'deneme',
-        pdf_file: publicURLData.publicUrl,
-        is_published: true,
-        is_parent: false,
-        parent_id: parentId
-      };
-
-      const { data, error } = await supabase.from('exams').insert([newChildData]).select();
       setAuthLoading(false);
-
-      if (error) {
-        alert("Oturum kaydedilemedi: " + error.message);
-      } else if (data && data.length > 0) {
-        setExams(prev => [...prev, formatExamData(data[0])]);
-      }
+      await updateExamInDb(activeAdminExamId, { pdfFile: publicURLData.publicUrl });
     };
-    uploadChild();
+    uploadPdf();
   };
 
   const handleSolutionUpload = (e) => {
@@ -661,9 +653,9 @@ export default function App() {
             ) : (
               <div style={{ display: 'grid', gap: '16px' }}>
                 {exams.filter(e => !e.parentId).map(parentExam => (
-                  <div key={parentExam.id} style={{ backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
+                  <div key={parentExam.id} className="exam-card" style={{ backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
                     
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', backgroundColor: '#f8fafc' }}>
+                    <div className="exam-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', backgroundColor: '#f8fafc' }}>
                       <div>
                         <h3 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>
                           📦 {parentExam.name}
@@ -676,10 +668,13 @@ export default function App() {
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                        <label style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#e0e7ff', color: '#4338ca', cursor: 'pointer', fontWeight: 'bold', border: '1px dashed #4338ca' }}>
-                          + Oturum Ekle (PDF)
-                          <input type="file" accept="application/pdf" onChange={(e) => handleChildFileUpload(e, parentExam.id)} style={{ display: 'none' }} />
-                        </label>
+                        <button 
+                          className="btn-define-exam" 
+                          onClick={() => handleOpenDefinitionScreen(parentExam.id)}
+                          style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#e0e7ff', color: '#4338ca', cursor: 'pointer', fontWeight: 'bold', border: '1px dashed #4338ca' }}
+                        >
+                          + Sınavı Tanımla
+                        </button>
                         <button onClick={() => togglePublish(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: parentExam.isPublished ? '#f59e0b' : '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 'bold' }}>
                           {parentExam.isPublished ? 'Yayından Kaldır' : 'Yayınla'}
                         </button>
@@ -688,23 +683,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div style={{ padding: '0 16px 16px 16px', backgroundColor: '#ffffff' }}>
-                      {exams.filter(child => child.parentId === parentExam.id).length > 0 ? (
-                         <div style={{ display: 'grid', gap: '8px', marginTop: '10px' }}>
-                           {exams.filter(child => child.parentId === parentExam.id).map(childExam => (
-                             <div key={childExam.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', backgroundColor: '#f8fafc', borderRadius: '6px', border: '1px solid #e2e8f0', marginLeft: '20px' }}>
-                               <div style={{ fontWeight: '500' }}>↳ Oturum: {childExam.name} <span style={{ fontSize: '0.8rem', color: '#64748b' }}>({childExam.numPages || '?'} Soru, {childExam.duration} Dk)</span></div>
-                               <div style={{ display: 'flex', gap: '8px' }}>
-                                 <button onClick={() => setActiveAdminExamId(childExam.id)} style={{ padding: '4px 10px', fontSize: '0.85rem', borderRadius: '4px', border: '1px solid #cbd5e1', cursor: 'pointer' }}>Düzenle (Cevap Anh. / Süre)</button>
-                                 <button onClick={() => deleteExam(childExam.id)} style={{ padding: '4px 10px', fontSize: '0.85rem', borderRadius: '4px', border: 'none', backgroundColor: '#ef4444', color: '#fff', cursor: 'pointer' }}>Sil</button>
-                               </div>
-                             </div>
-                           ))}
-                         </div>
-                      ) : (
-                        <div style={{ fontSize: '0.85rem', color: '#64748b', marginLeft: '20px', fontStyle: 'italic', padding: '10px 0' }}>Tek PDF üzerinden yapılandırılmış sınav / test içeriği.</div>
-                      )}
-                    </div>
+                    {/* Sub-description text ("Tek PDF üzerinden yapılandırılmış sınav / test içeriği.") completely removed */}
 
                   </div>
                 ))}
@@ -713,7 +692,7 @@ export default function App() {
           </div>
         ) : isCreatingExam ? (
           <div style={{ maxWidth: '600px', margin: '0 auto', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px' }}>
-            <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>İçerik Ayarları</h3>
+            <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>Yeni İçerik Ayarları</h3>
             
             <div style={{ marginBottom: '16px' }}>
               <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav / Oturum Adı:</label>
@@ -834,127 +813,71 @@ export default function App() {
               </div>
             )}
 
-            <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px', position: 'sticky', top: '20px' }}>
+            {/* Sağ Panel - İçerik ve PDF Tanımlama Ayarları (Sadeleştirilmiş) */}
+            <div className="sidebar-content-settings" style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px', position: 'sticky', top: '20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>
                 <h3 style={{ margin: 0 }}>İçerik Ayarları</h3>
               </div>
               
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav / Oturum Adı:</label>
-                <input type="text" value={adminActiveExam.name} onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
-                <div>
-                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Güncel Fiyat (₺):</label>
-                  <input 
-                    type="number" 
-                    min="0"
-                    step="0.01"
-                    value={adminActiveExam.price || 0} 
-                    onChange={(e) => updateExamInDb(adminActiveExam.id, { price: Number(e.target.value) })} 
-                    style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
-                  />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Eski Fiyat (Üstü Çizili):</label>
-                  <input 
-                    type="number" 
-                    min="0"
-                    step="0.01"
-                    placeholder="İsteğe bağlı"
-                    value={adminActiveExam.originalPrice || 0} 
-                    onChange={(e) => updateExamInDb(adminActiveExam.id, { originalPrice: Number(e.target.value) })} 
-                    style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
-                  />
-                </div>
-              </div>
-
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
+              {/* Sınav PDF Seçimi */}
+              <div className="form-group" style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav PDF'i:</label>
                 <input 
-                  type="text" 
-                  placeholder="Örn: KPSS, LGS, YKS"
-                  value={adminActiveExam.categoryExamType || ''} 
-                  onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryExamType: e.target.value })} 
-                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                  type="file" 
+                  accept="application/pdf" 
+                  onChange={handleExamPdfUpload} 
+                  style={{ fontSize: '0.85rem', width: '100%' }}
                 />
               </div>
 
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
+              {/* Açıklamalı Çözüm PDF'i */}
+              <div className="form-group" style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>💡 Açıklamalı Çözüm PDF'i:</label>
                 <input 
-                  type="text" 
-                  placeholder="Örn: Genel Yetenek - Genel Kültür"
-                  value={adminActiveExam.categoryLesson || ''} 
-                  onChange={(e) => updateExamInDb(adminActiveExam.id, { categoryLesson: e.target.value })} 
-                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} 
+                  type="file" 
+                  accept="application/pdf" 
+                  onChange={handleSolutionUpload} 
+                  style={{ fontSize: '0.85rem', width: '100%' }}
                 />
-              </div>
-
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>İçerik Formatı:</label>
-                <select 
-                  value={adminActiveExam.examType || 'deneme'} 
-                  onChange={(e) => updateExamInDb(adminActiveExam.id, { examType: e.target.value })}
-                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff' }}
-                >
-                  <option value="deneme">Deneme Sınavı (Süreli Geri Sayım)</option>
-                  <option value="test">Test</option>
-                </select>
-              </div>
-
-              {adminActiveExam.examType === 'deneme' && (
-                <div style={{ marginBottom: '16px' }}>
-                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Süre (Dakika):</label>
-                  <input type="number" value={adminActiveExam.duration} onChange={(e) => updateExamInDb(adminActiveExam.id, { duration: Number(e.target.value) })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
-                </div>
-              )}
-
-              {adminActiveExam.pdfFile && (
-                <>
-                  <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '6px', color: '#0f172a' }}>💡 Açıklamalı Çözüm PDF'i:</label>
-                    <input type="file" accept="application/pdf" onChange={handleSolutionUpload} style={{ fontSize: '0.85rem', width: '100%' }} />
-                    {adminActiveExam.solutionPdfFile && (
-                      <div style={{ fontSize: '0.8rem', color: '#16a34a', marginTop: '6px', fontWeight: 'bold' }}>
-                        ✓ Çözüm PDF başarıyla eklendi.
-                      </div>
-                    )}
+                {adminActiveExam.solutionPdfFile && (
+                  <div style={{ fontSize: '0.8rem', color: '#16a34a', marginTop: '6px', fontWeight: 'bold' }}>
+                    ✓ Çözüm PDF başarıyla eklendi.
                   </div>
+                )}
+              </div>
 
-                  <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>Hızlı Cevap Anahtarı</h3>
-                  <div style={{ marginBottom: '20px' }}>
-                    <textarea 
-                      placeholder="Örn: ABCDECAD..."
-                      value={
-                        Array.from(
-                          { length: adminActiveExam.numPages || 120 }, 
-                          function (_, i) {
-                            return adminActiveExam.answerKey && adminActiveExam.answerKey[i + 1] ? adminActiveExam.answerKey[i + 1] : '';
-                          }
-                        ).join('').toUpperCase()
+              {/* Hızlı Cevap Anahtarı */}
+              <div className="form-group" style={{ marginBottom: '20px' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Hızlı Cevap Anahtarı</label>
+                <textarea 
+                  placeholder="ÖRN: ABCDECAD..." 
+                  value={
+                    Array.from(
+                      { length: adminActiveExam.numPages || 120 }, 
+                      function (_, i) {
+                        return adminActiveExam.answerKey && adminActiveExam.answerKey[i + 1] ? adminActiveExam.answerKey[i + 1] : '';
                       }
-                      onChange={(e) => handleFastKeyEntry(e.target.value)}
-                      style={{ 
-                        width: '100%', 
-                        height: '100px', 
-                        padding: '10px', 
-                        borderRadius: '6px', 
-                        border: '1px solid #cbd5e1',
-                        fontSize: '1rem',
-                        letterSpacing: '3px',
-                        fontFamily: 'monospace',
-                        textTransform: 'uppercase',
-                        resize: 'none'
-                      }} 
-                    />
-                    <div style={{ fontSize: '0.85rem', color: '#16a34a', fontWeight: 'bold', marginTop: '8px', textAlign: 'right' }}>
-                      Girilen: {Object.keys(adminActiveExam.answerKey || {}).length} / {adminActiveExam.numPages || 0}
-                    </div>
-                  </div>
-                </>
-              )}
+                    ).join('').toUpperCase()
+                  }
+                  onChange={(e) => handleFastKeyEntry(e.target.value)}
+                  style={{ 
+                    width: '100%', 
+                    height: '100px', 
+                    padding: '10px', 
+                    borderRadius: '6px', 
+                    border: '1px solid #cbd5e1',
+                    fontSize: '1rem',
+                    letterSpacing: '3px',
+                    fontFamily: 'monospace',
+                    textTransform: 'uppercase',
+                    resize: 'none',
+                    boxSizing: 'border-box'
+                  }} 
+                />
+                <div style={{ fontSize: '0.85rem', color: '#16a34a', fontWeight: 'bold', marginTop: '8px', textAlign: 'right' }}>
+                  Girilen: {Object.keys(adminActiveExam.answerKey || {}).length} / {adminActiveExam.numPages || 0}
+                </div>
+              </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
                 <button
