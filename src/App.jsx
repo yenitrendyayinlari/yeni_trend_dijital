@@ -15,6 +15,9 @@ export default function App() {
   const [exams, setExams] = useState([]);
   const [activeAdminExamId, setActiveAdminExamId] = useState(null);
   const [activeStudentExamId, setActiveStudentExamId] = useState(null);
+  
+  // Yeni: Öğrencinin detayını incelediği paket/sınav ID'si
+  const [inspectingExamId, setInspectingExamId] = useState(null);
 
   const [studentCurrentPage, setStudentCurrentPage] = useState(1);
   const [studentAnswers, setStudentAnswers] = useState({});
@@ -226,6 +229,7 @@ export default function App() {
     setAppMode('student');
     setActiveAdminExamId(null);
     setActiveStudentExamId(null);
+    setInspectingExamId(null);
     setStudentResultsMap({});
     setStudentPurchases({});
     fetchPublicExams();
@@ -340,7 +344,7 @@ export default function App() {
         duration: 40, 
         exam_type: 'deneme',
         pdf_file: publicURLData.publicUrl,
-        is_published: false,
+        is_published: true, // Alt oturumlar otomatik yayında olsun ki paket yayınlanınca gözüksün
         is_parent: false,
         parent_id: parentId
       };
@@ -403,7 +407,7 @@ export default function App() {
   const togglePublish = async (examId) => {
     const exam = exams.find(e => e.id === examId);
     if (exam) {
-      if (!exam.isPublished && Object.keys(exam.answerKey).length === 0) {
+      if (!exam.isPublished && Object.keys(exam.answerKey).length === 0 && exam.pdfFile) {
          if(!window.confirm("Hiç cevap anahtarı girmediniz! Yine de yayınlamak istiyor musunuz?")) return;
       }
       await updateExamInDb(examId, { isPublished: !exam.isPublished });
@@ -416,7 +420,7 @@ export default function App() {
       if (error) {
         console.error("Silme hatası:", error);
       } else {
-        setExams(exams.filter(e => e.id !== examId));
+        setExams(exams.filter(e => e.id !== examId && e.parentId !== examId));
         if (activeAdminExamId === examId) setActiveAdminExamId(null);
       }
     }
@@ -437,6 +441,7 @@ export default function App() {
     }
 
     setActiveStudentExamId(exam.id);
+    setInspectingExamId(null);
     setStudentAnswers({});
     setStudentCurrentPage(1);
     setIsExamFinished(false);
@@ -666,7 +671,7 @@ export default function App() {
                            ))}
                          </div>
                       ) : (
-                        <div style={{ fontSize: '0.85rem', color: '#64748b', marginLeft: '20px', fontStyle: 'italic', padding: '10px 0' }}>Henüz bu sınava alt oturum eklenmemiş. Yukarıdaki "+ Oturum Ekle" butonunu kullanabilirsiniz.</div>
+                        <div style={{ fontSize: '0.85rem', color: '#64748b', marginLeft: '20px', fontStyle: 'italic', padding: '10px 0' }}>Henüz bu sınava alt oturum eklenmemiş. Ana pakete ait direkt PDF yükleyebilir ya da yukarıdaki "+ Oturum Ekle" butonunu kullanabilirsiniz.</div>
                       )}
                     </div>
 
@@ -708,7 +713,6 @@ export default function App() {
                 <input type="text" value={adminActiveExam.name} onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
               </div>
 
-              {/* Sadece Ana Pakette Fiyat ve Genel Kategoriler Görünür */}
               {adminActiveExam.isParent && (
                 <>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
@@ -836,9 +840,145 @@ export default function App() {
   // RENDER: ÖĞRENCİ EKRANI
   // ==========================================
   if (appMode === 'student') {
+    
+    // Eğer bir sınav/paket inceleniyorsa (Detay Sayfası)
+    if (inspectingExamId) {
+      const inspectExam = exams.find(e => e.id === inspectingExamId);
+      const childExams = exams.filter(e => e.parentId === inspectingExamId);
+      const ratingInfo = examRatingsMap[inspectExam.id] || { average: '0,0', count: '0' };
+      const isPaid = inspectExam.price && inspectExam.price > 0;
+      const isPurchased = studentPurchases[inspectExam.id];
+      const resData = studentResultsMap[inspectExam.id];
+      const isCompleted = resData?.is_finished;
+
+      return (
+        <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b' }}>
+          <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '15px' }}>
+            <button onClick={() => setInspectingExamId(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', fontWeight: '600' }}>
+              ◀ Tüm Listeye Dön
+            </button>
+            <div style={{ fontSize: '1.2rem', fontWeight: '800', color: '#0f172a' }}>İçerik Detayları</div>
+            <div style={{ width: '100px' }}></div>
+          </header>
+
+          <main style={{ maxWidth: '900px', margin: '40px auto', padding: '0 20px' }}>
+            <div style={{ backgroundColor: '#ffffff', borderRadius: '16px', border: '1px solid #e2e8f0', padding: '32px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.02)' }}>
+              
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap' }}>
+                <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '4px 10px', borderRadius: '6px', fontSize: '0.8rem', fontWeight: '600' }}>
+                  🎯 {inspectExam.categoryExamType} / {inspectExam.categoryLesson}
+                </span>
+              </div>
+
+              <h1 style={{ margin: '0 0 12px 0', fontSize: '1.8rem', color: '#0f172a', fontWeight: '800' }}>
+                {inspectExam.name}
+              </h1>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
+                <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '1rem' }}>{ratingInfo.average}</span>
+                <div style={{ display: 'flex', gap: '2px' }}>
+                  {[1, 2, 3, 4, 5].map((star) => {
+                    const activeStar = Number(ratingInfo.average.replace(',', '.')) >= star;
+                    return (
+                      <span key={star} style={{ color: activeStar ? '#eab308' : '#cbd5e1', fontSize: '1.1rem' }}>★</span>
+                    );
+                  })}
+                </div>
+                <span style={{ color: '#64748b', fontSize: '0.85rem' }}>({ratingInfo.count} değerlendirme)</span>
+              </div>
+
+              <div style={{ backgroundColor: '#f8fafc', padding: '16px', borderRadius: '12px', border: '1px solid #e2e8f0', marginBottom: '24px' }}>
+                <h3 style={{ margin: '0 0 12px 0', fontSize: '1.05rem', color: '#0f172a' }}>📚 Bu Sınav / Paketin İçeriği (Oturumlar)</h3>
+                
+                {childExams.length > 0 ? (
+                  <div style={{ display: 'grid', gap: '10px' }}>
+                    {childExams.map((child, index) => (
+                      <div key={child.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                        <div>
+                          <strong style={{ color: '#1e293b' }}>{index + 1}. Oturum: {child.name}</strong>
+                        </div>
+                        <div style={{ display: 'flex', gap: '16px', fontSize: '0.85rem', color: '#64748b', fontWeight: '600' }}>
+                          <span>⏱️ {child.duration} Dk</span>
+                          <span>📝 {child.numPages || '?'} Soru</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.9rem', color: '#64748b' }}>
+                    <span>⏱️ Süre: {inspectExam.duration} Dakika</span> &nbsp;|&nbsp; <span>📝 Soru Sayısı: {inspectExam.numPages}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Fiyat ve Satın Al / Başla Butonu */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #e2e8f0', paddingTop: '20px', flexWrap: 'wrap', gap: '16px' }}>
+                <div>
+                  <div style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '4px' }}>İçerik Fiyatı</div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
+                    {isPaid ? (
+                      <>
+                        <span style={{ fontSize: '1.8rem', fontWeight: '900', color: '#0f172a' }}>
+                          ₺{inspectExam.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                        {inspectExam.originalPrice && inspectExam.originalPrice > inspectExam.price ? (
+                          <span style={{ fontSize: '1.1rem', fontWeight: '500', color: '#94a3b8', textDecoration: 'line-through' }}>
+                            ₺{inspectExam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span style={{ fontSize: '1.5rem', fontWeight: '800', color: '#16a34a' }}>
+                        Ücretsiz
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <button 
+                  onClick={() => {
+                    if (!user) {
+                      setShowAuthModal(true);
+                      return;
+                    }
+                    if (isCompleted) {
+                      setActiveStudentExamId(inspectExam.id);
+                      setInspectingExamId(null);
+                      setStudentAnswers(resData.answers || {});
+                      setStudentCurrentPage(1);
+                      setIsExamFinished(true);
+                      setShowResults(true);
+                      setViewingSolutionQ(false);
+                    } else {
+                      startExam(inspectExam);
+                    }
+                  }} 
+                  style={{ 
+                    padding: '14px 32px', 
+                    borderRadius: '12px', 
+                    border: 'none', 
+                    backgroundColor: isCompleted ? '#475569' : (isPaid && !isPurchased ? '#d97706' : '#2563eb'), 
+                    color: '#fff', 
+                    fontWeight: '700', 
+                    fontSize: '1rem', 
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 6px -1px rgba(37, 99, 235, 0.2)'
+                  }}
+                >
+                  {!user ? 'Üye Ol ve İncele ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isPaid && !isPurchased ? `Hemen Satın Al (₺${inspectExam.price}) 💳` : 'Sınava / Oturuma Başla ▶'))}
+                </button>
+              </div>
+
+            </div>
+          </main>
+        </div>
+      );
+    }
+
     if (!activeStudentExamId) {
       const publishedExams = exams.filter(e => {
         if (!e.isPublished) return false;
+        if (e.parentId) return false; // Listede sadece ana paketler/sınavlar görünsün
         if (selectedCategory !== 'Tümü' && e.categoryExamType !== selectedCategory) {
           return false;
         }
@@ -933,7 +1073,7 @@ export default function App() {
               <div style={{ textAlign: 'center', padding: '60px 20px', backgroundColor: '#ffffff', borderRadius: '16px', border: '1px dashed #cbd5e1', boxShadow: '0 1px 3px 0 rgba(0,0,0,0.02)' }}>
                 <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>📂</div>
                 <h3 style={{ margin: '0 0 6px 0', color: '#334155', fontSize: '1.1rem' }}>Aktif İçerik Bulunmuyor</h3>
-                <p style={{ margin: 0, color: '#64748b', fontSize: '0.9rem' }}>Seçilen kriterlere uygun aktif bir sınav veya test bulunmamaktadır.</p>
+                <p style={{ margin: 0, color: '#64748b', fontSize: '0.9rem' }}>Seçilen kriterlere uygun aktif bir sınav veya paket bulunmamaktadır.</p>
               </div>
             ) : (
               <div style={{ display: 'grid', gap: '16px' }}>
@@ -943,11 +1083,12 @@ export default function App() {
                   const isDeneme = exam.examType === 'deneme';
                   const ratingInfo = examRatingsMap[exam.id] || { average: '0,0', count: '0' };
                   const isPaid = exam.price && exam.price > 0;
-                  const isPurchased = studentPurchases[exam.id];
+                  const childCount = exams.filter(e => e.parentId === exam.id).length;
 
                   return (
                     <div 
                       key={exam.id} 
+                      onClick={() => setInspectingExamId(exam.id)}
                       style={{ 
                         display: 'flex', 
                         justifyContent: 'space-between', 
@@ -958,8 +1099,12 @@ export default function App() {
                         border: isCompleted ? '1px solid #bbf7d0' : '1px solid #e2e8f0', 
                         boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px -1px rgba(0, 0, 0, 0.02)',
                         position: 'relative',
-                        overflow: 'hidden'
+                        overflow: 'hidden',
+                        cursor: 'pointer',
+                        transition: 'transform 0.1s, box-shadow 0.1s'
                       }}
+                      onMouseEnter={(e) => e.currentTarget.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.05)'}
+                      onMouseLeave={(e) => e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.02)'}
                     >
                       <div style={{ 
                         position: 'absolute', 
@@ -977,7 +1122,7 @@ export default function App() {
                             🎯 {exam.categoryExamType} / {exam.categoryLesson}
                           </span>
                           <span style={{ backgroundColor: isDeneme ? '#eff6ff' : '#f5f3ff', color: isDeneme ? '#1d4ed8' : '#7c3aed', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
-                            {isDeneme ? 'Deneme Sınavı' : 'Test'}
+                            {childCount > 0 ? `${childCount} Oturumlu Paket` : (isDeneme ? 'Deneme Sınavı' : 'Test')}
                           </span>
 
                           {user && isCompleted ? (
@@ -1005,11 +1150,11 @@ export default function App() {
                         </div>
 
                         <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem', color: '#64748b', fontWeight: '500', marginBottom: '12px', alignItems: 'center' }}>
-                          {isDeneme && <span>⏱ Süre: {exam.duration} Dakika</span>}
-                          <span>📝 Soru Sayısı: {exam.numPages}</span>
+                          {isDeneme && !childCount && <span>⏱ Süre: {exam.duration} Dakika</span>}
+                          {childCount > 0 && <span>📚 Oturum Sayısı: {childCount}</span>}
+                          <span>📝 Toplam Soru: {exam.numPages || 'Paket'}</span>
                         </div>
 
-                        {/* Fiyat Alanı En Altta */}
                         <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
                           {isPaid ? (
                             <>
@@ -1033,35 +1178,23 @@ export default function App() {
 
                       <div>
                         <button 
-                          onClick={() => {
-                            if (!user) {
-                              setShowAuthModal(true);
-                              return;
-                            }
-                            if (isCompleted) {
-                              setActiveStudentExamId(exam.id);
-                              setStudentAnswers(resData.answers || {});
-                              setStudentCurrentPage(1);
-                              setIsExamFinished(true);
-                              setShowResults(true);
-                              setViewingSolutionQ(false);
-                            } else {
-                              startExam(exam);
-                            }
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setInspectingExamId(exam.id);
                           }} 
                           style={{ 
                             padding: '12px 24px', 
                             borderRadius: '10px', 
                             border: 'none', 
-                            backgroundColor: isCompleted ? '#475569' : (isPaid && !isPurchased ? '#d97706' : '#2563eb'), 
+                            backgroundColor: '#2563eb', 
                             color: '#fff', 
                             fontWeight: '600', 
                             fontSize: '0.9rem', 
                             cursor: 'pointer',
-                            boxShadow: isCompleted ? 'none' : '0 4px 6px -1px rgba(37, 99, 235, 0.2)'
+                            boxShadow: '0 4px 6px -1px rgba(37, 99, 235, 0.2)'
                           }}
                         >
-                          {!user ? 'Üye Ol / Başla ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isPaid && !isPurchased ? `Satın Al (₺${exam.price}) 💳` : (isDeneme ? 'Sınava Başla ▶' : 'Teste Başla ▶')))}
+                          İçeriği İncele ▶
                         </button>
                       </div>
                     </div>
