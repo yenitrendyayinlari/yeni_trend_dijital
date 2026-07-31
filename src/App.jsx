@@ -822,21 +822,13 @@ export default function App() {
                 </>
               )}
 
-              {/* Düzeltilmiş Tekli Alt Buton Alanı */}
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
                 <button
                   type="button"
                   onClick={() => setActiveAdminExamId(null)}
-                  style={{ padding: '8px 16px', fontSize: '0.9rem', fontWeight: '500', color: '#334155', backgroundColor: '#f1f5f9', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'pointer' }}
+                  style={{ width: '100%', padding: '10px', fontSize: '0.9rem', fontWeight: 'bold', color: '#ffffff', backgroundColor: '#2563eb', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
                 >
-                  Listeye Dön
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveAdminExamId(null)}
-                  style={{ padding: '8px 16px', fontSize: '0.9rem', fontWeight: '500', color: '#ffffff', backgroundColor: '#2563eb', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
-                >
-                  Kaydet ve Güncelle
+                  Tamamla ve Listeye Dön
                 </button>
               </div>
 
