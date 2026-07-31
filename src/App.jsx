@@ -121,7 +121,7 @@ export default function App() {
     pdfFile: item.pdf_file,
     solutionPdfFile: item.solution_pdf_file,
     answerKey: item.answer_key || {},
-    sections: item.sections || [], // Sınav içi bölümler ve soru aralıkları (Örn: GY 1-60, GK 61-120)
+    sections: item.sections || [],
     isPublished: item.is_published,
     numPages: item.num_pages || 0,
     price: item.price || 0,
@@ -293,12 +293,9 @@ export default function App() {
   };
 
   const handleCreateExam = async () => {
-    const name = window.prompt("Sınav veya Paket adını girin (Örn: KPSS Lisans Genel Yetenek Genel Kültür Denemesi):");
-    if (!name) return;
-
     setAuthLoading(true);
     const newExamData = {
-      name: name,
+      name: "Yeni Sınav / Paket",
       duration: 130,
       exam_type: 'deneme',
       category_exam_type: 'KPSS',
@@ -780,68 +777,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* YENİ: Sınav İçi Bölüm / Kitapçık Tanımları (Kazanım ve Ders Ayrımı İçin) */}
-              <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '6px', color: '#0f172a' }}>📚 Sınav İçi Bölümler (Örn: GY 1-60, GK 61-120):</label>
-                <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '8px' }}>Tek PDF içindeki soru gruplarını ve soru aralıklarını buraya ekleyerek paletin bölümlenmesini sağlayabilirsiniz.</div>
-                
-                {(adminActiveExam.sections || []).map((sec, idx) => (
-                  <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 60px 30px', gap: '6px', marginBottom: '6px', alignItems: 'center' }}>
-                    <input 
-                      type="text" 
-                      placeholder="Bölüm Adı (Örn: Genel Yetenek)" 
-                      value={sec.name} 
-                      onChange={(e) => {
-                        const newSections = [...adminActiveExam.sections];
-                        newSections[idx].name = e.target.value;
-                        updateExamInDb(adminActiveExam.id, { sections: newSections });
-                      }}
-                      style={{ padding: '6px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
-                    />
-                    <input 
-                      type="number" 
-                      placeholder="Start" 
-                      value={sec.start} 
-                      onChange={(e) => {
-                        const newSections = [...adminActiveExam.sections];
-                        newSections[idx].start = Number(e.target.value);
-                        updateExamInDb(adminActiveExam.id, { sections: newSections });
-                      }}
-                      style={{ padding: '6px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
-                    />
-                    <input 
-                      type="number" 
-                      placeholder="End" 
-                      value={sec.end} 
-                      onChange={(e) => {
-                        const newSections = [...adminActiveExam.sections];
-                        newSections[idx].end = Number(e.target.value);
-                        updateExamInDb(adminActiveExam.id, { sections: newSections });
-                      }}
-                      style={{ padding: '6px', borderRadius: '4px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
-                    />
-                    <button 
-                      onClick={() => {
-                        const newSections = adminActiveExam.sections.filter((_, i) => i !== idx);
-                        updateExamInDb(adminActiveExam.id, { sections: newSections });
-                      }}
-                      style={{ backgroundColor: '#ef4444', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', padding: '6px', fontSize: '0.8rem' }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-                <button 
-                  onClick={() => {
-                    const newSections = [...(adminActiveExam.sections || []), { name: '', start: 1, end: 60 }];
-                    updateExamInDb(adminActiveExam.id, { sections: newSections });
-                  }}
-                  style={{ width: '100%', padding: '6px', backgroundColor: '#e0e7ff', color: '#4338ca', border: '1px dashed #4338ca', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.8rem', marginTop: '4px' }}
-                >
-                  + Yeni Bölüm Aralığı Ekle
-                </button>
-              </div>
-
               {adminActiveExam.pdfFile && (
                 <>
                   <div style={{ marginBottom: '20px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
@@ -1152,7 +1087,6 @@ export default function App() {
                   const isDeneme = exam.examType === 'deneme';
                   const ratingInfo = examRatingsMap[exam.id] || { average: '0,0', count: '0' };
                   const isPaid = exam.price && exam.price > 0;
-                  const childCount = exams.filter(e => e.parentId === exam.id).length;
 
                   return (
                     <div 
@@ -1458,77 +1392,36 @@ export default function App() {
               ) : null}
 
               <div style={{ maxHeight: '420px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
-                {activeStudentExam.sections && activeStudentExam.sections.length > 0 ? (
-                  activeStudentExam.sections.map((sec, sIdx) => (
-                    <div key={sIdx} style={{ marginBottom: '12px' }}>
-                      <div style={{ fontSize: '0.8rem', fontWeight: 'bold', color: '#1e40af', marginBottom: '4px', backgroundColor: '#eff6ff', padding: '4px 8px', borderRadius: '4px' }}>
-                        {sec.name} ({sec.start}-{sec.end})
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
-                        {Array.from({ length: (sec.end - sec.start + 1) }, (_, index) => {
-                          const qNum = sec.start + index;
-                          if (qNum > activeStudentExam.numPages) return null;
-                          const isAnswered = !!studentAnswers[qNum];
-                          const isCurrent = studentCurrentPage === qNum;
-                          let btnBg = '#ffffff', btnColor = '#334155', btnBorder = '1px solid #cbd5e1';
-                          
-                          if (showResults) {
-                            const studentAns = studentAnswers[qNum];
-                            const correctAns = activeStudentExam.answerKey[qNum];
-                            if (studentAns && studentAns === correctAns) {
-                              btnBg = '#dcfce7'; btnColor = '#15803d'; btnBorder = '1px solid #16a34a';
-                            } else if (studentAns && studentAns !== correctAns) {
-                              btnBg = '#fee2e2'; btnColor = '#dc2626'; btnBorder = '1px solid #ef4444';
-                            } else {
-                              btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #e2e8f0';
-                            }
-                          } else {
-                            if (isAnswered) { btnBg = '#16a34a'; btnColor = '#ffffff'; btnBorder = '1px solid #16a34a'; }
-                          }
-
-                          if (isCurrent) { btnBorder = '2px solid #2563eb'; }
-
-                          return (
-                            <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '36px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', padding: 0 }}>
-                              {qNum}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
-                    {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
-                      const qNum = index + 1;
-                      const isAnswered = !!studentAnswers[qNum];
-                      const isCurrent = studentCurrentPage === qNum;
-                      let btnBg = '#ffffff', btnColor = '#334155', btnBorder = '1px solid #cbd5e1';
-                      
-                      if (showResults) {
-                        const studentAns = studentAnswers[qNum];
-                        const correctAns = activeStudentExam.answerKey[qNum];
-                        if (studentAns && studentAns === correctAns) {
-                          btnBg = '#dcfce7'; btnColor = '#15803d'; btnBorder = '1px solid #16a34a';
-                        } else if (studentAns && studentAns !== correctAns) {
-                          btnBg = '#fee2e2'; btnColor = '#dc2626'; btnBorder = '1px solid #ef4444';
-                        } else {
-                          btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #e2e8f0';
-                        }
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
+                  {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
+                    const qNum = index + 1;
+                    const isAnswered = !!studentAnswers[qNum];
+                    const isCurrent = studentCurrentPage === qNum;
+                    let btnBg = '#ffffff', btnColor = '#334155', btnBorder = '1px solid #cbd5e1';
+                    
+                    if (showResults) {
+                      const studentAns = studentAnswers[qNum];
+                      const correctAns = activeStudentExam.answerKey[qNum];
+                      if (studentAns && studentAns === correctAns) {
+                        btnBg = '#dcfce7'; btnColor = '#15803d'; btnBorder = '1px solid #16a34a';
+                      } else if (studentAns && studentAns !== correctAns) {
+                        btnBg = '#fee2e2'; btnColor = '#dc2626'; btnBorder = '1px solid #ef4444';
                       } else {
-                        if (isAnswered) { btnBg = '#16a34a'; btnColor = '#ffffff'; btnBorder = '1px solid #16a34a'; }
+                        btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #e2e8f0';
                       }
+                    } else {
+                      if (isAnswered) { btnBg = '#16a34a'; btnColor = '#ffffff'; btnBorder = '1px solid #16a34a'; }
+                    }
 
-                      if (isCurrent) { btnBorder = '2px solid #2563eb'; }
+                    if (isCurrent) { btnBorder = '2px solid #2563eb'; }
 
-                      return (
-                        <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '36px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', padding: 0 }}>
-                          {qNum}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
+                    return (
+                      <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '36px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', padding: 0 }}>
+                        {qNum}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               {showResults && activeStudentExam.solutionPdfFile && (
