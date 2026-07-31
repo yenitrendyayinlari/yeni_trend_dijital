@@ -822,19 +822,19 @@ export default function App() {
                 </>
               )}
 
-              {/* İçerik Ayarları Formu Altına Eklenen Kaydet ve Güncelle Butonları */}
-              <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-200">
+              {/* Düzeltilmiş Tekli Alt Buton Alanı */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
                 <button
                   type="button"
                   onClick={() => setActiveAdminExamId(null)}
-                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 cursor-pointer"
+                  style={{ padding: '8px 16px', fontSize: '0.9rem', fontWeight: '500', color: '#334155', backgroundColor: '#f1f5f9', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'pointer' }}
                 >
                   Listeye Dön
                 </button>
                 <button
                   type="button"
                   onClick={() => setActiveAdminExamId(null)}
-                  className="px-5 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 cursor-pointer"
+                  style={{ padding: '8px 16px', fontSize: '0.9rem', fontWeight: '500', color: '#ffffff', backgroundColor: '#2563eb', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
                 >
                   Kaydet ve Güncelle
                 </button>
