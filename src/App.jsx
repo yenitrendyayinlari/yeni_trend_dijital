@@ -1443,4 +1443,3 @@ export default function App() {
     );
   }
 }
-```[cite: 2]
