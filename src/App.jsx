@@ -466,7 +466,7 @@ export default function App() {
     }
 
     const isFree = !exam.price || exam.price <= 0;
-    const isPurchased = studentPurchases[exam.id];
+    const isPurchased = studentPurchases[exam.id] || (exam.parentId && studentPurchases[exam.parentId]);
 
     if (!isFree && !isPurchased) {
       handleIyzicoPayment(exam);
@@ -1041,17 +1041,57 @@ export default function App() {
                   </div>
                 ) : childExams.length > 0 ? (
                   <div style={{ display: 'grid', gap: '10px' }}>
-                    {childExams.map((child, index) => (
-                      <div key={child.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
-                        <div>
-                          <strong style={{ color: '#1e293b' }}>{index + 1}. Oturum: {child.name}</strong>
+                    {childExams.map((child, index) => {
+                      const childRes = studentResultsMap[child.id];
+                      const childCompleted = childRes?.is_finished;
+                      return (
+                        <div key={child.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', flexWrap: 'wrap', gap: '10px' }}>
+                          <div>
+                            <strong style={{ color: '#1e293b' }}>{index + 1}. Oturum: {child.name}</strong>
+                            <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '2px', display: 'flex', gap: '12px' }}>
+                              <span>⏱️ {child.duration} Dk</span>
+                              <span>📝 {child.numPages || '?'} Soru</span>
+                              {childCompleted && <span style={{ color: '#16a34a', fontWeight: 'bold' }}>✓ Tamamlandı (Net: {childRes.net})</span>}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => {
+                              if (!user) {
+                                setShowAuthModal(true);
+                                return;
+                              }
+                              if (!isPaid || isPurchased) {
+                                if (childCompleted) {
+                                  setActiveStudentExamId(child.id);
+                                  setInspectingExamId(null);
+                                  setStudentAnswers(childRes.answers || {});
+                                  setStudentCurrentPage(1);
+                                  setIsExamFinished(true);
+                                  setShowResults(true);
+                                  setViewingSolutionQ(false);
+                                } else {
+                                  startExam(child);
+                                }
+                              } else {
+                                handleIyzicoPayment(inspectExam);
+                              }
+                            }}
+                            style={{ 
+                              padding: '8px 16px', 
+                              borderRadius: '6px', 
+                              border: 'none', 
+                              backgroundColor: childCompleted ? '#475569' : (!isPaid || isPurchased ? '#2563eb' : '#d97706'), 
+                              color: '#fff', 
+                              fontWeight: 'bold', 
+                              fontSize: '0.85rem', 
+                              cursor: 'pointer' 
+                            }}
+                          >
+                            {childCompleted ? 'Sonucu İncele' : (!isPaid || isPurchased ? 'Oturumu Başlat ▶' : `Satın Al (₺${inspectExam.price})`)}
+                          </button>
                         </div>
-                        <div style={{ display: 'flex', gap: '16px', fontSize: '0.85rem', color: '#64748b', fontWeight: '600' }}>
-                          <span>⏱️ {child.duration} Dk</span>
-                          <span>📝 {child.numPages || '?'} Soru</span>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div style={{ fontSize: '0.9rem', color: '#64748b' }}>
@@ -1083,38 +1123,40 @@ export default function App() {
                   </div>
                 </div>
 
-                <button 
-                  onClick={() => {
-                    if (!user) {
-                      setShowAuthModal(true);
-                      return;
-                    }
-                    if (isCompleted) {
-                      setActiveStudentExamId(inspectExam.id);
-                      setInspectingExamId(null);
-                      setStudentAnswers(resData.answers || {});
-                      setStudentCurrentPage(1);
-                      setIsExamFinished(true);
-                      setShowResults(true);
-                      setViewingSolutionQ(false);
-                    } else {
-                      startExam(inspectExam);
-                    }
-                  }} 
-                  style={{ 
-                    padding: '14px 32px', 
-                    borderRadius: '12px', 
-                    border: 'none', 
-                    backgroundColor: isCompleted ? '#475569' : (isPaid && !isPurchased ? '#d97706' : '#2563eb'), 
-                    color: '#fff', 
-                    fontWeight: '700', 
-                    fontSize: '1rem', 
-                    cursor: 'pointer',
-                    boxShadow: '0 4px 6px -1px rgba(37, 99, 235, 0.2)'
-                  }}
-                >
-                  {!user ? 'Üye Ol ve İncele ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isPaid && !isPurchased ? `Hemen Satın Al (₺${inspectExam.price}) 💳` : 'Sınava Başla ▶'))}
-                </button>
+                {childExams.length === 0 && (
+                  <button 
+                    onClick={() => {
+                      if (!user) {
+                        setShowAuthModal(true);
+                        return;
+                      }
+                      if (isCompleted) {
+                        setActiveStudentExamId(inspectExam.id);
+                        setInspectingExamId(null);
+                        setStudentAnswers(resData.answers || {});
+                        setStudentCurrentPage(1);
+                        setIsExamFinished(true);
+                        setShowResults(true);
+                        setViewingSolutionQ(false);
+                      } else {
+                        startExam(inspectExam);
+                      }
+                    }} 
+                    style={{ 
+                      padding: '14px 32px', 
+                      borderRadius: '12px', 
+                      border: 'none', 
+                      backgroundColor: isCompleted ? '#475569' : (isPaid && !isPurchased ? '#d97706' : '#2563eb'), 
+                      color: '#fff', 
+                      fontWeight: '700', 
+                      fontSize: '1rem', 
+                      cursor: 'pointer',
+                      boxShadow: '0 4px 6px -1px rgba(37, 99, 235, 0.2)'
+                    }}
+                  >
+                    {!user ? 'Üye Ol ve İncele ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isPaid && !isPurchased ? `Hemen Satın Al (₺${inspectExam.price}) 💳` : 'Sınava Başla ▶'))}
+                  </button>
+                )}
               </div>
 
             </div>
