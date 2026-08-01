@@ -149,7 +149,8 @@ export default function App() {
     price: item.price || 0,
     originalPrice: item.original_price || 0,
     isParent: item.is_parent || false,
-    parentId: item.parent_id || null
+    parentId: item.parent_id || null,
+    sortOrder: item.sort_order ?? 0
   });
 
   const fetchPublicExams = async () => {
@@ -285,6 +286,33 @@ export default function App() {
     if (error) {
       console.error("Güncelleme hatası:", error);
     }
+  };
+
+  // Sıralama güncellemesini ayrı tutuyoruz ki sort_order kolonu
+  // henüz eklenmemişse diğer alanların kaydedilmesini etkilemesin.
+  const updateSortOrderInDb = async (id, newOrder) => {
+    setExams((prev) => prev.map(ex => ex.id === id ? { ...ex, sortOrder: newOrder } : ex));
+    const { error } = await supabase
+      .from('exams')
+      .update({ sort_order: newOrder })
+      .eq('id', id);
+    if (error) {
+      console.error("Sıralama güncellenemedi (sort_order kolonu eksik olabilir):", error);
+    }
+  };
+
+  const handleMoveSubTest = (childExamsSorted, examId, direction) => {
+    const currentIndex = childExamsSorted.findIndex(e => e.id === examId);
+    if (currentIndex === -1) return;
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= childExamsSorted.length) return;
+
+    const reordered = [...childExamsSorted];
+    [reordered[currentIndex], reordered[targetIndex]] = [reordered[targetIndex], reordered[currentIndex]];
+
+    reordered.forEach((ex, i) => {
+      updateSortOrderInDb(ex.id, i);
+    });
   };
 
   const activeStudentExam = exams.find(e => e.id === activeStudentExamId);
@@ -483,6 +511,10 @@ export default function App() {
     const adminActiveExam = exams.find(e => e.id === activeAdminExamId);
     if (!adminActiveExam) return;
     setAuthLoading(true);
+    const existingChildren = exams.filter(e => e.parentId === adminActiveExam.id);
+    const nextOrder = existingChildren.length > 0
+      ? Math.max(...existingChildren.map(e => e.sortOrder || 0)) + 1
+      : 0;
     const newChildData = {
       name: '', 
       parent_id: adminActiveExam.id,
@@ -504,6 +536,7 @@ export default function App() {
       const formatted = formatExamData(data[0]);
       setExams(prev => [formatted, ...prev]);
       setActiveSubExamId(formatted.id);
+      updateSortOrderInDb(formatted.id, nextOrder);
     }
   };
 
@@ -712,7 +745,7 @@ export default function App() {
   // ==========================================
   if (user && appMode === 'admin') {
     const adminActiveExam = exams.find(e => e.id === activeAdminExamId);
-    const childExams = adminActiveExam ? exams.filter(e => e.parentId === adminActiveExam.id) : [];
+    const childExams = adminActiveExam ? exams.filter(e => e.parentId === adminActiveExam.id).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)) : [];
     
     const currentPreviewExam = childExams.length > 0 
       ? (childExams.find(e => e.id === activeSubExamId) || childExams[0]) 
@@ -1128,7 +1161,25 @@ export default function App() {
                           gap: '10px'
                         }}
                       >
-                        <div style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flexShrink: 0 }}>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleMoveSubTest(childExams, subExam.id, 'up'); }}
+                            disabled={index === 0}
+                            title="Yukarı Taşı"
+                            style={{ width: '22px', height: '18px', lineHeight: '18px', padding: 0, border: '1px solid #cbd5e1', borderRadius: '4px', backgroundColor: index === 0 ? '#f1f5f9' : '#ffffff', color: index === 0 ? '#cbd5e1' : '#334155', cursor: index === 0 ? 'not-allowed' : 'pointer', fontSize: '0.7rem' }}
+                          >
+                            ▲
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleMoveSubTest(childExams, subExam.id, 'down'); }}
+                            disabled={index === childExams.length - 1}
+                            title="Aşağı Taşı"
+                            style={{ width: '22px', height: '18px', lineHeight: '18px', padding: 0, border: '1px solid #cbd5e1', borderRadius: '4px', backgroundColor: index === childExams.length - 1 ? '#f1f5f9' : '#ffffff', color: index === childExams.length - 1 ? '#cbd5e1' : '#334155', cursor: index === childExams.length - 1 ? 'not-allowed' : 'pointer', fontSize: '0.7rem' }}
+                          >
+                            ▼
+                          </button>
+                        </div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
                           <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             Test {index + 1}: {subExam.name || 'İsimsiz'}
                           </div>
@@ -1307,8 +1358,8 @@ export default function App() {
                     })}
                   </div>
                 ) : (
-                  <div style={{ fontSize: '0.9rem', color: '#64748b' }}>
-                    <span>⏱️ Süre: {inspectExam.duration} Dakika</span> &nbsp;|&nbsp; <span>📝 Soru Sayısı: {inspectExam.numPages}</span>
+                  <div style={{ textAlign: 'center', padding: '20px', color: '#94a3b8', fontSize: '0.9rem' }}>
+                    Bu içerik için henüz test eklenmedi. Yakında yayında olacak.
                   </div>
                 )}
               </div>
@@ -1337,40 +1388,9 @@ export default function App() {
                 </div>
 
                 {childExams.length === 0 && (
-                  <button 
-                    onClick={() => {
-                      if (!user) {
-                        alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
-                        setAuthMode('login');
-                        setShowAuthModal(true);
-                        return;
-                      }
-                      if (isCompleted) {
-                        setActiveStudentExamId(inspectExam.id);
-                        setInspectingExamId(null);
-                        setStudentAnswers(resData.answers || {});
-                        setStudentCurrentPage(1);
-                        setIsExamFinished(true);
-                        setShowResults(true);
-                        setViewingSolutionQ(false);
-                      } else {
-                        startExam(inspectExam);
-                      }
-                    }} 
-                    style={{ 
-                      padding: '14px 32px', 
-                      borderRadius: '12px', 
-                      border: 'none', 
-                      backgroundColor: isCompleted ? '#475569' : (isPaid && !isPurchased ? '#d97706' : '#2563eb'), 
-                      color: '#fff', 
-                      fontWeight: '700', 
-                      fontSize: '1rem', 
-                      cursor: 'pointer',
-                      boxShadow: '0 4px 6px -1px rgba(37, 99, 235, 0.2)'
-                    }}
-                  >
-                    {!user ? 'Üye Ol ve İncele ▶' : (isCompleted ? 'Sonuçları İncele 📊' : (isPaid && !isPurchased ? `Hemen Satın Al (₺${inspectExam.price}) 💳` : 'Sınava Başla ▶'))}
-                  </button>
+                  <div style={{ fontSize: '0.8rem', color: '#94a3b8', fontStyle: 'italic' }}>
+                    Test eklendiğinde burada &quot;Teste Başla&quot; seçeneği görünecek.
+                  </div>
                 )}
               </div>
 
