@@ -519,10 +519,10 @@ export default function App() {
       name: '', 
       parent_id: adminActiveExam.id,
       is_published: true,
-      exam_type: 'test',
+      exam_type: adminActiveExam.examType || 'test',
       category_exam_type: '', 
       category_lesson: '', 
-      duration: 0,
+      duration: adminActiveExam.duration || 0,
       price: 0,
       answer_key: {},
       sections: [],
@@ -800,7 +800,7 @@ export default function App() {
                           onClick={() => handleOpenDefinitionScreen(parentExam.id)}
                           style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#e0e7ff', color: '#4338ca', cursor: 'pointer', fontWeight: 'bold', border: '1px dashed #4338ca' }}
                         >
-                          + Sınavı Tanımla
+                          📝 Testleri Yönet
                         </button>
                         <button onClick={() => togglePublish(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: parentExam.isPublished ? '#f59e0b' : '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 'bold' }}>
                           {parentExam.isPublished ? 'Yayından Kaldır' : 'Yayınla'}
@@ -943,89 +943,7 @@ export default function App() {
                 <h3 style={{ margin: 0 }}>İçerik Ayarları</h3>
               </div>
               
-              {childExams.length === 0 ? (
-                <div style={{ marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid #e2e8f0' }}>
-                  {/* İçerik Adı */}
-                  <div className="form-group" style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>İçerik Adı:</label>
-                    <input 
-                      type="text" 
-                      value={adminActiveExam.name} 
-                      onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} 
-                      style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
-                    />
-                  </div>
-                  
-                  {/* Soru / Sayfa Sayısı Girişi */}
-                  <div className="form-group" style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Soru / Sayfa Sayısı:</label>
-                    <input 
-                      type="number" 
-                      value={adminActiveExam.numPages || 0} 
-                      onChange={(e) => updateExamInDb(adminActiveExam.id, { numPages: Number(e.target.value) })} 
-                      style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
-                    />
-                  </div>
-
-                  {/* Sınav PDF Seçimi */}
-                  <div className="form-group" style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav PDF&apos;i:</label>
-                    <input 
-                      type="file" 
-                      accept="application/pdf" 
-                      onChange={(e) => handleExamPdfUploadForExam(adminActiveExam.id, e)} 
-                      style={{ fontSize: '0.85rem', width: '100%' }}
-                    />
-                  </div>
-
-                  {/* Açıklamalı Çözüm PDF'i */}
-                  <div className="form-group" style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>💡 Açıklamalı Çözüm PDF&apos;i:</label>
-                    <input 
-                      type="file" 
-                      accept="application/pdf" 
-                      onChange={(e) => handleSolutionUploadForExam(adminActiveExam.id, e)} 
-                      style={{ fontSize: '0.85rem', width: '100%' }}
-                    />
-                    {adminActiveExam.solutionPdfFile && (
-                      <div style={{ fontSize: '0.8rem', color: '#16a34a', marginTop: '6px', fontWeight: 'bold' }}>
-                        ✓ Çözüm PDF başarıyla eklendi.
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Hızlı Cevap Anahtarı */}
-                  <div className="form-group" style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Hızlı Cevap Anahtarı</label>
-                    <textarea 
-                      placeholder="ÖRN: ABCDECAD..." 
-                      value={
-                        Array.from(
-                          { length: adminActiveExam.numPages || 120 }, 
-                          (_, i) => (adminActiveExam.answerKey && adminActiveExam.answerKey[i + 1]) ? adminActiveExam.answerKey[i + 1] : ''
-                        ).join('').toUpperCase()
-                      }
-                      onChange={(e) => handleFastKeyEntryForExam(adminActiveExam.id, e.target.value)}
-                      style={{ 
-                        width: '100%', 
-                        height: '80px', 
-                        padding: '10px', 
-                        borderRadius: '6px', 
-                        border: '1px solid #cbd5e1',
-                        fontSize: '0.9rem',
-                        letterSpacing: '2px',
-                        fontFamily: 'monospace',
-                        textTransform: 'uppercase',
-                        resize: 'none',
-                        boxSizing: 'border-box'
-                      }} 
-                    />
-                    <div style={{ fontSize: '0.8rem', color: '#16a34a', fontWeight: 'bold', marginTop: '4px', textAlign: 'right' }}>
-                      Girilen: {Object.keys(adminActiveExam.answerKey || {}).length} / {adminActiveExam.numPages || 0}
-                    </div>
-                  </div>
-                </div>
-              ) : activeSubExamId && childExams.find(e => e.id === activeSubExamId) ? (
+              {activeSubExamId && childExams.find(e => e.id === activeSubExamId) ? (
                 (() => {
                   const editingExam = childExams.find(e => e.id === activeSubExamId);
                   const editingIndex = childExams.findIndex(e => e.id === activeSubExamId);
@@ -1069,6 +987,18 @@ export default function App() {
                             style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
                           />
                         </div>
+
+                        {adminActiveExam.examType === 'deneme' && (
+                          <div className="form-group" style={{ marginBottom: '10px' }}>
+                            <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>⏱️ Süre (Dakika) — Deneme Sınavı:</label>
+                            <input
+                              type="number"
+                              value={editingExam.duration || 0}
+                              onChange={(e) => updateExamInDb(editingExam.id, { duration: Number(e.target.value) })}
+                              style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
+                            />
+                          </div>
+                        )}
 
                         <div className="form-group" style={{ marginBottom: '10px' }}>
                           <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Sınav PDF&apos;i:</label>
@@ -1143,6 +1073,11 @@ export default function App() {
                 })()
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+                  {childExams.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '24px 12px', color: '#94a3b8', fontSize: '0.85rem', border: '1px dashed #cbd5e1', borderRadius: '8px' }}>
+                      Bu ürünün altında henüz test eklenmedi.<br />Başlamak için aşağıdaki &quot;+ Yeni Test Ekle&quot; butonuna tıklayın.
+                    </div>
+                  )}
                   {childExams.map((subExam, index) => {
                     const answeredCount = Object.keys(subExam.answerKey || {}).length;
                     return (
