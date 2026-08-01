@@ -992,118 +992,176 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '16px' }}>
-                  {childExams.map((subExam, index) => (
-                    <div 
-                      key={subExam.id} 
-                      onClick={() => setActiveSubExamId(subExam.id)}
-                      style={{ 
-                        padding: '14px', 
-                        borderRadius: '8px', 
-                        border: currentPreviewExam.id === subExam.id ? '2px solid #2563eb' : '1px solid #e2e8f0', 
-                        backgroundColor: '#f8fafc',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                        <strong style={{ color: '#0f172a', fontSize: '0.9rem' }}>Test {index + 1}</strong>
-                        <button 
-                          onClick={(e) => { e.stopPropagation(); deleteExam(subExam.id); }} 
-                          style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}
-                        >
-                          Sil ✕
-                        </button>
-                      </div>
+              ) : activeSubExamId && childExams.find(e => e.id === activeSubExamId) ? (
+                (() => {
+                  const editingExam = childExams.find(e => e.id === activeSubExamId);
+                  const editingIndex = childExams.findIndex(e => e.id === activeSubExamId);
+                  return (
+                    <div style={{ marginBottom: '16px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setActiveSubExamId(null)}
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', fontSize: '0.85rem', fontWeight: 'bold', color: '#2563eb', backgroundColor: '#eff6ff', borderRadius: '6px', border: '1px solid #bfdbfe', cursor: 'pointer', marginBottom: '16px' }}
+                      >
+                        ◀ Test Listesine Dön
+                      </button>
 
-                      <div className="form-group" style={{ marginBottom: '10px' }}>
-                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>İçerik Adı:</label>
-                        <input 
-                          type="text" 
-                          value={subExam.name} 
-                          onChange={(e) => updateExamInDb(subExam.id, { name: e.target.value })} 
-                          style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }} 
-                        />
-                      </div>
-                      
-                      {/* Sub-test Soru / Sayfa Sayısı Girişi */}
-                      <div className="form-group" style={{ marginBottom: '10px' }}>
-                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Soru / Sayfa Sayısı:</label>
-                        <input 
-                          type="number" 
-                          value={subExam.numPages || 0} 
-                          onChange={(e) => updateExamInDb(subExam.id, { numPages: Number(e.target.value) })} 
-                          style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }} 
-                        />
-                      </div>
+                      <div style={{ padding: '14px', borderRadius: '8px', border: '2px solid #2563eb', backgroundColor: '#f8fafc' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                          <strong style={{ color: '#0f172a', fontSize: '0.95rem' }}>Test {editingIndex + 1}</strong>
+                          <button
+                            onClick={() => { deleteExam(editingExam.id); setActiveSubExamId(null); }}
+                            style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}
+                          >
+                            Sil ✕
+                          </button>
+                        </div>
 
-                      <div className="form-group" style={{ marginBottom: '10px' }}>
-                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Sınav PDF&apos;i:</label>
-                        <input 
-                          type="file" 
-                          accept="application/pdf" 
-                          onChange={(e) => handleExamPdfUploadForExam(subExam.id, e)} 
-                          style={{ fontSize: '0.8rem', width: '100%' }}
-                        />
-                      </div>
+                        <div className="form-group" style={{ marginBottom: '10px' }}>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>İçerik Adı:</label>
+                          <input
+                            type="text"
+                            value={editingExam.name}
+                            onChange={(e) => updateExamInDb(editingExam.id, { name: e.target.value })}
+                            style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
+                          />
+                        </div>
 
-                      <div className="form-group" style={{ marginBottom: '10px' }}>
-                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>💡 Açıklamalı Çözüm PDF&apos;i:</label>
-                        <input 
-                          type="file" 
-                          accept="application/pdf" 
-                          onChange={(e) => handleSolutionUploadForExam(subExam.id, e)} 
-                          style={{ fontSize: '0.8rem', width: '100%' }}
-                        />
-                        {subExam.solutionPdfFile && (
-                          <div style={{ fontSize: '0.75rem', color: '#16a34a', marginTop: '4px', fontWeight: 'bold' }}>
-                            ✓ Çözüm PDF eklendi.
+                        <div className="form-group" style={{ marginBottom: '10px' }}>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Soru / Sayfa Sayısı:</label>
+                          <input
+                            type="number"
+                            value={editingExam.numPages || 0}
+                            onChange={(e) => updateExamInDb(editingExam.id, { numPages: Number(e.target.value) })}
+                            style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
+                          />
+                        </div>
+
+                        <div className="form-group" style={{ marginBottom: '10px' }}>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Sınav PDF&apos;i:</label>
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            onChange={(e) => handleExamPdfUploadForExam(editingExam.id, e)}
+                            style={{ fontSize: '0.8rem', width: '100%' }}
+                          />
+                          {editingExam.pdfFile && (
+                            <div style={{ fontSize: '0.75rem', color: '#16a34a', marginTop: '4px', fontWeight: 'bold' }}>
+                              ✓ Sınav PDF&apos;i eklendi.
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="form-group" style={{ marginBottom: '10px' }}>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>💡 Açıklamalı Çözüm PDF&apos;i:</label>
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            onChange={(e) => handleSolutionUploadForExam(editingExam.id, e)}
+                            style={{ fontSize: '0.8rem', width: '100%' }}
+                          />
+                          {editingExam.solutionPdfFile && (
+                            <div style={{ fontSize: '0.75rem', color: '#16a34a', marginTop: '4px', fontWeight: 'bold' }}>
+                              ✓ Çözüm PDF eklendi.
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="form-group">
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Hızlı Cevap Anahtarı</label>
+                          <textarea
+                            placeholder="ÖRN: ABCDECAD..."
+                            value={
+                              Array.from(
+                                { length: editingExam.numPages || 120 },
+                                (_, i) => (editingExam.answerKey && editingExam.answerKey[i + 1]) ? editingExam.answerKey[i + 1] : ''
+                              ).join('').toUpperCase()
+                            }
+                            onChange={(e) => handleFastKeyEntryForExam(editingExam.id, e.target.value)}
+                            style={{
+                              width: '100%',
+                              height: '80px',
+                              padding: '8px',
+                              borderRadius: '6px',
+                              border: '1px solid #cbd5e1',
+                              fontSize: '0.85rem',
+                              letterSpacing: '2px',
+                              fontFamily: 'monospace',
+                              textTransform: 'uppercase',
+                              resize: 'none',
+                              boxSizing: 'border-box'
+                            }}
+                          />
+                          <div style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 'bold', marginTop: '4px', textAlign: 'right' }}>
+                            Girilen: {Object.keys(editingExam.answerKey || {}).length} / {editingExam.numPages || 0}
                           </div>
-                        )}
-                      </div>
-
-                      <div className="form-group">
-                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Hızlı Cevap Anahtarı</label>
-                        <textarea 
-                          placeholder="ÖRN: ABCDECAD..." 
-                          value={
-                            Array.from(
-                              { length: subExam.numPages || 120 }, 
-                              (_, i) => (subExam.answerKey && subExam.answerKey[i + 1]) ? subExam.answerKey[i + 1] : ''
-                            ).join('').toUpperCase()
-                          }
-                          onChange={(e) => handleFastKeyEntryForExam(subExam.id, e.target.value)}
-                          style={{ 
-                            width: '100%', 
-                            height: '50px', 
-                            padding: '6px', 
-                            borderRadius: '6px', 
-                            border: '1px solid #cbd5e1',
-                            fontSize: '0.8rem',
-                            letterSpacing: '2px',
-                            fontFamily: 'monospace',
-                            textTransform: 'uppercase',
-                            resize: 'none',
-                            boxSizing: 'border-box'
-                          }} 
-                        />
-                        <div style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 'bold', marginTop: '2px', textAlign: 'right' }}>
-                          Girilen: {Object.keys(subExam.answerKey || {}).length} / {subExam.numPages || 0}
                         </div>
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveSubExamId(null)}
+                        style={{ width: '100%', padding: '10px', fontSize: '0.9rem', fontWeight: 'bold', color: '#ffffff', backgroundColor: '#16a34a', borderRadius: '6px', border: 'none', cursor: 'pointer', marginTop: '16px' }}
+                      >
+                        ✓ Kaydet ve Listeye Dön
+                      </button>
                     </div>
-                  ))}
+                  );
+                })()
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+                  {childExams.map((subExam, index) => {
+                    const answeredCount = Object.keys(subExam.answerKey || {}).length;
+                    return (
+                      <div
+                        key={subExam.id}
+                        onClick={() => setActiveSubExamId(subExam.id)}
+                        style={{
+                          padding: '12px 14px',
+                          borderRadius: '8px',
+                          border: '1px solid #e2e8f0',
+                          backgroundColor: '#f8fafc',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: '10px'
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            Test {index + 1}: {subExam.name || 'İsimsiz'}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '2px' }}>
+                            {subExam.pdfFile ? '✓ PDF' : '✗ PDF yok'} · Cevap {answeredCount}/{subExam.numPages || 0}
+                            {subExam.solutionPdfFile ? ' · ✓ Çözüm' : ''}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+                          <span style={{ color: '#2563eb', fontWeight: 'bold', fontSize: '0.8rem' }}>Düzenle ▸</span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteExam(subExam.id); }}
+                            style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}
+                          >
+                            Sil ✕
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
-              {/* Yeni Test Ekle Butonu */}
-              <button
-                type="button"
-                onClick={handleAddSubTest}
-                style={{ width: '100%', padding: '10px', fontSize: '0.9rem', fontWeight: 'bold', color: '#2563eb', backgroundColor: '#eff6ff', borderRadius: '6px', border: '1px dashed #2563eb', cursor: 'pointer', marginBottom: '16px' }}
-              >
-                + Yeni Test Ekle
-              </button>
+              {/* Yeni Test Ekle Butonu - sadece liste görünümünde */}
+              {!activeSubExamId && (
+                <button
+                  type="button"
+                  onClick={handleAddSubTest}
+                  style={{ width: '100%', padding: '10px', fontSize: '0.9rem', fontWeight: 'bold', color: '#2563eb', backgroundColor: '#eff6ff', borderRadius: '6px', border: '1px dashed #2563eb', cursor: 'pointer', marginBottom: '16px' }}
+                >
+                  + Yeni Test Ekle
+                </button>
+              )}
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
                 <button
