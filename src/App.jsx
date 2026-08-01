@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import PdfViewer from './PdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
@@ -40,6 +40,7 @@ export default function App() {
   const [showResults, setShowResults] = useState(false);
   
   const [viewingSolutionQ, setViewingSolutionQ] = useState(false);
+  const solutionRef = useRef(null);
   const [studentResultsMap, setStudentResultsMap] = useState({});
   const [studentPurchases, setStudentPurchases] = useState({}); 
   
@@ -72,6 +73,12 @@ export default function App() {
 
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (viewingSolutionQ && solutionRef.current) {
+      solutionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [viewingSolutionQ]);
 
   const fetchAllRatings = async () => {
     const { data, error } = await supabase
@@ -1666,73 +1673,73 @@ export default function App() {
             </div>
           </div>
 
-          {(showResults && viewingSolutionQ) && activeStudentExam.solutionPdfFile ? (
-            <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '12px', padding: '14px', width: '100%' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#dcfce7', padding: '10px 14px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', color: '#166534', fontSize: '0.85rem' }}>
-                <span>💡 {studentCurrentPage}. Soru Çözümü</span>
-                <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '2px 8px', borderRadius: '4px', border: 'none', backgroundColor: '#166534', color: '#fff', cursor: 'pointer', fontSize: '0.75rem' }}>Kapat</button>
+          <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '12px' }}>
+            <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem', color: '#0f172a', textAlign: 'center' }}>Soru Paleti</h3>
+            
+            {!showResults ? (
+              <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: '12px', padding: '6px', backgroundColor: '#ffffff', borderRadius: '6px', border: '1px solid #f1f5f9', fontSize: '0.75rem' }}>
+                <span style={{ color: '#16a34a', fontWeight: 'bold' }}>● Çözüldü: {answeredCount}</span>
+                <span style={{ color: '#64748b', fontWeight: 'bold' }}>○ Boş: {emptyCount}</span>
               </div>
-              <PdfViewer file={activeStudentExam.solutionPdfFile} pageNumber={studentCurrentPage} />
-            </div>
-          ) : (
-            <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '12px' }}>
-              <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem', color: '#0f172a', textAlign: 'center' }}>Soru Paleti</h3>
-              
-              {!showResults ? (
-                <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: '12px', padding: '6px', backgroundColor: '#ffffff', borderRadius: '6px', border: '1px solid #f1f5f9', fontSize: '0.75rem' }}>
-                  <span style={{ color: '#16a34a', fontWeight: 'bold' }}>● Çözüldü: {answeredCount}</span>
-                  <span style={{ color: '#64748b', fontWeight: 'bold' }}>○ Boş: {emptyCount}</span>
-                </div>
-              ) : null}
+            ) : null}
 
-              <div style={{ maxHeight: '420px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '4px' }}>
-                  {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
-                    const qNum = index + 1;
-                    const isAnswered = !!studentAnswers[qNum];
-                    const isCurrent = studentCurrentPage === qNum;
-                    let btnBg = '#ffffff', btnColor = '#334155', btnBorder = '1px solid #cbd5e1';
-                    
-                    if (showResults) {
-                      const studentAns = studentAnswers[qNum];
-                      const correctAns = activeStudentExam.answerKey[qNum];
-                      if (studentAns && studentAns === correctAns) {
-                        btnBg = '#dcfce7'; btnColor = '#15803d'; btnBorder = '1px solid #16a34a';
-                      } else if (studentAns && studentAns !== correctAns) {
-                        btnBg = '#fee2e2'; btnColor = '#dc2626'; btnBorder = '1px solid #ef4444';
-                      } else {
-                        btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #e2e8f0';
-                      }
+            <div style={{ maxHeight: '420px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '4px' }}>
+                {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
+                  const qNum = index + 1;
+                  const isAnswered = !!studentAnswers[qNum];
+                  const isCurrent = studentCurrentPage === qNum;
+                  let btnBg = '#ffffff', btnColor = '#334155', btnBorder = '1px solid #cbd5e1';
+                  
+                  if (showResults) {
+                    const studentAns = studentAnswers[qNum];
+                    const correctAns = activeStudentExam.answerKey[qNum];
+                    if (studentAns && studentAns === correctAns) {
+                      btnBg = '#dcfce7'; btnColor = '#15803d'; btnBorder = '1px solid #16a34a';
+                    } else if (studentAns && studentAns !== correctAns) {
+                      btnBg = '#fee2e2'; btnColor = '#dc2626'; btnBorder = '1px solid #ef4444';
                     } else {
-                      if (isAnswered) { btnBg = '#16a34a'; btnColor = '#ffffff'; btnBorder = '1px solid #16a34a'; }
+                      btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #e2e8f0';
                     }
+                  } else {
+                    if (isAnswered) { btnBg = '#16a34a'; btnColor = '#ffffff'; btnBorder = '1px solid #16a34a'; }
+                  }
 
-                    if (isCurrent) { btnBorder = '2px solid #2563eb'; }
+                  if (isCurrent) { btnBorder = '2px solid #2563eb'; }
 
-                    return (
-                      <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '26px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}>
-                        {qNum}
-                      </button>
-                    );
-                  })}
-                </div>
+                  return (
+                    <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '26px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}>
+                      {qNum}
+                    </button>
+                  );
+                })}
               </div>
-
-              {showResults && activeStudentExam.solutionPdfFile && (
-                <button onClick={() => setViewingSolutionQ(true)} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#ffffff', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', marginBottom: '10px' }}>
-                  💡 {studentCurrentPage}. Çözümü Gör
-                </button>
-              )}
-
-              {!isExamFinished && (
-                <button onClick={finishExam} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', backgroundColor: '#dc2626', color: '#ffffff', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer' }}>
-                  {isDeneme ? 'Sınavı Bitir 🏁' : 'Testi Bitir 🏁'}
-                </button>
-              )}
             </div>
-          )}
+
+            {showResults && activeStudentExam.solutionPdfFile && (
+              <button onClick={() => setViewingSolutionQ(v => !v)} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', backgroundColor: viewingSolutionQ ? '#166534' : '#16a34a', color: '#ffffff', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', marginBottom: '10px' }}>
+                {viewingSolutionQ ? '✕ Çözümü Gizle' : `💡 ${studentCurrentPage}. Çözümü Gör`}
+              </button>
+            )}
+
+            {!isExamFinished && (
+              <button onClick={finishExam} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', backgroundColor: '#dc2626', color: '#ffffff', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer' }}>
+                {isDeneme ? 'Sınavı Bitir 🏁' : 'Testi Bitir 🏁'}
+              </button>
+            )}
+          </div>
 
         </div>
+
+        {(showResults && viewingSolutionQ) && activeStudentExam.solutionPdfFile && (
+          <div ref={solutionRef} style={{ marginTop: '20px', backgroundColor: '#f0fdf4', border: '2px solid #16a34a', borderRadius: '12px', padding: '14px', boxShadow: '0 4px 14px rgba(22,163,74,0.25)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#16a34a', padding: '10px 14px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', color: '#ffffff', fontSize: '0.9rem' }}>
+              <span>💡 {studentCurrentPage}. Soru Çözümü Aşağıda 👇</span>
+              <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: '#166534', color: '#fff', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>Kapat</button>
+            </div>
+            <PdfViewer file={activeStudentExam.solutionPdfFile} pageNumber={studentCurrentPage} />
+          </div>
+        )}
       </div>
     );
   }
