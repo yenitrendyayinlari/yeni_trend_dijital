@@ -300,7 +300,7 @@ export default function App() {
       }, 1000);
       return () => clearInterval(timer);
     }
-  }, [user, appMode, activeStudentExam, isExamFinished, showResults, studentAnswers]);
+  }, [user, appMode, activeStudentExam, isExamFinished, showResults]);
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -469,11 +469,15 @@ export default function App() {
 
   const deleteExam = async (examId) => {
     if (window.confirm("Bu içeriği silmek istediğinize emin misiniz?")) {
+      // Önce alt testleri veritabanından sil
+      await supabase.from('exams').delete().eq('parent_id', examId);
+      // Ardından ana sınavı sil
       const { error } = await supabase.from('exams').delete().eq('id', examId);
+
       if (error) {
         console.error("Silme hatası:", error);
       } else {
-        setExams(exams.filter(e => e.id !== examId && e.parentId !== examId));
+        setExams(prev => prev.filter(e => e.id !== examId && e.parentId !== examId));
         if (activeAdminExamId === examId) setActiveAdminExamId(null);
       }
     }
@@ -666,7 +670,7 @@ export default function App() {
 
         {authLoading && (
           <div style={{ textAlign: 'center', padding: '10px', backgroundColor: '#eff6ff', color: '#1e40af', marginBottom: '16px', borderRadius: '6px', fontWeight: 'bold' }}>
-            ⏳ Dosya depolama alanına yükleniyor, lütfen bekleyin...
+            ⏳ İşlem yapılıyor, lütfen bekleyin...
           </div>
         )}
 
@@ -865,7 +869,7 @@ export default function App() {
 
                   {/* Sınav PDF Seçimi */}
                   <div className="form-group" style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav PDF'i:</label>
+                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav PDF&apos;i:</label>
                     <input 
                       type="file" 
                       accept="application/pdf" 
@@ -876,7 +880,7 @@ export default function App() {
 
                   {/* Açıklamalı Çözüm PDF'i */}
                   <div className="form-group" style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>💡 Açıklamalı Çözüm PDF'i:</label>
+                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>💡 Açıklamalı Çözüm PDF&apos;i:</label>
                     <input 
                       type="file" 
                       accept="application/pdf" 
@@ -898,9 +902,7 @@ export default function App() {
                       value={
                         Array.from(
                           { length: adminActiveExam.numPages || 120 }, 
-                          function (_, i) {
-                            return adminActiveExam.answerKey && adminActiveExam.answerKey[i + 1] ? adminActiveExam.answerKey[i + 1] : '';
-                          }
+                          (_, i) => (adminActiveExam.answerKey && adminActiveExam.answerKey[i + 1]) ? adminActiveExam.answerKey[i + 1] : ''
                         ).join('').toUpperCase()
                       }
                       onChange={(e) => handleFastKeyEntryForExam(adminActiveExam.id, e.target.value)}
@@ -958,7 +960,7 @@ export default function App() {
                       </div>
 
                       <div className="form-group" style={{ marginBottom: '10px' }}>
-                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Sınav PDF'i:</label>
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Sınav PDF&apos;i:</label>
                         <input 
                           type="file" 
                           accept="application/pdf" 
@@ -968,7 +970,7 @@ export default function App() {
                       </div>
 
                       <div className="form-group" style={{ marginBottom: '10px' }}>
-                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>💡 Açıklamalı Çözüm PDF'i:</label>
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>💡 Açıklamalı Çözüm PDF&apos;i:</label>
                         <input 
                           type="file" 
                           accept="application/pdf" 
@@ -989,9 +991,7 @@ export default function App() {
                           value={
                             Array.from(
                               { length: subExam.numPages || 120 }, 
-                              function (_, i) {
-                                return subExam.answerKey && subExam.answerKey[i + 1] ? subExam.answerKey[i + 1] : '';
-                              }
+                              (_, i) => (subExam.answerKey && subExam.answerKey[i + 1]) ? subExam.answerKey[i + 1] : ''
                             ).join('').toUpperCase()
                           }
                           onChange={(e) => handleFastKeyEntryForExam(subExam.id, e.target.value)}
@@ -1051,6 +1051,8 @@ export default function App() {
     
     if (inspectingExamId) {
       const inspectExam = exams.find(e => e.id === inspectingExamId);
+      if (!inspectExam) return null;
+
       const childExams = exams.filter(e => e.parentId === inspectingExamId);
       const ratingInfo = examRatingsMap[inspectExam.id] || { average: '0,0', count: '0' };
       const isPaid = inspectExam.price && inspectExam.price > 0;
@@ -1515,6 +1517,8 @@ export default function App() {
     }
 
     // Sınav / Test Çözüm Ekranı
+    if (!activeStudentExam) return null;
+
     const answeredCount = Object.keys(studentAnswers).length;
     const emptyCount = activeStudentExam.numPages - answeredCount;
     const results = showResults ? (studentResultsMap[activeStudentExamId] || calculateResults()) : null;
@@ -1528,7 +1532,7 @@ export default function App() {
           <button onClick={() => setActiveStudentExamId(null)} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer' }}>İçerik Listesine Dön</button>
         </header>
 
-        {showResults ? (
+        {showResults && results ? (
           <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', maxWidth: '700px', margin: '0 auto 24px auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
             
             {user && (
@@ -1698,4 +1702,6 @@ export default function App() {
       </div>
     );
   }
+
+  return null;
 }
