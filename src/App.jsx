@@ -1617,8 +1617,8 @@ export default function App() {
         <style>{`
           .exam-layout {
             display: grid;
-            grid-template-columns: 1fr 340px;
-            gap: 20px;
+            grid-template-columns: 1fr 240px;
+            gap: 16px;
             align-items: start;
           }
           @media (max-width: 900px) {
@@ -1652,7 +1652,7 @@ export default function App() {
                 {['A', 'B', 'C', 'D', 'E'].map(option => {
                   const isSelected = studentAnswers[studentCurrentPage] === option;
                   return (
-                    <button key={option} onClick={() => handleAnswerSelect(option)} style={{ width: '38px', height: '38px', borderRadius: '50%', border: isSelected ? '2px solid #16a34a' : '2px solid #94a3b8', backgroundColor: isSelected ? '#16a34a' : '#ffffff', color: isSelected ? '#ffffff' : '#334155', fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer' }}>
+                    <button key={option} onClick={() => handleAnswerSelect(option)} style={{ width: '30px', height: '30px', borderRadius: '50%', border: isSelected ? '2px solid #16a34a' : '2px solid #94a3b8', backgroundColor: isSelected ? '#16a34a' : '#ffffff', color: isSelected ? '#ffffff' : '#334155', fontSize: '0.85rem', fontWeight: 'bold', cursor: 'pointer' }}>
                       {option}
                     </button>
                   );
@@ -1686,7 +1686,7 @@ export default function App() {
               ) : null}
 
               <div style={{ maxHeight: '420px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '6px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '4px' }}>
                   {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
                     const qNum = index + 1;
                     const isAnswered = !!studentAnswers[qNum];
@@ -1710,7 +1710,7 @@ export default function App() {
                     if (isCurrent) { btnBorder = '2px solid #2563eb'; }
 
                     return (
-                      <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '36px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', padding: 0 }}>
+                      <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '26px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}>
                         {qNum}
                       </button>
                     );
