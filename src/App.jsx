@@ -487,6 +487,8 @@ export default function App() {
 
   const startExam = (exam) => {
     if (!user) {
+      alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
+      setAuthMode('login');
       setShowAuthModal(true);
       return;
     }
@@ -510,6 +512,13 @@ export default function App() {
   };
 
   const handleIyzicoPayment = (exam) => {
+    if (!user) {
+      alert("Ödeme yapabilmek ve sınava katılabilmek için lütfen giriş yapın.");
+      setAuthMode('login');
+      setShowAuthModal(true);
+      return;
+    }
+
     const confirmed = window.confirm(`"${exam.name}" isimli sınav ücretli (₺${exam.price}). İyzico ödeme formu açılacaktır. Onaylıyor musunuz?`);
     if (!confirmed) return;
 
@@ -1155,6 +1164,8 @@ export default function App() {
                           <button
                             onClick={() => {
                               if (!user) {
+                                alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
+                                setAuthMode('login');
                                 setShowAuthModal(true);
                                 return;
                               }
@@ -1225,6 +1236,8 @@ export default function App() {
                   <button 
                     onClick={() => {
                       if (!user) {
+                        alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
+                        setAuthMode('login');
                         setShowAuthModal(true);
                         return;
                       }
