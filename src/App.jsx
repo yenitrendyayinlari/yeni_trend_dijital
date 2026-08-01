@@ -1617,7 +1617,7 @@ export default function App() {
         <style>{`
           .exam-layout {
             display: grid;
-            grid-template-columns: 1fr 420px;
+            grid-template-columns: 1fr 340px;
             gap: 20px;
             align-items: start;
           }
@@ -1652,7 +1652,7 @@ export default function App() {
                 {['A', 'B', 'C', 'D', 'E'].map(option => {
                   const isSelected = studentAnswers[studentCurrentPage] === option;
                   return (
-                    <button key={option} onClick={() => handleAnswerSelect(option)} style={{ width: '48px', height: '48px', borderRadius: '50%', border: isSelected ? '2px solid #16a34a' : '2px solid #94a3b8', backgroundColor: isSelected ? '#16a34a' : '#ffffff', color: isSelected ? '#ffffff' : '#334155', fontSize: '1.2rem', fontWeight: 'bold', cursor: 'pointer' }}>
+                    <button key={option} onClick={() => handleAnswerSelect(option)} style={{ width: '38px', height: '38px', borderRadius: '50%', border: isSelected ? '2px solid #16a34a' : '2px solid #94a3b8', backgroundColor: isSelected ? '#16a34a' : '#ffffff', color: isSelected ? '#ffffff' : '#334155', fontSize: '1rem', fontWeight: 'bold', cursor: 'pointer' }}>
                       {option}
                     </button>
                   );
