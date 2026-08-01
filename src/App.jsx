@@ -337,6 +337,24 @@ export default function App() {
 
   const handleSaveNewExam = async () => {
     setAuthLoading(true);
+
+    if (activeAdminExamId) {
+      // Mevcut bir sınavın ayarlarını güncelliyoruz
+      await updateExamInDb(activeAdminExamId, {
+        name: newExamForm.name,
+        duration: Number(newExamForm.duration) || 0,
+        examType: newExamForm.examType,
+        categoryExamType: newExamForm.categoryExamType,
+        categoryLesson: newExamForm.categoryLesson,
+        price: Number(newExamForm.price) || 0,
+        originalPrice: Number(newExamForm.originalPrice) || 0
+      });
+      setAuthLoading(false);
+      setIsCreatingExam(false);
+      setActiveAdminExamId(null);
+      return;
+    }
+
     const newExamData = {
       name: newExamForm.name,
       duration: Number(newExamForm.duration) || 0,
@@ -366,6 +384,27 @@ export default function App() {
     setActiveAdminExamId(examId);
     setActiveSubExamId(null);
     setIsCreatingExam(false);
+  };
+
+  const handleOpenSettingsScreen = (examId) => {
+    const exam = exams.find(e => e.id === examId);
+    if (!exam) return;
+    setNewExamForm({
+      name: exam.name || '',
+      duration: exam.duration || '',
+      examType: exam.examType || 'deneme',
+      categoryExamType: exam.categoryExamType || '',
+      categoryLesson: exam.categoryLesson || '',
+      price: exam.price || 0,
+      originalPrice: exam.originalPrice || 0,
+      isParent: true,
+      answerKey: exam.answerKey || {},
+      sections: exam.sections || [],
+      numPages: exam.numPages || 0
+    });
+    setActiveAdminExamId(examId);
+    setActiveSubExamId(null);
+    setIsCreatingExam(true);
   };
 
   const handleExamPdfUploadForExam = (examId, e) => {
@@ -733,7 +772,7 @@ export default function App() {
                         <button onClick={() => togglePublish(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: parentExam.isPublished ? '#f59e0b' : '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 'bold' }}>
                           {parentExam.isPublished ? 'Yayından Kaldır' : 'Yayınla'}
                         </button>
-                        <button onClick={() => handleOpenDefinitionScreen(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Ayarlar</button>
+                        <button onClick={() => handleOpenSettingsScreen(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Ayarlar</button>
                         <button onClick={() => deleteExam(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: '#ef4444', color: '#fff', cursor: 'pointer' }}>Sil</button>
                       </div>
                     </div>
@@ -745,7 +784,7 @@ export default function App() {
           </div>
         ) : isCreatingExam ? (
           <div style={{ maxWidth: '600px', margin: '0 auto', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px' }}>
-            <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>Yeni İçerik Ayarları</h3>
+            <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>{activeAdminExamId ? 'İçerik Ayarları' : 'Yeni İçerik Ayarları'}</h3>
             
             <div style={{ marginBottom: '16px' }}>
               <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav / Oturum Adı:</label>
