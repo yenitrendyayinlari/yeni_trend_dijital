@@ -243,6 +243,7 @@ export default function App() {
     setUser(null);
     setAppMode('student');
     setActiveAdminExamId(null);
+    setActiveSubExamId(null);
     setIsCreatingExam(false);
     setActiveStudentExamId(null);
     setInspectingExamId(null);
@@ -324,12 +325,13 @@ export default function App() {
     });
     setIsCreatingExam(true);
     setActiveAdminExamId(null);
+    setActiveSubExamId(null);
   };
 
   const handleSaveNewExam = async () => {
     setAuthLoading(true);
     const newExamData = {
-      name: newExamForm.name || 'İsimsiz Sınav',
+      name: newExamForm.name,
       duration: Number(newExamForm.duration) || 0,
       exam_type: newExamForm.examType,
       category_exam_type: newExamForm.categoryExamType,
@@ -434,15 +436,14 @@ export default function App() {
   const handleAddSubTest = async () => {
     const adminActiveExam = exams.find(e => e.id === activeAdminExamId);
     if (!adminActiveExam) return;
-    const childExams = exams.filter(e => e.parentId === adminActiveExam.id);
     setAuthLoading(true);
     const newChildData = {
-      name: `Test ${childExams.length + 1}`,
+      name: '', 
       parent_id: adminActiveExam.id,
       is_published: true,
       exam_type: 'test',
-      category_exam_type: adminActiveExam.categoryExamType,
-      category_lesson: adminActiveExam.categoryLesson,
+      category_exam_type: '', 
+      category_lesson: '', 
       duration: 0,
       price: 0,
       answer_key: {},
@@ -469,16 +470,17 @@ export default function App() {
 
   const deleteExam = async (examId) => {
     if (window.confirm("Bu içeriği silmek istediğinize emin misiniz?")) {
-      // Önce alt testleri veritabanından sil
       await supabase.from('exams').delete().eq('parent_id', examId);
-      // Ardından ana sınavı sil
       const { error } = await supabase.from('exams').delete().eq('id', examId);
 
       if (error) {
         console.error("Silme hatası:", error);
       } else {
         setExams(prev => prev.filter(e => e.id !== examId && e.parentId !== examId));
-        if (activeAdminExamId === examId) setActiveAdminExamId(null);
+        if (activeAdminExamId === examId) {
+          setActiveAdminExamId(null);
+          setActiveSubExamId(null);
+        }
       }
     }
   };
@@ -695,7 +697,7 @@ export default function App() {
                     <div className="exam-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', backgroundColor: '#f8fafc' }}>
                       <div>
                         <h3 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>
-                          📦 {parentExam.name}
+                          📦 {parentExam.name || 'İsimsiz İçerik'}
                         </h3>
                         <div style={{ display: 'flex', gap: '12px', fontSize: '0.85rem', color: '#64748b' }}>
                           <span style={{ color: parentExam.isPublished ? '#16a34a' : '#ef4444', fontWeight: 'bold' }}>
@@ -715,7 +717,7 @@ export default function App() {
                         <button onClick={() => togglePublish(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: parentExam.isPublished ? '#f59e0b' : '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 'bold' }}>
                           {parentExam.isPublished ? 'Yayından Kaldır' : 'Yayınla'}
                         </button>
-                        <button onClick={() => setActiveAdminExamId(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Ayarlar</button>
+                        <button onClick={() => handleOpenDefinitionScreen(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Ayarlar</button>
                         <button onClick={() => deleteExam(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: '#ef4444', color: '#fff', cursor: 'pointer' }}>Sil</button>
                       </div>
                     </div>
@@ -822,7 +824,11 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setIsCreatingExam(false)}
+                onClick={() => {
+                  setIsCreatingExam(false);
+                  setActiveAdminExamId(null);
+                  setActiveSubExamId(null);
+                }}
                 style={{ flex: 1, padding: '12px', fontSize: '0.95rem', fontWeight: 'bold', color: '#334155', backgroundColor: '#f1f5f9', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'pointer' }}
               >
                 Listeye Dön
@@ -834,16 +840,11 @@ export default function App() {
             {currentPreviewExam?.pdfFile && (
               <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '12px' }}>
-                  <strong>Toplam Soru Sayısı/Sayfa: {currentPreviewExam.numPages || 'Yükleniyor...'}</strong>
+                  <strong>Toplam Soru Sayısı/Sayfa: {currentPreviewExam.numPages || '0'}</strong>
                 </div>
                 <PdfViewer 
                   file={currentPreviewExam.pdfFile} 
                   pageNumber={1} 
-                  onDocumentLoadSuccess={({ numPages }) => {
-                    if (currentPreviewExam.numPages !== numPages) {
-                      updateExamInDb(currentPreviewExam.id, { numPages });
-                    }
-                  }} 
                 />
               </div>
             )}
@@ -863,6 +864,17 @@ export default function App() {
                       type="text" 
                       value={adminActiveExam.name} 
                       onChange={(e) => updateExamInDb(adminActiveExam.id, { name: e.target.value })} 
+                      style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+                    />
+                  </div>
+                  
+                  {/* Soru / Sayfa Sayısı Girişi */}
+                  <div className="form-group" style={{ marginBottom: '16px' }}>
+                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Soru / Sayfa Sayısı:</label>
+                    <input 
+                      type="number" 
+                      value={adminActiveExam.numPages || 0} 
+                      onChange={(e) => updateExamInDb(adminActiveExam.id, { numPages: Number(e.target.value) })} 
                       style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
                     />
                   </div>
@@ -958,6 +970,17 @@ export default function App() {
                           style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }} 
                         />
                       </div>
+                      
+                      {/* Sub-test Soru / Sayfa Sayısı Girişi */}
+                      <div className="form-group" style={{ marginBottom: '10px' }}>
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Soru / Sayfa Sayısı:</label>
+                        <input 
+                          type="number" 
+                          value={subExam.numPages || 0} 
+                          onChange={(e) => updateExamInDb(subExam.id, { numPages: Number(e.target.value) })} 
+                          style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }} 
+                        />
+                      </div>
 
                       <div className="form-group" style={{ marginBottom: '10px' }}>
                         <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Sınav PDF&apos;i:</label>
@@ -1030,7 +1053,10 @@ export default function App() {
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
                 <button
                   type="button"
-                  onClick={() => setActiveAdminExamId(null)}
+                  onClick={() => {
+                    setActiveAdminExamId(null);
+                    setActiveSubExamId(null);
+                  }}
                   style={{ width: '100%', padding: '10px', fontSize: '0.9rem', fontWeight: 'bold', color: '#ffffff', backgroundColor: '#2563eb', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
                 >
                   Listeye Dön
@@ -1080,7 +1106,7 @@ export default function App() {
               </div>
 
               <h1 style={{ margin: '0 0 12px 0', fontSize: '1.8rem', color: '#0f172a', fontWeight: '800' }}>
-                {inspectExam.name}
+                {inspectExam.name || 'İsimsiz İçerik'}
               </h1>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
@@ -1120,7 +1146,7 @@ export default function App() {
                       return (
                         <div key={child.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', flexWrap: 'wrap', gap: '10px' }}>
                           <div>
-                            <strong style={{ color: '#1e293b' }}>{index + 1}. {child.name}</strong>
+                            <strong style={{ color: '#1e293b' }}>{index + 1}. {child.name || 'İsimsiz Test'}</strong>
                             <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '2px', display: 'flex', gap: '12px' }}>
                               <span>📝 {child.numPages || '?'} Soru</span>
                               {childCompleted && <span style={{ color: '#16a34a', fontWeight: 'bold' }}>✓ Tamamlandı (Net: {childRes.net})</span>}
@@ -1244,7 +1270,7 @@ export default function App() {
         if (selectedCategory !== 'Tümü' && e.categoryExamType !== selectedCategory) {
           return false;
         }
-        if (searchQuery && !e.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+        if (searchQuery && e.name && !e.name.toLowerCase().includes(searchQuery.toLowerCase())) {
           return false;
         }
         return true;
@@ -1394,7 +1420,7 @@ export default function App() {
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '12px' }}>
-                          <h3 style={{ margin: 0, color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name}</h3>
+                          <h3 style={{ margin: 0, color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name || 'İsimsiz İçerik'}</h3>
                           
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#f8fafc', padding: '4px 10px', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
                             <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '0.9rem' }}>{ratingInfo.average}</span>
@@ -1528,7 +1554,7 @@ export default function App() {
     return (
       <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', maxWidth: '1400px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
-          <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>{activeStudentExam.name}</h1>
+          <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
           <button onClick={() => setActiveStudentExamId(null)} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer' }}>İçerik Listesine Dön</button>
         </header>
 
@@ -1606,11 +1632,6 @@ export default function App() {
             <PdfViewer 
               file={activeStudentExam.pdfFile} 
               pageNumber={studentCurrentPage} 
-              onDocumentLoadSuccess={({ numPages }) => {
-                if (activeStudentExam.numPages !== numPages) {
-                  updateExamInDb(activeStudentExam.id, { numPages });
-                }
-              }}
             />
 
             {!isExamFinished && (
