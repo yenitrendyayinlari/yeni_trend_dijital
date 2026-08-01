@@ -432,6 +432,7 @@ export default function App() {
   };
 
   const handleAddSubTest = async () => {
+    const adminActiveExam = exams.find(e => e.id === activeAdminExamId);
     if (!adminActiveExam) return;
     const childExams = exams.filter(e => e.parentId === adminActiveExam.id);
     setAuthLoading(true);
