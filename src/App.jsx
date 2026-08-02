@@ -70,10 +70,15 @@ export default function App() {
       }
     });
 
-    fetchAllRatings();
-
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    // exams listesi (parent/child id eşleşmesi için) yüklendikten sonra puanları hesapla.
+    if (exams.length > 0) {
+      fetchAllRatings();
+    }
+  }, [exams.length]);
 
   useEffect(() => {
     if (viewingSolutionQ && solutionRef.current) {
@@ -87,16 +92,19 @@ export default function App() {
       .select('exam_id, rating')
       .gt('rating', 0);
 
-    console.log('fetchAllRatings ->', { data, error }); // GEÇİCİ DEBUG - sorun çözülünce silinecek
-
     if (!error && data) {
       const map = {};
       data.forEach(item => {
-        if (!map[item.exam_id]) {
-          map[item.exam_id] = { total: 0, count: 0 };
+        // Puan çoğu zaman alt sınava (child) ait olur, ama kartlarda üst paketin (parent)
+        // puanı gösteriliyor. Bu yüzden alt sınav puanını üst paketin id'sine topluyoruz.
+        const examInfo = exams.find(e => e.id === item.exam_id);
+        const targetId = examInfo?.parentId || item.exam_id;
+
+        if (!map[targetId]) {
+          map[targetId] = { total: 0, count: 0 };
         }
-        map[item.exam_id].total += item.rating;
-        map[item.exam_id].count += 1;
+        map[targetId].total += item.rating;
+        map[targetId].count += 1;
       });
 
       const formattedMap = {};
