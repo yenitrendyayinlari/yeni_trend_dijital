@@ -1443,83 +1443,78 @@ export default function App() {
       const isCompleted = resData?.is_finished;
 
       return (
-        <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b' }}>
-          <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '15px' }}>
-            <button onClick={() => setInspectingExamId(null)} style={{ padding: '8px 16px', borderRadius: '8px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', fontWeight: '600' }}>
-              ◀ Tüm Listeye Dön
-            </button>
-            <div style={{ fontSize: '1.2rem', fontWeight: '800', color: '#0f172a' }}>İçerik Detayları</div>
-            {user ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f1f5f9', padding: '6px 12px', borderRadius: '20px', border: '1px solid #e2e8f0' }}>
-                <span style={{ width: '8px', height: '8px', backgroundColor: '#22c55e', borderRadius: '50%' }}></span>
-                <span style={{ fontSize: '0.85rem', fontWeight: '500', color: '#334155' }}>{user.email}</span>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #2563eb', backgroundColor: '#ffffff', color: '#2563eb', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
-                  Giriş Yap
-                </button>
-                <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', backgroundColor: '#2563eb', color: '#ffffff', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
-                  Kayıt Ol
-                </button>
-              </div>
-            )}
+        <div className="yt-shell">
+          <header className="yt-header">
+            <div className="yt-header-inner">
+              <button onClick={() => setInspectingExamId(null)} className="yt-btn yt-btn-ghost">
+                ◀ Tüm Listeye Dön
+              </button>
+              <div style={{ flex: 1, fontFamily: 'var(--yt-font-display)', fontWeight: '600', fontSize: '1.05rem', color: 'var(--yt-ink)' }}>İçerik Detayları</div>
+              {user ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: 'var(--yt-paper)', padding: '6px 12px', borderRadius: '20px', border: '1px solid var(--yt-line)' }}>
+                  <span style={{ width: '8px', height: '8px', backgroundColor: 'var(--yt-correct)', borderRadius: '50%' }}></span>
+                  <span style={{ fontSize: '0.85rem', fontWeight: '500', color: 'var(--yt-ink)' }}>{user.email}</span>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="yt-btn yt-btn-outline">
+                    Giriş Yap
+                  </button>
+                  <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} className="yt-btn yt-btn-primary">
+                    Kayıt Ol
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="yt-perf"></div>
           </header>
 
-          <main style={{ maxWidth: '900px', margin: '40px auto', padding: '0 20px' }}>
-            <div style={{ backgroundColor: '#ffffff', borderRadius: '16px', border: '1px solid #e2e8f0', padding: '32px', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.02)' }}>
-              
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap' }}>
-                <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '4px 10px', borderRadius: '6px', fontSize: '0.8rem', fontWeight: '600' }}>
-                  🎯 {inspectExam.categoryExamType} / {inspectExam.categoryLesson}
-                </span>
+          <main style={{ maxWidth: '760px', margin: '40px auto', padding: '0 24px' }}>
+            <div className="yt-detail-panel">
+
+              <div style={{ marginBottom: '12px' }}>
+                <span className="yt-tag">{inspectExam.categoryExamType} · {inspectExam.categoryLesson}</span>
               </div>
 
-              <h1 style={{ margin: '0 0 12px 0', fontSize: '1.8rem', color: '#0f172a', fontWeight: '800' }}>
+              <h1 style={{ margin: '0 0 12px 0', fontSize: '1.6rem' }}>
                 {inspectExam.name || 'İsimsiz İçerik'}
               </h1>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '20px' }}>
-                <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '1rem' }}>{ratingInfo.average}</span>
-                <div style={{ display: 'flex', gap: '2px' }}>
-                  {[1, 2, 3, 4, 5].map((star) => {
-                    const activeStar = Number(ratingInfo.average.replace(',', '.')) >= star;
-                    return (
-                      <span key={star} style={{ color: activeStar ? '#eab308' : '#cbd5e1', fontSize: '1.1rem' }}>★</span>
-                    );
-                  })}
-                </div>
-                <span style={{ color: '#64748b', fontSize: '0.85rem' }}>({ratingInfo.count} değerlendirme)</span>
+              <div className="yt-rating" style={{ marginBottom: '24px', fontSize: '0.85rem' }}>
+                <span className="stars">
+                  {'★'.repeat(Math.round(Number(ratingInfo.average.replace(',', '.')))).padEnd(5, '☆')}
+                </span>
+                {ratingInfo.average} <span className="count">({ratingInfo.count} değerlendirme)</span>
               </div>
 
-              <div style={{ backgroundColor: '#f8fafc', padding: '16px', borderRadius: '12px', border: '1px solid #e2e8f0', marginBottom: '24px' }}>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '1.05rem', color: '#0f172a' }}>📚 Sınav Bilgileri ve Testler</h3>
-                
+              <div style={{ marginBottom: '24px' }}>
+                <h3 style={{ margin: '0 0 12px 0', fontSize: '0.95rem' }}>Sınav Bilgileri ve Testler</h3>
+
                 {inspectExam.sections && inspectExam.sections.length > 0 ? (
-                  <div style={{ display: 'grid', gap: '10px' }}>
+                  <div className="yt-subtest-list">
                     {inspectExam.sections.map((sec, index) => (
-                      <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
-                        <div>
-                          <strong style={{ color: '#1e293b' }}>{sec.name}</strong>
-                        </div>
-                        <div style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: '600' }}>
-                          <span>Soru Aralığı: {sec.start} - {sec.end}</span>
-                        </div>
+                      <div key={index} className="yt-subtest-row">
+                        <strong style={{ color: 'var(--yt-ink)', flex: 1 }}>{sec.name}</strong>
+                        <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.78rem', color: 'var(--yt-graphite)' }}>
+                          Soru Aralığı: {sec.start} - {sec.end}
+                        </span>
                       </div>
                     ))}
                   </div>
                 ) : childExams.length > 0 ? (
-                  <div style={{ display: 'grid', gap: '10px' }}>
+                  <div className="yt-subtest-list">
                     {childExams.map((child, index) => {
                       const childRes = studentResultsMap[child.id];
                       const childCompleted = childRes?.is_finished;
+                      const ctaClass = childCompleted ? 'yt-btn-ghost' : (!isPaid || isPurchased ? 'yt-btn-outline' : 'yt-btn-locked');
                       return (
-                        <div key={child.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #cbd5e1', flexWrap: 'wrap', gap: '10px' }}>
-                          <div>
-                            <strong style={{ color: '#1e293b' }}>{index + 1}. {child.name || 'İsimsiz Test'}</strong>
-                            <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '2px', display: 'flex', gap: '12px' }}>
-                              <span>📝 {child.numPages || '?'} Soru</span>
-                              {childCompleted && <span style={{ color: '#16a34a', fontWeight: 'bold' }}>✓ Tamamlandı (Net: {childRes.net})</span>}
+                        <div key={child.id} className="yt-subtest-row">
+                          <div className={`yt-subtest-bubble${childCompleted ? ' done' : ''}`}>{childCompleted ? '✓' : index + 1}</div>
+                          <div style={{ flex: 1, minWidth: '160px' }}>
+                            <strong style={{ color: 'var(--yt-ink)' }}>{child.name || 'İsimsiz Test'}</strong>
+                            <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px', display: 'flex', gap: '12px' }}>
+                              <span>{child.numPages || '?'} SORU</span>
+                              {childCompleted && <span style={{ color: 'var(--yt-correct)' }}>Net: {childRes.net}</span>}
                             </div>
                           </div>
                           <button
@@ -1546,49 +1541,38 @@ export default function App() {
                                 handleIyzicoPayment(inspectExam);
                               }
                             }}
-                            style={{ 
-                              padding: '8px 16px', 
-                              borderRadius: '6px', 
-                              border: 'none', 
-                              backgroundColor: childCompleted ? '#475569' : (!isPaid || isPurchased ? '#2563eb' : '#d97706'), 
-                              color: '#fff', 
-                              fontWeight: 'bold', 
-                              fontSize: '0.85rem', 
-                              cursor: 'pointer' 
-                            }}
+                            className={`yt-btn ${ctaClass}`}
                           >
-                            {childCompleted ? 'Sonucu İncele' : (!isPaid || isPurchased ? 'Teste Başla ▶' : '🔒 Kilitli')}
+                            {childCompleted ? 'Sonucu İncele' : (!isPaid || isPurchased ? 'Teste Başla →' : '🔒 Kilitli')}
                           </button>
                         </div>
                       );
                     })}
                   </div>
                 ) : (
-                  <div style={{ textAlign: 'center', padding: '20px', color: '#94a3b8', fontSize: '0.9rem' }}>
+                  <div style={{ textAlign: 'center', padding: '20px', color: 'var(--yt-graphite-soft)', fontSize: '0.9rem' }}>
                     Bu içerik için henüz test eklenmedi. Yakında yayında olacak.
                   </div>
                 )}
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #e2e8f0', paddingTop: '20px', flexWrap: 'wrap', gap: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1.5px solid var(--yt-line)', paddingTop: '20px', flexWrap: 'wrap', gap: '16px' }}>
                 <div>
-                  <div style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '4px' }}>Sınav Fiyatı</div>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--yt-graphite)', marginBottom: '4px', fontFamily: 'var(--yt-font-mono)' }}>SINAV FİYATI</div>
+                  <div className="yt-price" style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
                     {isPaid ? (
                       <>
-                        <span style={{ fontSize: '1.8rem', fontWeight: '900', color: '#0f172a' }}>
+                        <span className="now" style={{ fontSize: '1.5rem' }}>
                           ₺{inspectExam.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                         {inspectExam.originalPrice && inspectExam.originalPrice > inspectExam.price ? (
-                          <span style={{ fontSize: '1.1rem', fontWeight: '500', color: '#94a3b8', textDecoration: 'line-through' }}>
+                          <span className="old">
                             ₺{inspectExam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </span>
                         ) : null}
                       </>
                     ) : (
-                      <span style={{ fontSize: '1.5rem', fontWeight: '800', color: '#16a34a' }}>
-                        Ücretsiz
-                      </span>
+                      <span className="free" style={{ fontSize: '1.3rem' }}>Ücretsiz</span>
                     )}
                   </div>
                 </div>
@@ -1604,14 +1588,14 @@ export default function App() {
                       }
                       handleIyzicoPayment(inspectExam);
                     }}
-                    style={{ padding: '14px 28px', borderRadius: '10px', border: 'none', backgroundColor: '#d97706', color: '#fff', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }}
+                    className="yt-btn yt-btn-buy"
                   >
-                    Hemen Satın Al (₺{inspectExam.price}) 💳
+                    Hemen Satın Al (₺{inspectExam.price}) →
                   </button>
                 )}
 
                 {childExams.length === 0 && (
-                  <div style={{ fontSize: '0.8rem', color: '#94a3b8', fontStyle: 'italic' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--yt-graphite-soft)', fontStyle: 'italic' }}>
                     Test eklendiğinde burada &quot;Teste Başla&quot; seçeneği görünecek.
                   </div>
                 )}
