@@ -87,6 +87,8 @@ export default function App() {
       .select('exam_id, rating')
       .gt('rating', 0);
 
+    console.log('fetchAllRatings ->', { data, error }); // GEÇİCİ DEBUG - sorun çözülünce silinecek
+
     if (!error && data) {
       const map = {};
       data.forEach(item => {
