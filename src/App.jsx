@@ -1104,6 +1104,73 @@ export default function App() {
                         )}
 
                         <div className="form-group" style={{ marginBottom: '10px' }}>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>
+                            📑 Bölümler (Opsiyonel — sınav içinde soru numarası tekrar 1&apos;den başlıyorsa kullanın):
+                          </label>
+                          {(editingExam.sections || []).map((sec, secIdx) => (
+                            <div key={secIdx} style={{ display: 'flex', gap: '6px', marginBottom: '6px', alignItems: 'center' }}>
+                              <input
+                                type="text"
+                                placeholder="Bölüm adı (Örn: Genel Yetenek)"
+                                value={sec.name}
+                                onChange={(e) => {
+                                  const updated = [...(editingExam.sections || [])];
+                                  updated[secIdx] = { ...updated[secIdx], name: e.target.value };
+                                  updateExamInDb(editingExam.id, { sections: updated });
+                                }}
+                                style={{ flex: 2, minWidth: 0, padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem', boxSizing: 'border-box' }}
+                              />
+                              <input
+                                type="number"
+                                placeholder="Başl."
+                                value={sec.start}
+                                onChange={(e) => {
+                                  const updated = [...(editingExam.sections || [])];
+                                  updated[secIdx] = { ...updated[secIdx], start: Number(e.target.value) };
+                                  updateExamInDb(editingExam.id, { sections: updated });
+                                }}
+                                style={{ width: '52px', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem', boxSizing: 'border-box' }}
+                              />
+                              <span style={{ fontSize: '0.75rem', color: '#64748b' }}>-</span>
+                              <input
+                                type="number"
+                                placeholder="Bit."
+                                value={sec.end}
+                                onChange={(e) => {
+                                  const updated = [...(editingExam.sections || [])];
+                                  updated[secIdx] = { ...updated[secIdx], end: Number(e.target.value) };
+                                  updateExamInDb(editingExam.id, { sections: updated });
+                                }}
+                                style={{ width: '52px', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem', boxSizing: 'border-box' }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updated = (editingExam.sections || []).filter((_, i) => i !== secIdx);
+                                  updateExamInDb(editingExam.id, { sections: updated });
+                                }}
+                                style={{ padding: '6px 8px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 'bold' }}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = [...(editingExam.sections || []), { name: '', start: 1, end: editingExam.numPages || 1 }];
+                              updateExamInDb(editingExam.id, { sections: updated });
+                            }}
+                            style={{ padding: '6px 10px', borderRadius: '6px', border: '1px dashed #94a3b8', backgroundColor: '#f8fafc', color: '#475569', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 'bold' }}
+                          >
+                            + Bölüm Ekle
+                          </button>
+                          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '4px' }}>
+                            Örn: &quot;Genel Yetenek&quot; 1-60, &quot;Genel Kültür&quot; 61-120. Hiç bölüm eklenmezse soru numaraları PDF sayfa numarasıyla aynı gösterilir (mevcut davranış).
+                          </div>
+                        </div>
+
+                        <div className="form-group" style={{ marginBottom: '10px' }}>
                           <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Sınav PDF&apos;i:</label>
                           <input
                             type="file"
@@ -1889,7 +1956,16 @@ export default function App() {
           
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '12px 20px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
-              <span>Soru {studentCurrentPage} / {activeStudentExam.numPages}</span>
+              <span>
+                {(() => {
+                  const secs = activeStudentExam.sections || [];
+                  const sec = secs.find(s => studentCurrentPage >= s.start && studentCurrentPage <= s.end);
+                  if (sec) {
+                    return `${sec.name} - Soru ${studentCurrentPage - sec.start + 1} / ${sec.end - sec.start + 1}`;
+                  }
+                  return `Soru ${studentCurrentPage} / ${activeStudentExam.numPages}`;
+                })()}
+              </span>
               {!showResults && (
                 <div style={{ backgroundColor: '#ffffff', color: '#0f172a', padding: '6px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '1rem' }}>
                   {isDeneme ? `⏱️ Kalan Süre: ` : `⏳ Kronometre: `}
@@ -1934,36 +2010,52 @@ export default function App() {
             ) : null}
 
             <div style={{ maxHeight: '420px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '4px' }}>
-                {Array.from({ length: activeStudentExam.numPages }, (_, index) => {
-                  const qNum = index + 1;
-                  const isAnswered = !!studentAnswers[qNum];
-                  const isCurrent = studentCurrentPage === qNum;
-                  let btnBg = '#ffffff', btnColor = '#334155', btnBorder = '1px solid #cbd5e1';
-                  
-                  if (showResults) {
-                    const studentAns = studentAnswers[qNum];
-                    const correctAns = activeStudentExam.answerKey[qNum];
-                    if (studentAns && studentAns === correctAns) {
-                      btnBg = '#dcfce7'; btnColor = '#15803d'; btnBorder = '1px solid #16a34a';
-                    } else if (studentAns && studentAns !== correctAns) {
-                      btnBg = '#fee2e2'; btnColor = '#dc2626'; btnBorder = '1px solid #ef4444';
-                    } else {
-                      btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #e2e8f0';
-                    }
-                  } else {
-                    if (isAnswered) { btnBg = '#16a34a'; btnColor = '#ffffff'; btnBorder = '1px solid #16a34a'; }
-                  }
+              {(() => {
+                const secs = (activeStudentExam.sections && activeStudentExam.sections.length > 0)
+                  ? activeStudentExam.sections
+                  : [{ name: null, start: 1, end: activeStudentExam.numPages }];
 
-                  if (isCurrent) { btnBorder = '2px solid #2563eb'; }
+                return secs.map((sec, secIndex) => (
+                  <div key={secIndex} style={{ marginBottom: '10px' }}>
+                    {sec.name && (
+                      <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#475569', marginBottom: '4px', paddingLeft: '2px' }}>
+                        {sec.name}
+                      </div>
+                    )}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '4px' }}>
+                      {Array.from({ length: sec.end - sec.start + 1 }, (_, i) => {
+                        const qNum = sec.start + i;
+                        const localNum = i + 1;
+                        const isAnswered = !!studentAnswers[qNum];
+                        const isCurrent = studentCurrentPage === qNum;
+                        let btnBg = '#ffffff', btnColor = '#334155', btnBorder = '1px solid #cbd5e1';
 
-                  return (
-                    <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '26px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}>
-                      {qNum}
-                    </button>
-                  );
-                })}
-              </div>
+                        if (showResults) {
+                          const studentAns = studentAnswers[qNum];
+                          const correctAns = activeStudentExam.answerKey[qNum];
+                          if (studentAns && studentAns === correctAns) {
+                            btnBg = '#dcfce7'; btnColor = '#15803d'; btnBorder = '1px solid #16a34a';
+                          } else if (studentAns && studentAns !== correctAns) {
+                            btnBg = '#fee2e2'; btnColor = '#dc2626'; btnBorder = '1px solid #ef4444';
+                          } else {
+                            btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #e2e8f0';
+                          }
+                        } else {
+                          if (isAnswered) { btnBg = '#16a34a'; btnColor = '#ffffff'; btnBorder = '1px solid #16a34a'; }
+                        }
+
+                        if (isCurrent) { btnBorder = '2px solid #2563eb'; }
+
+                        return (
+                          <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '26px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}>
+                            {localNum}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ));
+              })()}
             </div>
 
             {showResults && activeStudentExam.solutionPdfFile && (
