@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import PdfViewer from './PdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
@@ -150,7 +151,8 @@ export default function App() {
     originalPrice: item.original_price || 0,
     isParent: item.is_parent || false,
     parentId: item.parent_id || null,
-    sortOrder: item.sort_order ?? 0
+    sortOrder: item.sort_order ?? 0,
+    topicMap: item.topic_map || {}
   });
 
   const fetchPublicExams = async () => {
@@ -246,6 +248,16 @@ export default function App() {
     setAuthLoading(false);
   };
 
+  const handleGoogleSignIn = async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.origin }
+    });
+    if (error) {
+      alert("Google ile giriş başlatılamadı: " + error.message);
+    }
+  };
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setUser(null);
@@ -285,6 +297,20 @@ export default function App() {
 
     if (error) {
       console.error("Güncelleme hatası:", error);
+    }
+  };
+
+  // Kazanım haritası güncellemesini ayrı tutuyoruz ki topic_map kolonu
+  // henüz eklenmemişse diğer alanların kaydedilmesini etkilemesin.
+  const updateTopicMapInDb = async (id, newTopicMap) => {
+    setExams((prev) => prev.map(ex => ex.id === id ? { ...ex, topicMap: newTopicMap } : ex));
+    const { error } = await supabase
+      .from('exams')
+      .update({ topic_map: newTopicMap })
+      .eq('id', id);
+    if (error) {
+      console.error("Kazanım haritası kaydedilemedi (topic_map kolonu eksik olabilir):", error);
+      alert("Kazanım haritası kaydedilemedi. Veritabanına 'topic_map' kolonu eklenmiş mi kontrol edin.");
     }
   };
 
@@ -507,6 +533,48 @@ export default function App() {
     updateExamInDb(examId, { answerKey: newKey });
   };
 
+  const handleTopicMapUpload = (examId, e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[firstSheetName];
+        // header: 1 -> her satırı bir dizi olarak alır, başlık satırını (1. satır) atlıyoruz
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+
+        const newTopicMap = {};
+        let count = 0;
+        for (let i = 1; i < rows.length; i++) { // 0. satır başlık, 1'den başla
+          const row = rows[i];
+          if (!row || row.length < 3) continue;
+          const soruNo = Number(row[0]);
+          const ders = String(row[1] || '').trim();
+          const kazanim = String(row[2] || '').trim();
+          if (!soruNo || !ders || !kazanim) continue;
+          newTopicMap[soruNo] = { ders, kazanim };
+          count++;
+        }
+
+        if (count === 0) {
+          alert("Excel dosyasında geçerli satır bulunamadı. Sütun sırasının Soru No / Ders / Kazanım olduğundan emin olun.");
+          return;
+        }
+
+        updateTopicMapInDb(examId, newTopicMap);
+        alert(`✓ ${count} soru için kazanım haritası yüklendi.`);
+      } catch (err) {
+        console.error(err);
+        alert("Excel dosyası okunamadı: " + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
   const handleAddSubTest = async () => {
     const adminActiveExam = exams.find(e => e.id === activeAdminExamId);
     if (!adminActiveExam) return;
@@ -660,6 +728,31 @@ export default function App() {
     }
     const net = Math.max(0, correct - wrong * 0.25);
     return { correct, wrong, empty, net };
+  };
+
+  const getKazanimReport = () => {
+    if (!activeStudentExam || !activeStudentExam.topicMap || Object.keys(activeStudentExam.topicMap).length === 0) {
+      return null;
+    }
+    const numP = activeStudentExam.numPages;
+    const byDers = {};
+
+    for (let i = 1; i <= numP; i++) {
+      const studentAns = studentAnswers[i];
+      const correctAns = activeStudentExam.answerKey[i];
+      const isWrongOrEmpty = !studentAns || (correctAns && studentAns !== correctAns);
+      if (!isWrongOrEmpty) continue;
+
+      const topic = activeStudentExam.topicMap[i];
+      if (!topic || !topic.ders || !topic.kazanim) continue;
+
+      if (!byDers[topic.ders]) byDers[topic.ders] = {};
+      if (!byDers[topic.ders][topic.kazanim]) byDers[topic.ders][topic.kazanim] = 0;
+      byDers[topic.ders][topic.kazanim]++;
+    }
+
+    const hasData = Object.keys(byDers).length > 0;
+    return { byDers, hasData };
   };
 
   const saveAndFinishExam = async (ratingVal = 0) => {
@@ -1059,6 +1152,24 @@ export default function App() {
                             Girilen: {Object.keys(editingExam.answerKey || {}).length} / {editingExam.numPages || 0}
                           </div>
                         </div>
+
+                        <div className="form-group" style={{ marginTop: '10px' }}>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>📊 Kazanım Haritası (Excel):</label>
+                          <input
+                            type="file"
+                            accept=".xlsx,.xls"
+                            onChange={(e) => handleTopicMapUpload(editingExam.id, e)}
+                            style={{ fontSize: '0.8rem', width: '100%' }}
+                          />
+                          <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '4px' }}>
+                            Sütun sırası: 1. Soru No, 2. Ders, 3. Kazanım (ilk satır başlık kabul edilir).
+                          </div>
+                          {editingExam.topicMap && Object.keys(editingExam.topicMap).length > 0 && (
+                            <div style={{ fontSize: '0.75rem', color: '#16a34a', marginTop: '4px', fontWeight: 'bold' }}>
+                              ✓ {Object.keys(editingExam.topicMap).length} soru için kazanım eklendi.
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       <button
@@ -1174,7 +1285,76 @@ export default function App() {
   // ==========================================
   if (appMode === 'student') {
     
-    if (inspectingExamId) {
+    const renderAuthModal = () => {
+    if (!showAuthModal) return null;
+    return (
+      <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
+        <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', width: '100%', maxWidth: '400px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', padding: '30px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', color: '#1e293b', position: 'relative' }}>
+          <button onClick={() => setShowAuthModal(false)} style={{ position: 'absolute', top: '15px', right: '15px', background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#64748b' }}>✕</button>
+
+          <h2 style={{ textAlign: 'center', color: '#0f172a', marginBottom: '24px' }}>
+            {authMode === 'login' && '🔑 Kullanıcı Girişi'}
+            {authMode === 'register' && '📝 Yeni Hesap Oluştur'}
+            {authMode === 'forgot' && '🔒 Şifremi Unuttum'}
+          </h2>
+
+          {authMode !== 'forgot' && (
+            <>
+              <button
+                type="button"
+                onClick={handleGoogleSignIn}
+                style={{ width: '100%', padding: '11px', backgroundColor: '#ffffff', color: '#334155', border: '1px solid #cbd5e1', borderRadius: '6px', fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+              >
+                <span style={{ fontSize: '1.1rem' }}>G</span> Google ile Devam Et
+              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+                <div style={{ flex: 1, height: '1px', backgroundColor: '#e2e8f0' }}></div>
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>veya</span>
+                <div style={{ flex: 1, height: '1px', backgroundColor: '#e2e8f0' }}></div>
+              </div>
+            </>
+          )}
+
+          <form onSubmit={handleAuth}>
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '6px' }}>E-posta Adresi:</label>
+              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ornek@mail.com" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} />
+            </div>
+
+            {authMode !== 'forgot' && (
+              <div style={{ marginBottom: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <label style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Şifre:</label>
+                  {authMode === 'login' && (
+                    <button type="button" onClick={() => setAuthMode('forgot')} style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}>Şifremi Unuttum?</button>
+                  )}
+                </div>
+                <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} />
+              </div>
+            )}
+
+            <button type="submit" disabled={authLoading} style={{ width: '100%', padding: '12px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer', marginBottom: '16px' }}>
+              {authLoading ? 'İşleniyor...' : (authMode === 'login' ? 'Giriş Yap' : authMode === 'register' ? 'Kayıt Ol' : 'Sıfırlama Bağlantısı Gönder')}
+            </button>
+          </form>
+
+          <div style={{ textAlign: 'center', fontSize: '0.85rem' }}>
+            {authMode === 'login' && (
+              <span>Hesabınız yok mu? <button onClick={() => setAuthMode('register')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>Kayıt Olun</button></span>
+            )}
+            {authMode === 'register' && (
+              <span>Zaten hesabınız var mı? <button onClick={() => setAuthMode('login')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>Giriş Yapın</button></span>
+            )}
+            {authMode === 'forgot' && (
+              <span><button onClick={() => setAuthMode('login')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>◀ Giriş Ekranına Dön</button></span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  if (inspectingExamId) {
       const inspectExam = exams.find(e => e.id === inspectingExamId);
       if (!inspectExam) return null;
 
@@ -1192,7 +1372,21 @@ export default function App() {
               ◀ Tüm Listeye Dön
             </button>
             <div style={{ fontSize: '1.2rem', fontWeight: '800', color: '#0f172a' }}>İçerik Detayları</div>
-            <div style={{ width: '100px' }}></div>
+            {user ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f1f5f9', padding: '6px 12px', borderRadius: '20px', border: '1px solid #e2e8f0' }}>
+                <span style={{ width: '8px', height: '8px', backgroundColor: '#22c55e', borderRadius: '50%' }}></span>
+                <span style={{ fontSize: '0.85rem', fontWeight: '500', color: '#334155' }}>{user.email}</span>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #2563eb', backgroundColor: '#ffffff', color: '#2563eb', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
+                  Giriş Yap
+                </button>
+                <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', backgroundColor: '#2563eb', color: '#ffffff', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
+                  Kayıt Ol
+                </button>
+              </div>
+            )}
           </header>
 
           <main style={{ maxWidth: '900px', margin: '40px auto', padding: '0 20px' }}>
@@ -1286,7 +1480,7 @@ export default function App() {
                               cursor: 'pointer' 
                             }}
                           >
-                            {childCompleted ? 'Sonucu İncele' : (!isPaid || isPurchased ? 'Teste Başla ▶' : `Satın Al (₺${inspectExam.price})`)}
+                            {childCompleted ? 'Sonucu İncele' : (!isPaid || isPurchased ? 'Teste Başla ▶' : '🔒 Kilitli')}
                           </button>
                         </div>
                       );
@@ -1322,6 +1516,23 @@ export default function App() {
                   </div>
                 </div>
 
+                {isPaid && !isPurchased && childExams.length > 0 && (
+                  <button
+                    onClick={() => {
+                      if (!user) {
+                        alert("Satın alabilmek için lütfen giriş yapın veya üye olun.");
+                        setAuthMode('login');
+                        setShowAuthModal(true);
+                        return;
+                      }
+                      handleIyzicoPayment(inspectExam);
+                    }}
+                    style={{ padding: '14px 28px', borderRadius: '10px', border: 'none', backgroundColor: '#d97706', color: '#fff', fontWeight: '700', fontSize: '1rem', cursor: 'pointer' }}
+                  >
+                    Hemen Satın Al (₺{inspectExam.price}) 💳
+                  </button>
+                )}
+
                 {childExams.length === 0 && (
                   <div style={{ fontSize: '0.8rem', color: '#94a3b8', fontStyle: 'italic' }}>
                     Test eklendiğinde burada &quot;Teste Başla&quot; seçeneği görünecek.
@@ -1331,6 +1542,7 @@ export default function App() {
 
             </div>
           </main>
+          {renderAuthModal()}
         </div>
       );
     }
@@ -1562,54 +1774,7 @@ export default function App() {
             )}
           </main>
 
-          {showAuthModal && (
-            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
-              <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', width: '100%', maxWidth: '400px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', padding: '30px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', color: '#1e293b', position: 'relative' }}>
-                <button onClick={() => setShowAuthModal(false)} style={{ position: 'absolute', top: '15px', right: '15px', background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#64748b' }}>✕</button>
-
-                <h2 style={{ textAlign: 'center', color: '#0f172a', marginBottom: '24px' }}>
-                  {authMode === 'login' && '🔑 Kullanıcı Girişi'}
-                  {authMode === 'register' && '📝 Yeni Hesap Oluştur'}
-                  {authMode === 'forgot' && '🔒 Şifremi Unuttum'}
-                </h2>
-
-                <form onSubmit={handleAuth}>
-                  <div style={{ marginBottom: '16px' }}>
-                    <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '6px' }}>E-posta Adresi:</label>
-                    <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ornek@mail.com" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} />
-                  </div>
-
-                  {authMode !== 'forgot' && (
-                    <div style={{ marginBottom: '20px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                        <label style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Şifre:</label>
-                        {authMode === 'login' && (
-                          <button type="button" onClick={() => setAuthMode('forgot')} style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}>Şifremi Unuttum?</button>
-                        )}
-                      </div>
-                      <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} />
-                    </div>
-                  )}
-
-                  <button type="submit" disabled={authLoading} style={{ width: '100%', padding: '12px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer', marginBottom: '16px' }}>
-                    {authLoading ? 'İşleniyor...' : (authMode === 'login' ? 'Giriş Yap' : authMode === 'register' ? 'Kayıt Ol' : 'Sıfırlama Bağlantısı Gönder')}
-                  </button>
-                </form>
-
-                <div style={{ textAlign: 'center', fontSize: '0.85rem' }}>
-                  {authMode === 'login' && (
-                    <span>Hesabınız yok mu? <button onClick={() => setAuthMode('register')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>Kayıt Olun</button></span>
-                  )}
-                  {authMode === 'register' && (
-                    <span>Zaten hesabınız var mı? <button onClick={() => setAuthMode('login')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>Giriş Yapın</button></span>
-                  )}
-                  {authMode === 'forgot' && (
-                    <span><button onClick={() => setAuthMode('login')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>◀ Giriş Ekranına Dön</button></span>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
+          {renderAuthModal()}
         </div>
       );
     }
@@ -1620,6 +1785,7 @@ export default function App() {
     const answeredCount = Object.keys(studentAnswers).length;
     const emptyCount = activeStudentExam.numPages - answeredCount;
     const results = showResults ? (studentResultsMap[activeStudentExamId] || calculateResults()) : null;
+    const kazanimReport = showResults ? getKazanimReport() : null;
     const isDeneme = activeStudentExam.examType === 'deneme';
     const myActiveRating = studentResultsMap[activeStudentExamId]?.rating || 0;
 
@@ -1670,6 +1836,28 @@ export default function App() {
               <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#475569', fontWeight: 'bold' }}>BOŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#64748b' }}>{results.empty}</div></div>
               <div style={{ backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#1e40af', fontWeight: 'bold' }}>NET</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#2563eb' }}>{results.net}</div></div>
             </div>
+
+            {kazanimReport && kazanimReport.hasData && (
+              <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #e2e8f0' }}>
+                <h3 style={{ margin: '0 0 12px 0', fontSize: '1.05rem', color: '#0f172a' }}>📊 Kazanım Analizi</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {Object.entries(kazanimReport.byDers).map(([ders, kazanimlar]) => (
+                    <div key={ders} style={{ backgroundColor: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '8px', padding: '14px' }}>
+                      <div style={{ fontWeight: 'bold', color: '#9a3412', fontSize: '0.9rem', marginBottom: '8px' }}>
+                        {ders} dersinde şu konularda eksiğin var:
+                      </div>
+                      <ul style={{ margin: 0, paddingLeft: '20px' }}>
+                        {Object.entries(kazanimlar).map(([kazanim, count]) => (
+                          <li key={kazanim} style={{ fontSize: '0.85rem', color: '#7c2d12', marginBottom: '4px' }}>
+                            {kazanim} <span style={{ color: '#c2410c', fontWeight: 'bold' }}>({count} soru)</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         ) : null}
 
