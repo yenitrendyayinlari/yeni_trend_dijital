@@ -1,111 +1,269 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  /* --- Yeni Trend marka paleti (kağıt / optik form / kurşun kalem) --- */
+  --yt-paper: #f1ecdf;
+  --yt-paper-2: #fbf9f3;
+  --yt-ink: #17213a;
+  --yt-ink-2: #2a3654;
+  --yt-graphite: #585a66;
+  --yt-graphite-soft: #8a8c97;
+  --yt-mustard: #c98a2b;
+  --yt-mustard-deep: #a66f1c;
+  --yt-mustard-bg: #fbebd1;
+  --yt-correct: #2f8f4b;
+  --yt-correct-bg: #e4f3e7;
+  --yt-wrong: #c1443a;
+  --yt-wrong-bg: #fbe7e4;
+  --yt-line: #dcd5c2;
+  --yt-line-soft: #e9e4d4;
+  --yt-shadow: 0 12px 28px -18px rgba(23, 33, 58, 0.35);
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  --yt-font-display: 'Space Grotesk', sans-serif;
+  --yt-font-body: 'Inter', sans-serif;
+  --yt-font-mono: 'IBM Plex Mono', monospace;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
+  /* eski Vite değişkenleri (App.css tarafından kullanılmıyor, kaldırılabilir ama
+     geriye dönük uyumluluk için bırakıldı) */
+  --text: var(--yt-graphite);
+  --text-h: var(--yt-ink);
+  --bg: var(--yt-paper);
+  --border: var(--yt-line);
+  --code-bg: var(--yt-paper-2);
+  --accent: var(--yt-mustard);
+  --accent-bg: var(--yt-mustard-bg);
+  --accent-border: var(--yt-mustard-deep);
+  --social-bg: var(--yt-paper-2);
+  --shadow: var(--yt-shadow);
+
+  --sans: var(--yt-font-body);
+  --heading: var(--yt-font-display);
+  --mono: var(--yt-font-mono);
+
+  font: 16px/145% var(--sans);
+  letter-spacing: 0.1px;
+  color-scheme: light;
+  color: var(--yt-graphite);
+  background: var(--yt-paper);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
 }
 
 body {
   margin: 0;
+  /* optik form kağıdı hissi veren hafif nokta dokusu */
+  background-image: radial-gradient(var(--yt-line-soft) 1px, transparent 1px);
+  background-size: 22px 22px;
 }
 
 #root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
+  width: 100%;
   min-height: 100svh;
-  display: flex;
-  flex-direction: column;
   box-sizing: border-box;
 }
 
 h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+h2,
+h3 {
+  font-family: var(--yt-font-display);
+  font-weight: 600;
+  color: var(--yt-ink);
+  letter-spacing: -0.01em;
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
 p {
   margin: 0;
 }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+/* ============================================================
+   Yeniden kullanılabilir bileşen sınıfları (App.jsx içinde
+   style={{...}} yerine className ile kullanılır)
+   ============================================================ */
+
+.yt-shell {
+  font-family: var(--yt-font-body);
+  min-height: 100vh;
+  color: var(--yt-graphite);
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+.yt-header {
+  background: var(--yt-paper-2);
+  border-bottom: 2px solid var(--yt-ink);
 }
+.yt-header-inner {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 16px 24px;
+  flex-wrap: wrap;
+}
+.yt-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--yt-font-display);
+  font-weight: 700;
+  font-size: 1.15rem;
+  color: var(--yt-ink);
+  flex-shrink: 0;
+}
+.yt-brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--yt-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--yt-font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--yt-ink);
+  background: var(--yt-mustard-bg);
+}
+.yt-perf {
+  height: 1px;
+  background: repeating-linear-gradient(90deg, var(--yt-ink) 0 6px, transparent 6px 13px);
+  opacity: 0.35;
+}
+
+.yt-btn {
+  font-family: var(--yt-font-body);
+  font-weight: 600;
+  font-size: 0.84rem;
+  border-radius: 7px;
+  padding: 9px 16px;
+  border: 1.5px solid transparent;
+  cursor: pointer;
+  background: transparent;
+}
+.yt-btn-ghost { background: transparent; color: var(--yt-ink); border-color: var(--yt-line); }
+.yt-btn-primary { background: var(--yt-ink); color: var(--yt-paper-2); }
+.yt-btn-outline { background: transparent; color: var(--yt-ink); border: 1.5px solid var(--yt-ink); }
+.yt-btn-outline:hover { background: var(--yt-ink); color: var(--yt-paper-2); }
+.yt-btn-locked { background: transparent; color: var(--yt-mustard-deep); border: 1.5px solid var(--yt-mustard-deep); }
+.yt-btn-locked:hover { background: var(--yt-mustard-deep); color: #fff; }
+
+.yt-chip-row { display: flex; gap: 8px; flex-wrap: wrap; padding: 18px 24px; }
+.yt-chip {
+  font-family: var(--yt-font-mono);
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--yt-ink);
+  background: var(--yt-paper-2);
+  border: 1.5px solid var(--yt-line);
+  padding: 7px 13px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-transform: uppercase;
+}
+.yt-chip.active { background: var(--yt-ink); color: var(--yt-paper-2); border-color: var(--yt-ink); }
+
+.yt-row-list { display: flex; flex-direction: column; gap: 12px; }
+.yt-exam-row {
+  display: flex;
+  align-items: stretch;
+  gap: 18px;
+  background: var(--yt-paper-2);
+  border: 1.5px solid var(--yt-line);
+  border-radius: 12px;
+  padding: 18px 20px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.yt-exam-row:hover { border-color: var(--yt-ink); transform: translateX(2px); }
+
+.yt-bubble-mark {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2px solid var(--yt-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--yt-font-mono);
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--yt-ink);
+  align-self: flex-start;
+  background: var(--yt-paper-2);
+}
+.yt-bubble-mark.done { background: var(--yt-correct); border-color: var(--yt-correct); color: #fff; }
+
+.yt-tag {
+  font-family: var(--yt-font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 3px 9px;
+  border-radius: 5px;
+  text-transform: uppercase;
+  background: var(--yt-paper);
+  border: 1px solid var(--yt-line);
+  color: var(--yt-graphite);
+  display: inline-block;
+}
+.yt-tag.deneme { color: var(--yt-ink-2); border-color: var(--yt-ink-2); background: transparent; }
+.yt-tag.test { color: var(--yt-mustard-deep); border-color: var(--yt-mustard-deep); background: transparent; }
+.yt-tag.done { color: var(--yt-correct); border-color: var(--yt-correct); background: var(--yt-correct-bg); }
+
+.yt-rating { display: flex; align-items: center; gap: 5px; font-family: var(--yt-font-mono); font-size: 0.78rem; flex-shrink: 0; }
+.yt-rating .stars { color: var(--yt-mustard-deep); letter-spacing: 1px; font-size: 0.8rem; }
+.yt-rating .count { color: var(--yt-graphite-soft); }
+
+.yt-price .old { font-family: var(--yt-font-mono); font-size: 0.76rem; color: var(--yt-graphite-soft); text-decoration: line-through; margin-right: 6px; }
+.yt-price .now { font-family: var(--yt-font-mono); font-size: 1.02rem; font-weight: 600; color: var(--yt-ink); }
+.yt-price .free { font-family: var(--yt-font-mono); font-size: 0.95rem; font-weight: 600; color: var(--yt-correct); }
+.yt-price .net { font-family: var(--yt-font-mono); font-size: 0.85rem; font-weight: 600; color: var(--yt-correct); }
+
+.yt-exam-shell { background: var(--yt-ink); border-radius: 16px; padding: 26px; color: var(--yt-paper-2); }
+.yt-timer {
+  font-family: var(--yt-font-mono);
+  font-weight: 600;
+  font-size: 1.4rem;
+  color: var(--yt-paper-2);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  padding: 6px 14px;
+  border-radius: 8px;
+}
+.yt-timer.urgent { color: var(--yt-wrong); border-color: var(--yt-wrong); background: rgba(193, 68, 58, 0.15); }
+
+.yt-abub {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 2px solid var(--yt-ink);
+  background: var(--yt-paper-2);
+  font-family: var(--yt-font-mono);
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--yt-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.yt-abub.picked { background: var(--yt-mustard); border-color: var(--yt-mustard-deep); color: var(--yt-ink); }
+
+.yt-pcell {
+  border-radius: 5px;
+  border: 1.5px solid var(--yt-line);
+  font-family: var(--yt-font-mono);
+  font-weight: 600;
+  font-size: 0.7rem;
+  color: var(--yt-graphite);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: var(--yt-paper-2);
+}
+.yt-pcell.answered { background: var(--yt-mustard); border-color: var(--yt-mustard-deep); color: var(--yt-ink); }
+.yt-pcell.correct { background: var(--yt-correct); border-color: var(--yt-correct); color: #fff; }
+.yt-pcell.wrong { background: var(--yt-wrong); border-color: var(--yt-wrong); color: #fff; }
+.yt-pcell.current { outline: 2px solid var(--yt-ink); outline-offset: 1px; }

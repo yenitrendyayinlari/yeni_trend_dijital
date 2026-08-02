@@ -1648,201 +1648,143 @@ export default function App() {
       const allCategories = ['Tümü', ...uniqueExamTypes];
 
       return (
-        <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b' }}>
-          
-          <header style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '12px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '15px', boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.05)', flexWrap: 'wrap' }}>
-            
-            <div style={{ display: 'flex', alignItems: 'center', gap: '15px', flexShrink: 0 }}>
-              <div style={{ fontSize: '1.3rem', fontWeight: '900', letterSpacing: '-0.05em', color: '#0f172a', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ backgroundColor: '#2563eb', color: '#fff', padding: '4px 8px', borderRadius: '6px', fontSize: '0.9rem' }}>YT</span>
-                YENİTREND
+        <div className="yt-shell">
+
+          <header className="yt-header">
+            <div className="yt-header-inner">
+              <div className="yt-brand">
+                <span className="yt-brand-mark">YT</span>
+                Yeni Trend
+              </div>
+
+              <div style={{ flex: '1 1 300px', maxWidth: '450px', position: 'relative', minWidth: '200px' }}>
+                <span style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--yt-graphite-soft)', fontSize: '0.9rem' }}>○</span>
+                <input
+                  type="text"
+                  placeholder="Ne öğrenmek veya çözmek istiyorsunuz?"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{ width: '100%', padding: '10px 14px 10px 36px', borderRadius: '8px', border: '1.5px solid var(--yt-line)', backgroundColor: 'var(--yt-paper-2)', outline: 'none', fontSize: '0.9rem', fontFamily: 'var(--yt-font-body)', color: 'var(--yt-ink)', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+                {user ? (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: 'var(--yt-paper)', padding: '6px 12px', borderRadius: '20px', border: '1px solid var(--yt-line)' }}>
+                      <span style={{ width: '8px', height: '8px', backgroundColor: 'var(--yt-correct)', borderRadius: '50%' }}></span>
+                      <span style={{ fontSize: '0.85rem', fontWeight: '500', color: 'var(--yt-ink)' }}>{user.email}</span>
+                    </div>
+                    <button onClick={handleLogout} className="yt-btn yt-btn-ghost">
+                      Çıkış Yap
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="yt-btn yt-btn-outline">
+                      Giriş Yap
+                    </button>
+                    <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} className="yt-btn yt-btn-primary">
+                      Kayıt Ol
+                    </button>
+                  </>
+                )}
               </div>
             </div>
-
-            <div style={{ flex: '1 1 300px', maxWidth: '450px', position: 'relative', minWidth: '200px' }}>
-              <span style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', color: '#64748b' }}>🔍</span>
-              <input 
-                type="text" 
-                placeholder="Ne öğrenmek veya çözmek istiyorsunuz?" 
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                style={{ width: '100%', padding: '10px 16px 10px 42px', borderRadius: '9999px', border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', outline: 'none', fontSize: '0.9rem', boxSizing: 'border-box' }} 
-              />
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
-              {user ? (
-                <>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#f1f5f9', padding: '6px 12px', borderRadius: '20px', border: '1px solid #e2e8f0' }}>
-                    <span style={{ width: '8px', height: '8px', backgroundColor: '#22c55e', borderRadius: '50%' }}></span>
-                    <span style={{ fontSize: '0.85rem', fontWeight: '500', color: '#334155' }}>{user.email}</span>
-                  </div>
-                  <button onClick={handleLogout} style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', cursor: 'pointer', color: '#dc2626', fontWeight: '600', fontSize: '0.85rem' }}>
-                    Çıkış Yap
-                  </button>
-                </>
-              ) : (
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #2563eb', backgroundColor: '#ffffff', color: '#2563eb', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
-                    Giriş Yap
-                  </button>
-                  <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', backgroundColor: '#2563eb', color: '#ffffff', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem' }}>
-                    Kayıt Ol
-                  </button>
-                </div>
-              )}
-            </div>
+            <div className="yt-perf"></div>
           </header>
 
-          <div style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', padding: '0 32px', overflowX: 'auto', display: 'flex', gap: '24px' }}>
-            {allCategories.map(cat => (
-              <button 
-                key={cat}
-                onClick={() => setSelectedCategory(cat)}
-                style={{ 
-                  background: 'none', 
-                  border: 'none', 
-                  padding: '14px 4px', 
-                  fontSize: '0.9rem', 
-                  fontWeight: selectedCategory === cat ? '700' : '500', 
-                  color: selectedCategory === cat ? '#2563eb' : '#64748b', 
-                  borderBottom: selectedCategory === cat ? '2px solid #2563eb' : '2px solid transparent',
-                  cursor: 'pointer',
-                  whiteSpace: 'nowrap',
-                  transition: 'color 0.2s'
-                }}
-              >
-                {cat}
-              </button>
-            ))}
+          <div className="wrap" style={{ maxWidth: '920px', margin: '0 auto', padding: '0 24px' }}>
+            <div className="yt-chip-row" style={{ padding: '18px 0' }}>
+              {allCategories.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`yt-chip${selectedCategory === cat ? ' active' : ''}`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <main style={{ maxWidth: '1000px', margin: '40px auto', padding: '0 20px' }}>
+          <main style={{ maxWidth: '920px', margin: '0 auto', padding: '0 24px 60px' }}>
             {publishedExams.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '60px 20px', backgroundColor: '#ffffff', borderRadius: '16px', border: '1px dashed #cbd5e1', boxShadow: '0 1px 3px 0 rgba(0,0,0,0.02)' }}>
-                <div style={{ fontSize: '2.5rem', marginBottom: '12px' }}>📂</div>
-                <h3 style={{ margin: '0 0 6px 0', color: '#334155', fontSize: '1.1rem' }}>Aktif İçerik Bulunmuyor</h3>
-                <p style={{ margin: 0, color: '#64748b', fontSize: '0.9rem' }}>Seçilen kriterlere uygun aktif bir sınav veya paket bulunmamaktadır.</p>
+              <div style={{ textAlign: 'center', padding: '60px 20px', backgroundColor: 'var(--yt-paper-2)', borderRadius: '12px', border: '1.5px dashed var(--yt-line)' }}>
+                <h3 style={{ margin: '0 0 6px 0', color: 'var(--yt-ink)', fontSize: '1.1rem' }}>Aktif İçerik Bulunmuyor</h3>
+                <p style={{ margin: 0, color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Seçilen kriterlere uygun aktif bir sınav veya paket bulunmamaktadır.</p>
               </div>
             ) : (
-              <div style={{ display: 'grid', gap: '16px' }}>
+              <div className="yt-row-list">
                 {publishedExams.map(exam => {
                   const resData = studentResultsMap[exam.id];
                   const isCompleted = resData?.is_finished;
                   const isDeneme = exam.examType === 'deneme';
                   const ratingInfo = examRatingsMap[exam.id] || { average: '0,0', count: '0' };
                   const isPaid = exam.price && exam.price > 0;
+                  const bubbleLabel = isCompleted ? '✓' : (isDeneme ? 'D' : 'T');
 
                   return (
-                    <div 
-                      key={exam.id} 
+                    <div
+                      key={exam.id}
                       onClick={() => setInspectingExamId(exam.id)}
-                      style={{ 
-                        display: 'flex', 
-                        justifyContent: 'space-between', 
-                        alignItems: 'center', 
-                        padding: '24px', 
-                        backgroundColor: '#ffffff', 
-                        borderRadius: '16px', 
-                        border: isCompleted ? '1px solid #bbf7d0' : '1px solid #e2e8f0', 
-                        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.02), 0 2px 4px -1px rgba(0, 0, 0, 0.02)',
-                        position: 'relative',
-                        overflow: 'hidden',
-                        cursor: 'pointer',
-                        transition: 'transform 0.1s, box-shadow 0.1s'
-                      }}
-                      onMouseEnter={(e) => e.currentTarget.style.boxShadow = '0 10px 15px -3px rgba(0, 0, 0, 0.05)'}
-                      onMouseLeave={(e) => e.currentTarget.style.boxShadow = '0 4px 6px -1px rgba(0, 0, 0, 0.02)'}
+                      className="yt-exam-row"
                     >
-                      <div style={{ 
-                        position: 'absolute', 
-                        left: 0, 
-                        top: 0, 
-                        bottom: 0, 
-                        width: '6px', 
-                        backgroundColor: isCompleted ? '#22c55e' : '#2563eb' 
-                      }}></div>
+                      <div className={`yt-bubble-mark${isCompleted ? ' done' : ''}`}>{bubbleLabel}</div>
 
-                      <div style={{ paddingLeft: '8px', flex: 1, paddingRight: '16px' }}>
-                        
-                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
-                          <span style={{ backgroundColor: '#f1f5f9', color: '#334155', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
-                            🎯 {exam.categoryExamType} / {exam.categoryLesson}
-                          </span>
-                          <span style={{ backgroundColor: isDeneme ? '#eff6ff' : '#f5f3ff', color: isDeneme ? '#1d4ed8' : '#7c3aed', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+
+                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
+                          <span className="yt-tag">{exam.categoryExamType} · {exam.categoryLesson}</span>
+                          <span className={`yt-tag ${isDeneme ? 'deneme' : 'test'}`}>
                             {isDeneme ? 'Deneme Sınavı' : 'Test'}
                           </span>
-
                           {user && isCompleted ? (
-                            <span style={{ backgroundColor: '#f0fdf4', color: '#15803d', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: '600' }}>
-                              ✓ Çözüldü (Net: {resData.net})
-                            </span>
+                            <span className="yt-tag done">Çözüldü</span>
                           ) : null}
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '12px' }}>
-                          <h3 style={{ margin: 0, color: '#0f172a', fontSize: '1.2rem', fontWeight: '700', letterSpacing: '-0.025em' }}>{exam.name || 'İsimsiz İçerik'}</h3>
-                          
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', backgroundColor: '#f8fafc', padding: '4px 10px', borderRadius: '8px', border: '1px solid #f1f5f9' }}>
-                            <span style={{ fontWeight: 'bold', color: '#0f172a', fontSize: '0.9rem' }}>{ratingInfo.average}</span>
-                            <div style={{ display: 'flex', gap: '1px' }}>
-                              {[1, 2, 3, 4, 5].map((star) => {
-                                const activeStar = Number(ratingInfo.average.replace(',', '.')) >= star;
-                                return (
-                                  <span key={star} style={{ color: activeStar ? '#eab308' : '#cbd5e1', fontSize: '0.9rem' }}>★</span>
-                                );
-                              })}
-                            </div>
-                            <span style={{ color: '#64748b', fontSize: '0.8rem' }}>({ratingInfo.count})</span>
+                        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                          <h3 style={{ margin: 0, fontSize: '1.08rem' }}>{exam.name || 'İsimsiz İçerik'}</h3>
+                          <div className="yt-rating">
+                            <span className="stars">
+                              {'★'.repeat(Math.round(Number(ratingInfo.average.replace(',', '.')))).padEnd(5, '☆')}
+                            </span>
+                            {ratingInfo.average} <span className="count">({ratingInfo.count})</span>
                           </div>
                         </div>
 
-                        <div style={{ display: 'flex', gap: '20px', fontSize: '0.85rem', color: '#64748b', fontWeight: '500', marginBottom: '12px', alignItems: 'center' }}>
-                          {isDeneme && <span>⏱ Süre: {exam.duration} Dakika</span>}
-                          <span>📝 Toplam Soru: {exam.numPages || 0}</span>
+                        <div style={{ display: 'flex', gap: '16px', fontFamily: 'var(--yt-font-mono)', fontSize: '0.78rem', color: 'var(--yt-graphite)', marginBottom: '12px' }}>
+                          {isDeneme && <span>⏱ {exam.duration} DK</span>}
+                          <span>{exam.numPages || 0} SORU</span>
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-                          {isPaid ? (
-                            <>
-                              <span style={{ fontSize: '1.25rem', fontWeight: '800', color: '#0f172a' }}>
-                                ₺{exam.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                              </span>
-                              {exam.originalPrice && exam.originalPrice > exam.price ? (
-                                <span style={{ fontSize: '0.95rem', fontWeight: '500', color: '#94a3b8', textDecoration: 'line-through' }}>
-                                  ₺{exam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </span>
-                              ) : null}
-                            </>
-                          ) : (
-                            <span style={{ fontSize: '1.1rem', fontWeight: '700', color: '#16a34a' }}>
-                              Ücretsiz
-                            </span>
-                          )}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                          <div className="yt-price">
+                            {isPaid ? (
+                              <>
+                                {exam.originalPrice && exam.originalPrice > exam.price ? (
+                                  <span className="old">₺{exam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                                ) : null}
+                                <span className="now">₺{exam.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              </>
+                            ) : (
+                              <span className="free">Ücretsiz</span>
+                            )}
+                            {isCompleted && <span className="net"> · Net: {resData.net}</span>}
+                          </div>
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setInspectingExamId(exam.id);
+                            }}
+                            className="yt-btn yt-btn-outline"
+                          >
+                            {isCompleted ? 'Sonucu İncele →' : 'İçeriği İncele →'}
+                          </button>
                         </div>
 
-                      </div>
-
-                      <div>
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setInspectingExamId(exam.id);
-                          }} 
-                          style={{ 
-                            padding: '12px 24px', 
-                            borderRadius: '10px', 
-                            border: 'none', 
-                            backgroundColor: '#2563eb', 
-                            color: '#fff', 
-                            fontWeight: '600', 
-                            fontSize: '0.9rem', 
-                            cursor: 'pointer',
-                            boxShadow: '0 4px 6px -1px rgba(37, 99, 235, 0.2)'
-                          }}
-                        >
-                          İçeriği İncele ▶
-                        </button>
                       </div>
                     </div>
                   );
