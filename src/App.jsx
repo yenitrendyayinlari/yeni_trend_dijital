@@ -1793,18 +1793,18 @@ export default function App() {
     const myActiveRating = studentResultsMap[activeStudentExamId]?.rating || 0;
 
     return (
-      <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', maxWidth: '1400px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
-          <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
-          <button onClick={() => setActiveStudentExamId(null)} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer' }}>İçerik Listesine Dön</button>
+      <div className="yt-shell" style={{ maxWidth: '1300px', margin: '0 auto', padding: '24px' }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid var(--yt-ink)', paddingBottom: '14px', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
+          <h1 style={{ margin: 0, fontSize: '1.3rem' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
+          <button onClick={() => setActiveStudentExamId(null)} className="yt-btn yt-btn-ghost">İçerik Listesine Dön</button>
         </header>
 
         {showResults && results ? (
-          <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px', maxWidth: '700px', margin: '0 auto 24px auto', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
-            
+          <div className="yt-session-card" style={{ maxWidth: '700px', margin: '0 auto 24px auto' }}>
+
             {user && (
-              <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: '#f8fafc', borderRadius: '10px', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-                <div style={{ fontSize: '0.95rem', fontWeight: 'bold', color: '#0f172a', marginBottom: '8px' }}>Bu içeriği nasıl buldunuz? Puanlayın:</div>
+              <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: 'var(--yt-paper)', borderRadius: '10px', border: '1px solid var(--yt-line)', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.9rem', fontWeight: '600', color: 'var(--yt-ink)', marginBottom: '8px' }}>Bu içeriği nasıl buldunuz? Puanlayın:</div>
                 <div style={{ display: 'flex', justifyContent: 'center', gap: '6px' }}>
                   {[1, 2, 3, 4, 5].map((star) => (
                     <span
@@ -1812,8 +1812,8 @@ export default function App() {
                       onClick={() => handleRateExamInActiveScreen(star)}
                       style={{
                         cursor: 'pointer',
-                        fontSize: '2.4rem',
-                        color: myActiveRating >= star ? '#eab308' : '#cbd5e1',
+                        fontSize: '2.2rem',
+                        color: myActiveRating >= star ? 'var(--yt-mustard)' : 'var(--yt-line)',
                         padding: '0 4px',
                         userSelect: 'none',
                         display: 'inline-block'
@@ -1825,34 +1825,32 @@ export default function App() {
                   ))}
                 </div>
                 {myActiveRating > 0 && (
-                  <div style={{ fontSize: '0.85rem', color: '#16a34a', fontWeight: '600', marginTop: '8px' }}>
-                    ✓ Puanınız kaydedildi ({myActiveRating} Yıldız)
+                  <div style={{ fontSize: '0.82rem', color: 'var(--yt-correct)', fontWeight: '600', marginTop: '8px', fontFamily: 'var(--yt-font-mono)' }}>
+                    Puanınız kaydedildi ({myActiveRating} Yıldız)
                   </div>
                 )}
               </div>
             )}
 
-            <h2 style={{ textAlign: 'center', marginTop: 0, color: '#0f172a' }}>🎉 Sonuçlar</h2>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
-              <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#166534', fontWeight: 'bold' }}>DOĞRU</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#15803d' }}>{results.correct}</div></div>
-              <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#991b1b', fontWeight: 'bold' }}>YANLIŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#dc2626' }}>{results.wrong}</div></div>
-              <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#475569', fontWeight: 'bold' }}>BOŞ</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#64748b' }}>{results.empty}</div></div>
-              <div style={{ backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', padding: '12px', borderRadius: '8px', textAlign: 'center' }}><span style={{ fontSize: '0.75rem', color: '#1e40af', fontWeight: 'bold' }}>NET</span><div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: '#2563eb' }}>{results.net}</div></div>
+            <h2 style={{ textAlign: 'center', marginTop: 0 }}>Sonuçlar</h2>
+            <div className="yt-stat-grid">
+              <div className="yt-stat-box correct"><span className="lbl">DOĞRU</span><div className="val">{results.correct}</div></div>
+              <div className="yt-stat-box wrong"><span className="lbl">YANLIŞ</span><div className="val">{results.wrong}</div></div>
+              <div className="yt-stat-box"><span className="lbl">BOŞ</span><div className="val">{results.empty}</div></div>
+              <div className="yt-stat-box net"><span className="lbl">NET</span><div className="val">{results.net}</div></div>
             </div>
 
             {kazanimReport && kazanimReport.hasData && (
-              <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #e2e8f0' }}>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '1.05rem', color: '#0f172a' }}>📊 Kazanım Analizi</h3>
+              <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--yt-line)' }}>
+                <h3 style={{ margin: '0 0 12px 0', fontSize: '1rem' }}>Kazanım Analizi</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {Object.entries(kazanimReport.byDers).map(([ders, kazanimlar]) => (
-                    <div key={ders} style={{ backgroundColor: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '8px', padding: '14px' }}>
-                      <div style={{ fontWeight: 'bold', color: '#9a3412', fontSize: '0.9rem', marginBottom: '8px' }}>
-                        {ders} dersinde şu konularda eksiğin var:
-                      </div>
+                    <div key={ders} className="yt-kazanim-box">
+                      <div className="head">{ders} dersinde şu konularda eksiğin var:</div>
                       <ul style={{ margin: 0, paddingLeft: '20px' }}>
                         {Object.entries(kazanimlar).map(([kazanim, count]) => (
-                          <li key={kazanim} style={{ fontSize: '0.85rem', color: '#7c2d12', marginBottom: '4px' }}>
-                            {kazanim} <span style={{ color: '#c2410c', fontWeight: 'bold' }}>({count} soru)</span>
+                          <li key={kazanim}>
+                            {kazanim} <b>({count} soru)</b>
                           </li>
                         ))}
                       </ul>
@@ -1879,26 +1877,27 @@ export default function App() {
         `}</style>
 
         <div className="exam-layout">
-          
+
           <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f1f5f9', padding: '12px 20px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
-              <span>
-                {(() => {
-                  const secs = activeStudentExam.sections || [];
-                  const sec = secs.find(s => studentCurrentPage >= s.start && studentCurrentPage <= s.end);
-                  if (sec) {
-                    return `${sec.name} - Soru ${studentCurrentPage - sec.start + 1} / ${sec.end - sec.start + 1}`;
-                  }
-                  return `Soru ${studentCurrentPage} / ${activeStudentExam.numPages}`;
-                })()}
-              </span>
-              {!showResults && (
-                <div style={{ backgroundColor: '#ffffff', color: '#0f172a', padding: '6px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '1rem' }}>
-                  {isDeneme ? `⏱️ Kalan Süre: ` : `⏳ Kronometre: `}
-                  <strong>{formatTime(timeLeft)}</strong>
-                </div>
-              )}
-              <span>İşaretlenen: <strong style={{ color: studentAnswers[studentCurrentPage] ? '#16a34a' : '#2563eb' }}>{studentAnswers[studentCurrentPage] || 'Boş'}</strong></span>
+            <div className="yt-exam-shell" style={{ padding: '14px 20px', marginBottom: '12px' }}>
+              <div className="yt-topbar" style={{ marginBottom: 0 }}>
+                <span>
+                  {(() => {
+                    const secs = activeStudentExam.sections || [];
+                    const sec = secs.find(s => studentCurrentPage >= s.start && studentCurrentPage <= s.end);
+                    if (sec) {
+                      return `${sec.name} · SORU ${studentCurrentPage - sec.start + 1} / ${sec.end - sec.start + 1}`;
+                    }
+                    return `SORU ${studentCurrentPage} / ${activeStudentExam.numPages}`;
+                  })()}
+                </span>
+                {!showResults && (
+                  <div className={`yt-timer${timeLeft < 300 ? ' urgent' : ''}`} style={{ fontSize: '1.15rem', padding: '5px 12px' }}>
+                    {formatTime(timeLeft)}
+                  </div>
+                )}
+                <span>İŞARETLENEN: <b style={{ color: studentAnswers[studentCurrentPage] ? 'var(--yt-mustard)' : 'rgba(251,249,243,0.5)' }}>{studentAnswers[studentCurrentPage] || 'BOŞ'}</b></span>
+              </div>
             </div>
 
             <PdfViewer 
@@ -1911,7 +1910,7 @@ export default function App() {
                 {['A', 'B', 'C', 'D', 'E'].map(option => {
                   const isSelected = studentAnswers[studentCurrentPage] === option;
                   return (
-                    <button key={option} onClick={() => handleAnswerSelect(option)} style={{ width: '30px', height: '30px', borderRadius: '50%', border: isSelected ? '2px solid #16a34a' : '2px solid #94a3b8', backgroundColor: isSelected ? '#16a34a' : '#ffffff', color: isSelected ? '#ffffff' : '#334155', fontSize: '0.85rem', fontWeight: 'bold', cursor: 'pointer' }}>
+                    <button key={option} onClick={() => handleAnswerSelect(option)} className={`yt-abub${isSelected ? ' picked' : ''}`}>
                       {option}
                     </button>
                   );
@@ -1920,18 +1919,18 @@ export default function App() {
             )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '16px', gap: '10px' }}>
-              <button disabled={studentCurrentPage <= 1} onClick={() => { setStudentCurrentPage(p => p - 1); setViewingSolutionQ(false); }} style={{ padding: '10px 24px', borderRadius: '6px', border: 'none', backgroundColor: studentCurrentPage <= 1 ? '#e2e8f0' : '#475569', color: studentCurrentPage <= 1 ? '#94a3b8' : '#ffffff', fontWeight: 'bold', cursor: studentCurrentPage <= 1 ? 'not-allowed' : 'pointer' }}>◀ Önceki Soru</button>
-              <button disabled={studentCurrentPage >= activeStudentExam.numPages} onClick={() => { setStudentCurrentPage(p => p + 1); setViewingSolutionQ(false); }} style={{ padding: '10px 24px', borderRadius: '6px', border: 'none', backgroundColor: studentCurrentPage >= activeStudentExam.numPages ? '#e2e8f0' : '#2563eb', color: studentCurrentPage >= activeStudentExam.numPages ? '#94a3b8' : '#ffffff', fontWeight: 'bold', cursor: studentCurrentPage >= activeStudentExam.numPages ? 'not-allowed' : 'pointer' }}>Sonraki Soru ▶</button>
+              <button disabled={studentCurrentPage <= 1} onClick={() => { setStudentCurrentPage(p => p - 1); setViewingSolutionQ(false); }} className="yt-btn yt-btn-outline" style={studentCurrentPage <= 1 ? { opacity: 0.4, cursor: 'not-allowed' } : {}}>◀ Önceki Soru</button>
+              <button disabled={studentCurrentPage >= activeStudentExam.numPages} onClick={() => { setStudentCurrentPage(p => p + 1); setViewingSolutionQ(false); }} className="yt-btn yt-btn-primary" style={studentCurrentPage >= activeStudentExam.numPages ? { opacity: 0.4, cursor: 'not-allowed' } : {}}>Sonraki Soru ▶</button>
             </div>
           </div>
 
-          <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '12px' }}>
-            <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem', color: '#0f172a', textAlign: 'center' }}>Soru Paleti</h3>
-            
+          <div className="yt-exam-shell" style={{ padding: '16px' }}>
+            <h3 style={{ margin: '0 0 12px 0', fontSize: '0.78rem', fontFamily: 'var(--yt-font-mono)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'rgba(251,249,243,0.6)', textAlign: 'center' }}>Soru Paleti</h3>
+
             {!showResults ? (
-              <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: '12px', padding: '6px', backgroundColor: '#ffffff', borderRadius: '6px', border: '1px solid #f1f5f9', fontSize: '0.75rem' }}>
-                <span style={{ color: '#16a34a', fontWeight: 'bold' }}>● Çözüldü: {answeredCount}</span>
-                <span style={{ color: '#64748b', fontWeight: 'bold' }}>○ Boş: {emptyCount}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: '12px', padding: '6px', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: '6px', fontSize: '0.72rem', fontFamily: 'var(--yt-font-mono)' }}>
+                <span style={{ color: 'var(--yt-mustard)', fontWeight: 'bold' }}>ÇÖZÜLDÜ: {answeredCount}</span>
+                <span style={{ color: 'rgba(251,249,243,0.5)', fontWeight: 'bold' }}>BOŞ: {emptyCount}</span>
               </div>
             ) : null}
 
@@ -1944,7 +1943,7 @@ export default function App() {
                 return secs.map((sec, secIndex) => (
                   <div key={secIndex} style={{ marginBottom: '10px' }}>
                     {sec.name && (
-                      <div style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#475569', marginBottom: '4px', paddingLeft: '2px' }}>
+                      <div style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'rgba(251,249,243,0.55)', marginBottom: '4px', paddingLeft: '2px', fontFamily: 'var(--yt-font-mono)' }}>
                         {sec.name}
                       </div>
                     )}
@@ -1954,26 +1953,23 @@ export default function App() {
                         const localNum = i + 1;
                         const isAnswered = !!studentAnswers[qNum];
                         const isCurrent = studentCurrentPage === qNum;
-                        let btnBg = '#ffffff', btnColor = '#334155', btnBorder = '1px solid #cbd5e1';
+                        let cellClass = 'yt-pcell';
 
                         if (showResults) {
                           const studentAns = studentAnswers[qNum];
                           const correctAns = activeStudentExam.answerKey[qNum];
                           if (studentAns && studentAns === correctAns) {
-                            btnBg = '#dcfce7'; btnColor = '#15803d'; btnBorder = '1px solid #16a34a';
+                            cellClass += ' correct';
                           } else if (studentAns && studentAns !== correctAns) {
-                            btnBg = '#fee2e2'; btnColor = '#dc2626'; btnBorder = '1px solid #ef4444';
-                          } else {
-                            btnBg = '#f1f5f9'; btnColor = '#64748b'; btnBorder = '1px solid #e2e8f0';
+                            cellClass += ' wrong';
                           }
                         } else {
-                          if (isAnswered) { btnBg = '#16a34a'; btnColor = '#ffffff'; btnBorder = '1px solid #16a34a'; }
+                          if (isAnswered) { cellClass += ' answered'; }
                         }
-
-                        if (isCurrent) { btnBorder = '2px solid #2563eb'; }
+                        if (isCurrent) { cellClass += ' current'; }
 
                         return (
-                          <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} style={{ height: '26px', borderRadius: '4px', border: btnBorder, backgroundColor: btnBg, color: btnColor, fontWeight: 'bold', fontSize: '0.7rem', cursor: 'pointer', padding: 0 }}>
+                          <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} className={cellClass} style={{ height: '26px', padding: 0 }}>
                             {localNum}
                           </button>
                         );
@@ -1985,14 +1981,14 @@ export default function App() {
             </div>
 
             {showResults && activeStudentExam.solutionPdfFile && (
-              <button onClick={() => setViewingSolutionQ(v => !v)} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', backgroundColor: viewingSolutionQ ? '#166534' : '#16a34a', color: '#ffffff', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer', marginBottom: '10px' }}>
-                {viewingSolutionQ ? '✕ Çözümü Gizle' : `💡 ${studentCurrentPage}. Çözümü Gör`}
+              <button onClick={() => setViewingSolutionQ(v => !v)} className={`yt-btn yt-btn-correct${viewingSolutionQ ? ' active' : ''}`} style={{ width: '100%', marginBottom: '10px' }}>
+                {viewingSolutionQ ? '✕ Çözümü Gizle' : `${studentCurrentPage}. Çözümü Gör`}
               </button>
             )}
 
             {!isExamFinished && (
-              <button onClick={finishExam} style={{ width: '100%', padding: '10px', borderRadius: '6px', border: 'none', backgroundColor: '#dc2626', color: '#ffffff', fontWeight: 'bold', fontSize: '0.85rem', cursor: 'pointer' }}>
-                {isDeneme ? 'Sınavı Bitir 🏁' : 'Testi Bitir 🏁'}
+              <button onClick={finishExam} className="yt-btn yt-btn-buy" style={{ width: '100%' }}>
+                {isDeneme ? 'Sınavı Bitir' : 'Testi Bitir'}
               </button>
             )}
           </div>
@@ -2000,10 +1996,10 @@ export default function App() {
         </div>
 
         {(showResults && viewingSolutionQ) && activeStudentExam.solutionPdfFile && (
-          <div ref={solutionRef} style={{ marginTop: '20px', backgroundColor: '#f0fdf4', border: '2px solid #16a34a', borderRadius: '12px', padding: '14px', boxShadow: '0 4px 14px rgba(22,163,74,0.25)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#16a34a', padding: '10px 14px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', color: '#ffffff', fontSize: '0.9rem' }}>
-              <span>💡 {studentCurrentPage}. Soru Çözümü Aşağıda 👇</span>
-              <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: '#166534', color: '#fff', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}>Kapat</button>
+          <div ref={solutionRef} className="yt-session-card" style={{ marginTop: '20px', borderColor: 'var(--yt-correct)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--yt-correct)', padding: '10px 14px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', color: '#fff', fontSize: '0.88rem' }}>
+              <span>{studentCurrentPage}. Soru Çözümü Aşağıda</span>
+              <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: 'rgba(0,0,0,0.2)', color: '#fff', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}>Kapat</button>
             </div>
             <PdfViewer file={activeStudentExam.solutionPdfFile} pageNumber={studentCurrentPage} />
           </div>

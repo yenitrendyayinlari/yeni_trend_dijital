@@ -305,3 +305,36 @@ p {
   background: var(--yt-paper-2);
 }
 .yt-subtest-bubble.done { background: var(--yt-correct); border-color: var(--yt-correct); color: #fff; }
+
+.yt-btn-correct { background: var(--yt-correct); color: #fff; border: 1.5px solid var(--yt-correct); }
+.yt-btn-correct:hover { background: #257a3e; }
+.yt-btn-correct.active { background: #1f6634; }
+
+.yt-topbar {
+  display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;
+  font-family: var(--yt-font-mono); font-size: 0.78rem; color: rgba(251,249,243,0.75);
+  margin-bottom: 14px;
+}
+
+.yt-session-card {
+  background: var(--yt-paper-2); border: 1.5px solid var(--yt-line); border-radius: 14px; padding: 24px;
+}
+
+.yt-stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.yt-stat-box {
+  background: var(--yt-paper); border: 1.5px solid var(--yt-line); border-radius: 10px;
+  padding: 12px; text-align: center;
+}
+.yt-stat-box .lbl { font-family: var(--yt-font-mono); font-size: 0.68rem; font-weight: 600; letter-spacing: 0.04em; color: var(--yt-graphite); }
+.yt-stat-box .val { font-family: var(--yt-font-mono); font-size: 1.5rem; font-weight: 600; color: var(--yt-ink); }
+.yt-stat-box.correct { background: var(--yt-correct-bg); border-color: var(--yt-correct); }
+.yt-stat-box.correct .lbl, .yt-stat-box.correct .val { color: var(--yt-correct); }
+.yt-stat-box.wrong { background: var(--yt-wrong-bg); border-color: var(--yt-wrong); }
+.yt-stat-box.wrong .lbl, .yt-stat-box.wrong .val { color: var(--yt-wrong); }
+.yt-stat-box.net { background: var(--yt-mustard-bg); border-color: var(--yt-mustard-deep); }
+.yt-stat-box.net .lbl, .yt-stat-box.net .val { color: var(--yt-mustard-deep); }
+
+.yt-kazanim-box { background: var(--yt-mustard-bg); border: 1px solid var(--yt-mustard-deep); border-radius: 10px; padding: 14px; }
+.yt-kazanim-box .head { font-weight: 600; color: var(--yt-mustard-deep); font-size: 0.9rem; margin-bottom: 8px; }
+.yt-kazanim-box li { font-size: 0.85rem; color: var(--yt-ink-2); margin-bottom: 4px; }
+.yt-kazanim-box li b { color: var(--yt-mustard-deep); }
