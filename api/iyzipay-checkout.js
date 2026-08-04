@@ -45,7 +45,10 @@ export default async function handler(req, res) {
 
   const request = {
     locale: Iyzipay.LOCALE.TR,
-    conversationId: idList,
+    // conversationId'ye alıcının e-postasını koyuyoruz; callback bu sayede
+    // ödemeyi kimin yaptığını (session'a ihtiyaç duymadan) çözebiliyor.
+    // basketId ise satın alınan içeriklerin ID listesini taşıyor.
+    conversationId: email || 'guest',
     price: price.toString(),
     paidPrice: price.toString(),
     currency: Iyzipay.CURRENCY.TRY,
