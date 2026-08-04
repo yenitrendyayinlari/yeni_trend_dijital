@@ -49,6 +49,11 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState('Tümü');
 
   const [examRatingsMap, setExamRatingsMap] = useState({});
+  const [examRatingBreakdownMap, setExamRatingBreakdownMap] = useState({});
+  const [solvedCountMap, setSolvedCountMap] = useState({});
+  const [sortOption, setSortOption] = useState('populer');
+  const [cartItems, setCartItems] = useState([]);
+  const [showCart, setShowCart] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -74,9 +79,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // exams listesi (parent/child id eşleşmesi için) yüklendikten sonra puanları hesapla.
+    // exams listesi (parent/child id eşleşmesi için) yüklendikten sonra puanları ve
+    // çözülme sayılarını hesapla.
     if (exams.length > 0) {
       fetchAllRatings();
+      fetchSolvedCounts();
     }
   }, [exams.length]);
 
@@ -94,6 +101,7 @@ export default function App() {
 
     if (!error && data) {
       const map = {};
+      const breakdown = {};
       data.forEach(item => {
         // Puan çoğu zaman alt sınava (child) ait olur, ama kartlarda üst paketin (parent)
         // puanı gösteriliyor. Bu yüzden alt sınav puanını üst paketin id'sine topluyoruz.
@@ -105,6 +113,12 @@ export default function App() {
         }
         map[targetId].total += item.rating;
         map[targetId].count += 1;
+
+        if (!breakdown[targetId]) {
+          breakdown[targetId] = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+        }
+        const star = Math.min(5, Math.max(1, Math.round(item.rating)));
+        breakdown[targetId][star] += 1;
       });
 
       const formattedMap = {};
@@ -116,6 +130,25 @@ export default function App() {
         };
       });
       setExamRatingsMap(formattedMap);
+      setExamRatingBreakdownMap(breakdown);
+    }
+  };
+
+  // Kaç öğrencinin bir içeriği tamamladığını (sosyal kanıt için) hesaplar.
+  const fetchSolvedCounts = async () => {
+    const { data, error } = await supabase
+      .from('student_exams')
+      .select('exam_id, is_finished')
+      .eq('is_finished', true);
+
+    if (!error && data) {
+      const map = {};
+      data.forEach(item => {
+        const examInfo = exams.find(e => e.id === item.exam_id);
+        const targetId = examInfo?.parentId || item.exam_id;
+        map[targetId] = (map[targetId] || 0) + 1;
+      });
+      setSolvedCountMap(map);
     }
   };
 
@@ -162,7 +195,8 @@ export default function App() {
     isParent: item.is_parent || false,
     parentId: item.parent_id || null,
     sortOrder: item.sort_order ?? 0,
-    topicMap: item.topic_map || {}
+    topicMap: item.topic_map || {},
+    campaignEndsAt: item.campaign_ends_at || null
   });
 
   const fetchPublicExams = async () => {
@@ -378,6 +412,19 @@ export default function App() {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Kampanya bitişine kalan süreyi "X gün Y saat" biçiminde döndürür; süre geçmişse null.
+  const getCampaignCountdown = (exam) => {
+    if (!exam.campaignEndsAt) return null;
+    const end = new Date(exam.campaignEndsAt).getTime();
+    const diff = end - Date.now();
+    if (diff <= 0) return null;
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    if (days > 0) return `${days} gün ${hours} saat kaldı`;
+    const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    return `${hours} saat ${mins} dk kaldı`;
   };
 
   const handleStartCreateExam = () => {
@@ -680,7 +727,10 @@ export default function App() {
     if (!confirmed) return;
 
     const paymentData = {
-      price: exam.price.toString()
+      price: exam.price.toString(),
+      email: user.email,
+      examIds: [exam.id],
+      items: [{ id: exam.id, name: exam.name || 'Dijital Sınav / Test', price: exam.price }]
     };
 
     initializePayment(paymentData, (err, result) => {
@@ -699,6 +749,56 @@ export default function App() {
         if (window.iyzipayCheckout && typeof window.iyzipayCheckout.show === 'function') {
           window.iyzipayCheckout.show();
         }
+      } else {
+        alert("İşlem başarısız: " + result.errorMessage);
+      }
+    });
+  };
+
+  // --- Sepet ---
+  const toggleCartItem = (examId) => {
+    setCartItems(prev => prev.includes(examId) ? prev.filter(id => id !== examId) : [...prev, examId]);
+  };
+
+  const handleCartCheckout = () => {
+    if (!user) {
+      alert("Ödeme yapabilmek için lütfen giriş yapın veya üye olun.");
+      setAuthMode('login');
+      setShowAuthModal(true);
+      return;
+    }
+
+    const cartExams = exams.filter(e => cartItems.includes(e.id));
+    if (cartExams.length === 0) return;
+    const cartTotal = cartExams.reduce((sum, e) => sum + (e.price || 0), 0);
+
+    const confirmed = window.confirm(`Sepetinizdeki ${cartExams.length} içerik için toplam ₺${cartTotal.toLocaleString('tr-TR')} tutarında ödeme yapılacak. Onaylıyor musunuz?`);
+    if (!confirmed) return;
+
+    const paymentData = {
+      price: cartTotal.toString(),
+      email: user.email,
+      examIds: cartExams.map(e => e.id),
+      items: cartExams.map(e => ({ id: e.id, name: e.name || 'Dijital Sınav / Test', price: e.price }))
+    };
+
+    initializePayment(paymentData, (err, result) => {
+      if (err) {
+        console.error("Ödeme hatası:", err);
+        alert("Ödeme başlatılırken bir hata oluştu.");
+        return;
+      }
+
+      if (result.status === 'success') {
+        const checkoutDiv = document.getElementById('iyzipay-checkout-form');
+        if (checkoutDiv) {
+          checkoutDiv.innerHTML = result.checkoutFormContent;
+        }
+        if (window.iyzipayCheckout && typeof window.iyzipayCheckout.show === 'function') {
+          window.iyzipayCheckout.show();
+        }
+        setCartItems([]);
+        setShowCart(false);
       } else {
         alert("İşlem başarısız: " + result.errorMessage);
       }
@@ -1437,10 +1537,18 @@ export default function App() {
 
       const childExams = exams.filter(e => e.parentId === inspectingExamId);
       const ratingInfo = examRatingsMap[inspectExam.id] || { average: '0,0', count: '0' };
+      const ratingBreakdown = examRatingBreakdownMap[inspectExam.id] || { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      const totalRatingCount = Object.values(ratingBreakdown).reduce((a, b) => a + b, 0);
+      const solvedCount = solvedCountMap[inspectExam.id] || 0;
+      const campaignCountdown = getCampaignCountdown(inspectExam);
       const isPaid = inspectExam.price && inspectExam.price > 0;
       const isPurchased = studentPurchases[inspectExam.id];
       const resData = studentResultsMap[inspectExam.id];
       const isCompleted = resData?.is_finished;
+      const inCart = cartItems.includes(inspectExam.id);
+      const relatedExams = exams
+        .filter(e => e.isPublished && !e.parentId && e.id !== inspectExam.id && e.categoryLesson === inspectExam.categoryLesson)
+        .slice(0, 3);
 
       return (
         <div className="yt-shell">
@@ -1480,12 +1588,42 @@ export default function App() {
                 {inspectExam.name || 'İsimsiz İçerik'}
               </h1>
 
-              <div className="yt-rating" style={{ marginBottom: '24px', fontSize: '0.85rem' }}>
-                <span className="stars">
-                  {'★'.repeat(Math.round(Number(ratingInfo.average.replace(',', '.')))).padEnd(5, '☆')}
-                </span>
-                {ratingInfo.average} <span className="count">({ratingInfo.count} değerlendirme)</span>
+              <div style={{ marginBottom: '10px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <div className="yt-rating" style={{ fontSize: '0.85rem' }}>
+                  <span className="stars">
+                    {'★'.repeat(Math.round(Number(ratingInfo.average.replace(',', '.')))).padEnd(5, '☆')}
+                  </span>
+                  {ratingInfo.average} <span className="count">({ratingInfo.count} değerlendirme)</span>
+                </div>
+                {solvedCount > 0 && (
+                  <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.78rem', color: 'var(--yt-graphite)' }}>
+                    · {solvedCount.toLocaleString('tr-TR')} kişi çözdü
+                  </span>
+                )}
+                {campaignCountdown && <span className="yt-countdown">⏳ Kampanya: {campaignCountdown}</span>}
               </div>
+
+              {totalRatingCount > 0 && (
+                <div className="yt-rating-histogram" style={{ marginBottom: '24px', maxWidth: '280px' }}>
+                  {[5, 4, 3, 2, 1].map(star => {
+                    const pct = totalRatingCount > 0 ? Math.round((ratingBreakdown[star] / totalRatingCount) * 100) : 0;
+                    return (
+                      <div key={star} className="yt-hist-row">
+                        <span>{star}★</span>
+                        <div className="yt-hist-track"><div className="yt-hist-fill" style={{ width: `${pct}%` }}></div></div>
+                        <span>{pct}%</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {isPaid && !isPurchased && inspectExam.pdfFile && (
+                <div className="yt-preview-panel" style={{ marginBottom: '24px' }}>
+                  <span className="yt-preview-label">Ücretsiz Önizleme — 1. Soru</span>
+                  <PdfViewer file={inspectExam.pdfFile} pageNumber={1} />
+                </div>
+              )}
 
               <div style={{ marginBottom: '24px' }}>
                 <h3 style={{ margin: '0 0 12px 0', fontSize: '0.95rem' }}>Sınav Bilgileri ve Testler</h3>
@@ -1578,20 +1716,25 @@ export default function App() {
                 </div>
 
                 {isPaid && !isPurchased && childExams.length > 0 && (
-                  <button
-                    onClick={() => {
-                      if (!user) {
-                        alert("Satın alabilmek için lütfen giriş yapın veya üye olun.");
-                        setAuthMode('login');
-                        setShowAuthModal(true);
-                        return;
-                      }
-                      handleIyzicoPayment(inspectExam);
-                    }}
-                    className="yt-btn yt-btn-buy"
-                  >
-                    Hemen Satın Al (₺{inspectExam.price}) →
-                  </button>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => toggleCartItem(inspectExam.id)} className={`yt-add-cart-btn${inCart ? ' in-cart' : ''}`}>
+                      {inCart ? '✓ Sepette' : '+ Sepete Ekle'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (!user) {
+                          alert("Satın alabilmek için lütfen giriş yapın veya üye olun.");
+                          setAuthMode('login');
+                          setShowAuthModal(true);
+                          return;
+                        }
+                        handleIyzicoPayment(inspectExam);
+                      }}
+                      className="yt-btn yt-btn-buy"
+                    >
+                      Hemen Satın Al (₺{inspectExam.price}) →
+                    </button>
+                  </div>
                 )}
 
                 {childExams.length === 0 && (
@@ -1602,6 +1745,20 @@ export default function App() {
               </div>
 
             </div>
+
+            {relatedExams.length > 0 && (
+              <div style={{ marginTop: '20px' }}>
+                <h3 style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--yt-ink)' }}>Bunlar da İlgini Çekebilir</h3>
+                <div className="yt-related-grid">
+                  {relatedExams.map(re => (
+                    <div key={re.id} className="yt-related-card" onClick={() => setInspectingExamId(re.id)}>
+                      <div className="name">{re.name || 'İsimsiz İçerik'}</div>
+                      <div className="price">{re.price > 0 ? `₺${re.price}` : 'Ücretsiz'}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </main>
           {renderAuthModal()}
         </div>
@@ -1619,6 +1776,15 @@ export default function App() {
           return false;
         }
         return true;
+      }).sort((a, b) => {
+        if (sortOption === 'ucuz') return (a.price || 0) - (b.price || 0);
+        if (sortOption === 'pahali') return (b.price || 0) - (a.price || 0);
+        if (sortOption === 'cozulen') return (solvedCountMap[b.id] || 0) - (solvedCountMap[a.id] || 0);
+        if (sortOption === 'yeni') return 0; // liste zaten created_at'e göre yeniden eskiye geliyor
+        // varsayılan: populer (puan ortalamasına göre)
+        const avgA = Number((examRatingsMap[a.id]?.average || '0').replace(',', '.'));
+        const avgB = Number((examRatingsMap[b.id]?.average || '0').replace(',', '.'));
+        return avgB - avgA;
       });
 
       const uniqueExamTypes = Array.from(
@@ -1630,6 +1796,9 @@ export default function App() {
       );
       
       const allCategories = ['Tümü', ...uniqueExamTypes];
+
+      const cartExams = exams.filter(e => cartItems.includes(e.id));
+      const cartTotal = cartExams.reduce((sum, e) => sum + (e.price || 0), 0);
 
       return (
         <div className="yt-shell">
@@ -1653,6 +1822,10 @@ export default function App() {
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+                <button onClick={() => setShowCart(true)} className="yt-cart-btn" title="Sepet">
+                  🛒
+                  {cartItems.length > 0 && <span className="yt-cart-badge">{cartItems.length}</span>}
+                </button>
                 {user ? (
                   <>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: 'var(--yt-paper)', padding: '6px 12px', borderRadius: '20px', border: '1px solid var(--yt-line)' }}>
@@ -1693,6 +1866,18 @@ export default function App() {
           </div>
 
           <main style={{ maxWidth: '920px', margin: '0 auto', padding: '0 24px 60px' }}>
+            {publishedExams.length > 0 && (
+              <div className="yt-toolbar">
+                <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.76rem', color: 'var(--yt-graphite)' }}>{publishedExams.length} içerik listeleniyor</span>
+                <select className="yt-select" value={sortOption} onChange={(e) => setSortOption(e.target.value)}>
+                  <option value="populer">En Popüler</option>
+                  <option value="yeni">En Yeni</option>
+                  <option value="cozulen">En Çok Çözülen</option>
+                  <option value="ucuz">Fiyat: Artan</option>
+                  <option value="pahali">Fiyat: Azalan</option>
+                </select>
+              </div>
+            )}
             {publishedExams.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '60px 20px', backgroundColor: 'var(--yt-paper-2)', borderRadius: '12px', border: '1.5px dashed var(--yt-line)' }}>
                 <h3 style={{ margin: '0 0 6px 0', color: 'var(--yt-ink)', fontSize: '1.1rem' }}>Aktif İçerik Bulunmuyor</h3>
@@ -1738,9 +1923,11 @@ export default function App() {
                           </div>
                         </div>
 
-                        <div style={{ display: 'flex', gap: '16px', fontFamily: 'var(--yt-font-mono)', fontSize: '0.78rem', color: 'var(--yt-graphite)', marginBottom: '12px' }}>
+                        <div style={{ display: 'flex', gap: '16px', fontFamily: 'var(--yt-font-mono)', fontSize: '0.78rem', color: 'var(--yt-graphite)', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
                           {isDeneme && <span>⏱ {exam.duration} DK</span>}
                           <span>{exam.numPages || 0} SORU</span>
+                          {solvedCountMap[exam.id] > 0 && <span>{solvedCountMap[exam.id].toLocaleString('tr-TR')} KİŞİ ÇÖZDÜ</span>}
+                          {getCampaignCountdown(exam) && <span className="yt-countdown">⏳ {getCampaignCountdown(exam)}</span>}
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
@@ -1758,15 +1945,25 @@ export default function App() {
                             {isCompleted && <span className="net"> · Net: {resData.net}</span>}
                           </div>
 
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setInspectingExamId(exam.id);
-                            }}
-                            className="yt-btn yt-btn-outline"
-                          >
-                            {isCompleted ? 'Sonucu İncele →' : 'İçeriği İncele →'}
-                          </button>
+                          <div style={{ display: 'flex', gap: '8px' }}>
+                            {isPaid && !isCompleted && !studentPurchases[exam.id] && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); toggleCartItem(exam.id); }}
+                                className={`yt-add-cart-btn${cartItems.includes(exam.id) ? ' in-cart' : ''}`}
+                              >
+                                {cartItems.includes(exam.id) ? '✓ Sepette' : '+ Sepete Ekle'}
+                              </button>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setInspectingExamId(exam.id);
+                              }}
+                              className="yt-btn yt-btn-outline"
+                            >
+                              {isCompleted ? 'Sonucu İncele →' : 'İçeriği İncele →'}
+                            </button>
+                          </div>
                         </div>
 
                       </div>
@@ -1776,6 +1973,36 @@ export default function App() {
               </div>
             )}
           </main>
+
+          {showCart && (
+            <div className="yt-cart-overlay" onClick={() => setShowCart(false)}>
+              <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Sepetim</h3>
+                  <button onClick={() => setShowCart(false)} className="yt-btn yt-btn-ghost">✕</button>
+                </div>
+
+                {cartExams.length === 0 ? (
+                  <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Sepetiniz boş. Ücretli içeriklerin yanındaki "Sepete Ekle" butonuyla ekleyebilirsiniz.</p>
+                ) : (
+                  <>
+                    {cartExams.map(ce => (
+                      <div key={ce.id} className="yt-cart-item">
+                        <span style={{ fontSize: '0.88rem', color: 'var(--yt-ink)', flex: 1 }}>{ce.name || 'İsimsiz İçerik'}</span>
+                        <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.85rem', color: 'var(--yt-ink)' }}>₺{ce.price}</span>
+                        <button onClick={() => toggleCartItem(ce.id)} className="yt-btn yt-btn-ghost" style={{ padding: '4px 8px' }}>✕</button>
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '18px 0' }}>
+                      <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.8rem', color: 'var(--yt-graphite)' }}>TOPLAM</span>
+                      <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '1.2rem', fontWeight: '600', color: 'var(--yt-ink)' }}>₺{cartTotal.toLocaleString('tr-TR')}</span>
+                    </div>
+                    <button onClick={handleCartCheckout} className="yt-btn yt-btn-buy" style={{ width: '100%' }}>Ödemeye Geç →</button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
 
           {renderAuthModal()}
         </div>
