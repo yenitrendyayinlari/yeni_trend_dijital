@@ -52,8 +52,25 @@ export default function App() {
   const [examRatingBreakdownMap, setExamRatingBreakdownMap] = useState({});
   const [solvedCountMap, setSolvedCountMap] = useState({});
   const [sortOption, setSortOption] = useState('populer');
-  const [cartItems, setCartItems] = useState([]);
+  const [cartItems, setCartItems] = useState(() => {
+    try {
+      const saved = localStorage.getItem('yt_cart_items');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [showCart, setShowCart] = useState(false);
+
+  useEffect(() => {
+    // Sepet değiştikçe tarayıcıya kaydediyoruz ki oturum kapatılıp açılsa
+    // ya da sayfa yenilense bile sepet içeriği kalıcı olsun.
+    try {
+      localStorage.setItem('yt_cart_items', JSON.stringify(cartItems));
+    } catch {
+      // localStorage kullanılamıyorsa (gizli sekme vb.) sessizce geç
+    }
+  }, [cartItems]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
