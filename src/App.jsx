@@ -65,6 +65,13 @@ export default function App() {
   const [reviewTextInput, setReviewTextInput] = useState('');
   const [previewTestIndex, setPreviewTestIndex] = useState(0);
 
+  const [showAccountPage, setShowAccountPage] = useState(false);
+  const [accountTab, setAccountTab] = useState('exams');
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [passwordChangeLoading, setPasswordChangeLoading] = useState(false);
+  const [passwordChangeMessage, setPasswordChangeMessage] = useState(null);
+
   useEffect(() => {
     // Sepet değiştikçe tarayıcıya kaydediyoruz ki oturum kapatılıp açılsa
     // ya da sayfa yenilense bile sepet içeriği kalıcı olsun.
@@ -354,6 +361,32 @@ export default function App() {
     }
   };
 
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    setPasswordChangeMessage(null);
+
+    if (newPasswordInput.length < 6) {
+      setPasswordChangeMessage({ type: 'error', text: 'Şifre en az 6 karakter olmalı.' });
+      return;
+    }
+    if (newPasswordInput !== confirmPasswordInput) {
+      setPasswordChangeMessage({ type: 'error', text: 'Şifreler birbiriyle eşleşmiyor.' });
+      return;
+    }
+
+    setPasswordChangeLoading(true);
+    const { error } = await supabase.auth.updateUser({ password: newPasswordInput });
+    setPasswordChangeLoading(false);
+
+    if (error) {
+      setPasswordChangeMessage({ type: 'error', text: error.message });
+    } else {
+      setPasswordChangeMessage({ type: 'success', text: '✓ Şifreniz başarıyla güncellendi.' });
+      setNewPasswordInput('');
+      setConfirmPasswordInput('');
+    }
+  };
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setUser(null);
@@ -363,6 +396,7 @@ export default function App() {
     setIsCreatingExam(false);
     setActiveStudentExamId(null);
     setInspectingExamId(null);
+    setShowAccountPage(false);
     setStudentResultsMap({});
     setStudentPurchases({});
     fetchPublicExams();
@@ -1639,6 +1673,158 @@ export default function App() {
     );
   };
 
+  if (showAccountPage && user) {
+    const myPurchases = exams.filter(e => studentPurchases[e.id]);
+    const mySolved = exams.filter(e => studentResultsMap[e.id]?.is_finished);
+
+    return (
+      <div className="yt-shell">
+        <header className="yt-header">
+          <div className="yt-header-inner">
+            <div className="yt-brand">
+              <span className="yt-brand-mark">YT</span>
+              Yeni Trend
+            </div>
+            <div style={{ flex: 1 }}></div>
+            <button onClick={() => setShowAccountPage(false)} className="yt-btn yt-btn-ghost">
+              ◀ Kataloğa Dön
+            </button>
+          </div>
+          <div className="yt-perf"></div>
+        </header>
+
+        <div className="wrap" style={{ maxWidth: '840px', margin: '0 auto', padding: '32px 24px 60px' }}>
+          <h1 style={{ fontFamily: 'var(--yt-font-display)', fontWeight: '600', fontSize: '1.5rem', color: 'var(--yt-ink)', margin: '0 0 4px' }}>Hesabım</h1>
+          <p style={{ color: 'var(--yt-graphite)', fontSize: '0.88rem', margin: '0 0 24px' }}>{user.email}</p>
+
+          <div className="yt-chip-row" style={{ padding: '0 0 20px' }}>
+            <button className={`yt-chip${accountTab === 'exams' ? ' active' : ''}`} onClick={() => setAccountTab('exams')}>Sınavlarım</button>
+            <button className={`yt-chip${accountTab === 'settings' ? ' active' : ''}`} onClick={() => setAccountTab('settings')}>Ayarlar</button>
+          </div>
+
+          {accountTab === 'exams' ? (
+            <div>
+              <div className="yt-session-card" style={{ marginBottom: '20px' }}>
+                <h3 className="yt-admin-section-title">Satın Aldıklarım ({myPurchases.length})</h3>
+                {myPurchases.length === 0 ? (
+                  <div style={{ color: 'var(--yt-graphite-soft)', fontSize: '0.9rem', textAlign: 'center', padding: '20px 0' }}>
+                    Henüz satın aldığınız bir içerik yok.
+                  </div>
+                ) : (
+                  <div className="yt-subtest-list">
+                    {myPurchases.map(e => (
+                      <div key={e.id} className="yt-subtest-row">
+                        <div style={{ flex: 1, minWidth: '160px' }}>
+                          <strong style={{ color: 'var(--yt-ink)' }}>{e.name || 'İsimsiz'}</strong>
+                          <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px' }}>
+                            {e.categoryLesson} · {e.categoryExamType}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => { setInspectingExamId(e.id); setShowAccountPage(false); }}
+                          className="yt-btn yt-btn-outline"
+                        >
+                          İçeriği Gör
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="yt-session-card">
+                <h3 className="yt-admin-section-title">Çözdüğüm Testler ({mySolved.length})</h3>
+                {mySolved.length === 0 ? (
+                  <div style={{ color: 'var(--yt-graphite-soft)', fontSize: '0.9rem', textAlign: 'center', padding: '20px 0' }}>
+                    Henüz tamamladığınız bir test yok.
+                  </div>
+                ) : (
+                  <div className="yt-subtest-list">
+                    {mySolved.map(e => {
+                      const res = studentResultsMap[e.id];
+                      return (
+                        <div key={e.id} className="yt-subtest-row">
+                          <div className="yt-subtest-bubble done">✓</div>
+                          <div style={{ flex: 1, minWidth: '160px' }}>
+                            <strong style={{ color: 'var(--yt-ink)' }}>{e.name || 'İsimsiz Test'}</strong>
+                            <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px', display: 'flex', gap: '10px' }}>
+                              <span style={{ color: 'var(--yt-correct)' }}>D: {res.correct}</span>
+                              <span style={{ color: 'var(--yt-wrong)' }}>Y: {res.wrong}</span>
+                              <span>Net: {res.net}</span>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setActiveStudentExamId(e.id);
+                              setInspectingExamId(null);
+                              setStudentAnswers(res.answers || {});
+                              setStudentCurrentPage(1);
+                              setIsExamFinished(true);
+                              setShowResults(true);
+                              setViewingSolutionQ(false);
+                              setShowAccountPage(false);
+                            }}
+                            className="yt-btn yt-btn-outline"
+                          >
+                            Sonucu İncele
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="yt-session-card" style={{ maxWidth: '440px' }}>
+              <h3 className="yt-admin-section-title">Şifre Değiştir</h3>
+              <form onSubmit={handleChangePassword}>
+                <div className="yt-field">
+                  <label className="yt-label">Yeni Şifre</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={newPasswordInput}
+                    onChange={(e) => setNewPasswordInput(e.target.value)}
+                    placeholder="••••••••"
+                    className="yt-input"
+                  />
+                </div>
+                <div className="yt-field">
+                  <label className="yt-label">Yeni Şifre (Tekrar)</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={confirmPasswordInput}
+                    onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                    placeholder="••••••••"
+                    className="yt-input"
+                  />
+                </div>
+
+                {passwordChangeMessage && (
+                  <div style={{
+                    padding: '10px 12px', borderRadius: '8px', fontSize: '0.85rem', marginBottom: '16px',
+                    backgroundColor: passwordChangeMessage.type === 'success' ? 'var(--yt-correct-bg)' : 'var(--yt-wrong-bg)',
+                    color: passwordChangeMessage.type === 'success' ? 'var(--yt-correct)' : 'var(--yt-wrong)'
+                  }}>
+                    {passwordChangeMessage.text}
+                  </div>
+                )}
+
+                <button type="submit" disabled={passwordChangeLoading} className="yt-btn yt-btn-primary yt-btn-block">
+                  {passwordChangeLoading ? 'Güncelleniyor...' : 'Şifreyi Güncelle'}
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (inspectingExamId) {
       const inspectExam = exams.find(e => e.id === inspectingExamId);
       if (!inspectExam) return null;
@@ -1667,9 +1853,14 @@ export default function App() {
               </button>
               <div style={{ flex: 1, fontFamily: 'var(--yt-font-display)', fontWeight: '600', fontSize: '1.05rem', color: 'var(--yt-ink)' }}>İçerik Detayları</div>
               {user ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: 'var(--yt-paper)', padding: '6px 12px', borderRadius: '20px', border: '1px solid var(--yt-line)' }}>
-                  <span style={{ width: '8px', height: '8px', backgroundColor: 'var(--yt-correct)', borderRadius: '50%' }}></span>
-                  <span style={{ fontSize: '0.85rem', fontWeight: '500', color: 'var(--yt-ink)' }}>{user.email}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <button onClick={() => setShowAccountPage(true)} className="yt-btn yt-btn-ghost">
+                    👤 Hesabım
+                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: 'var(--yt-paper)', padding: '6px 12px', borderRadius: '20px', border: '1px solid var(--yt-line)' }}>
+                    <span style={{ width: '8px', height: '8px', backgroundColor: 'var(--yt-correct)', borderRadius: '50%' }}></span>
+                    <span style={{ fontSize: '0.85rem', fontWeight: '500', color: 'var(--yt-ink)' }}>{user.email}</span>
+                  </div>
                 </div>
               ) : (
                 <div style={{ display: 'flex', gap: '8px' }}>
@@ -2006,6 +2197,9 @@ export default function App() {
                       <span style={{ width: '8px', height: '8px', backgroundColor: 'var(--yt-correct)', borderRadius: '50%' }}></span>
                       <span style={{ fontSize: '0.85rem', fontWeight: '500', color: 'var(--yt-ink)' }}>{user.email}</span>
                     </div>
+                    <button onClick={() => setShowAccountPage(true)} className="yt-btn yt-btn-ghost">
+                      👤 Hesabım
+                    </button>
                     <button onClick={handleLogout} className="yt-btn yt-btn-ghost">
                       Çıkış Yap
                     </button>
