@@ -61,6 +61,9 @@ export default function App() {
     }
   });
   const [showCart, setShowCart] = useState(false);
+  const [productReviews, setProductReviews] = useState([]);
+  const [reviewTextInput, setReviewTextInput] = useState('');
+  const [previewTestIndex, setPreviewTestIndex] = useState(0);
 
   useEffect(() => {
     // Sepet değiştikçe tarayıcıya kaydediyoruz ki oturum kapatılıp açılsa
@@ -109,6 +112,16 @@ export default function App() {
       solutionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   }, [viewingSolutionQ]);
+
+  useEffect(() => {
+    if (!inspectingExamId) {
+      setProductReviews([]);
+      return;
+    }
+    setPreviewTestIndex(0);
+    const childIds = exams.filter(e => e.parentId === inspectingExamId).map(e => e.id);
+    fetchProductReviews(inspectingExamId, childIds);
+  }, [inspectingExamId, exams.length]);
 
   useEffect(() => {
     // İyzico ödeme formundan siteye "?payment=success" gibi bir parametreyle
@@ -283,7 +296,8 @@ export default function App() {
             wrong: res.wrong_count,
             empty: res.empty_count,
             net: res.net,
-            rating: res.rating || 0
+            rating: res.rating || 0,
+            reviewText: res.review_text || ''
           };
         });
         setStudentResultsMap(resultMap);
@@ -981,6 +995,64 @@ export default function App() {
     }
   };
 
+  const handleSubmitReview = async (reviewText) => {
+    if (!user || !activeStudentExamId) return;
+
+    const existingRes = studentResultsMap[activeStudentExamId] || {};
+    const answersToSave = existingRes.answers || studentAnswers;
+    const correctC = existingRes.correct ?? 0;
+    const wrongC = existingRes.wrong ?? 0;
+    const emptyC = existingRes.empty ?? 0;
+    const netC = existingRes.net ?? 0;
+    const isFin = existingRes.is_finished ?? false;
+    const ratingC = existingRes.rating ?? 0;
+
+    const { error } = await supabase
+      .from('student_exams')
+      .upsert([
+        {
+          student_email: user.email,
+          exam_id: activeStudentExamId,
+          answers: answersToSave,
+          correct_count: correctC,
+          wrong_count: wrongC,
+          empty_count: emptyC,
+          net: netC,
+          is_finished: isFin,
+          rating: ratingC,
+          review_text: reviewText
+        }
+      ], { onConflict: 'student_email, exam_id' });
+
+    if (error) {
+      console.error("Yorum kaydedilemedi (review_text kolonu eksik olabilir):", error);
+      alert("Yorum kaydedilemedi. Veritabanına 'review_text' kolonu eklenmiş mi kontrol edin.");
+    } else {
+      setStudentResultsMap(prev => ({
+        ...prev,
+        [activeStudentExamId]: { ...existingRes, reviewText: reviewText }
+      }));
+      alert("✓ Yorumunuz kaydedildi, teşekkürler!");
+    }
+  };
+
+  const fetchProductReviews = async (parentId, childIds) => {
+    const allIds = [parentId, ...childIds];
+    const { data, error } = await supabase
+      .from('student_exams')
+      .select('student_email, rating, review_text')
+      .in('exam_id', allIds)
+      .not('review_text', 'is', null)
+      .neq('review_text', '');
+
+    if (!error && data) {
+      setProductReviews(data);
+    } else if (error) {
+      // review_text kolonu henüz eklenmemiş olabilir, sessizce geç
+      setProductReviews([]);
+    }
+  };
+
   // ==========================================
   // RENDER: YÖNETİCİ EKRANI
   // ==========================================
@@ -1656,12 +1728,78 @@ export default function App() {
                 </div>
               )}
 
-              {isPaid && !isPurchased && inspectExam.pdfFile && (
-                <div className="yt-preview-panel" style={{ marginBottom: '24px' }}>
-                  <span className="yt-preview-label">Ücretsiz Önizleme — 1. Soru</span>
-                  <PdfViewer file={inspectExam.pdfFile} pageNumber={1} />
+              {productReviews.length > 0 && (
+                <div style={{ marginBottom: '24px' }}>
+                  <h3 style={{ margin: '0 0 12px 0', fontSize: '0.95rem' }}>Öğrenci Yorumları ({productReviews.length})</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {productReviews.map((rev, idx) => {
+                      const namePart = (rev.student_email || 'ogrenci').split('@')[0];
+                      const maskedName = namePart.length > 2
+                        ? namePart.slice(0, 2) + '*'.repeat(Math.max(3, namePart.length - 2))
+                        : namePart + '***';
+                      return (
+                        <div key={idx} style={{ backgroundColor: 'var(--yt-paper-2)', border: '1px solid var(--yt-line)', borderRadius: '10px', padding: '12px 14px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <span style={{ fontWeight: '600', fontSize: '0.85rem', color: 'var(--yt-ink)', textTransform: 'capitalize' }}>{maskedName}</span>
+                            <span style={{ color: 'var(--yt-mustard-deep)', fontSize: '0.85rem' }}>{'★'.repeat(rev.rating)}{'☆'.repeat(5 - rev.rating)}</span>
+                          </div>
+                          <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--yt-graphite)', lineHeight: 1.5 }}>{rev.review_text}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
+
+              {(() => {
+                if (!isPaid || isPurchased || childExams.length === 0) {
+                  // Tek testlik / eski tip ürünlerde eski davranış: tek önizleme paneli
+                  const previewSourceExam = childExams.length > 0 ? childExams[0] : inspectExam;
+                  return isPaid && !isPurchased && previewSourceExam.pdfFile ? (
+                    <div className="yt-preview-panel" style={{ marginBottom: '24px' }}>
+                      <span className="yt-preview-label">Ücretsiz Önizleme — 1. Soru</span>
+                      <PdfViewer file={previewSourceExam.pdfFile} pageNumber={1} />
+                    </div>
+                  ) : null;
+                }
+
+                // Çoklu test varsa, farklı testlerden örnek gösterecek şekilde
+                // 3 test seçiyoruz (baştan, ortadan, sondan) — kalite sürekliliğini
+                // göstermek için tek testten değil, çeşitli testlerden örnek.
+                const sampleCount = Math.min(3, childExams.length);
+                const sampleIndexes = sampleCount === 1
+                  ? [0]
+                  : Array.from({ length: sampleCount }, (_, i) => Math.round(i * (childExams.length - 1) / (sampleCount - 1)));
+                const uniqueIndexes = [...new Set(sampleIndexes)];
+                const sampleTests = uniqueIndexes.map(i => childExams[i]).filter(t => t.pdfFile);
+
+                if (sampleTests.length === 0) return null;
+
+                const activeIdx = Math.min(previewTestIndex, sampleTests.length - 1);
+                const activeTest = sampleTests[activeIdx];
+
+                return (
+                  <div className="yt-preview-panel" style={{ marginBottom: '24px' }}>
+                    <span className="yt-preview-label">Ücretsiz Önizleme — Farklı Testlerden Örnek Sorular</span>
+                    {sampleTests.length > 1 && (
+                      <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                        {sampleTests.map((t, idx) => (
+                          <button
+                            key={t.id}
+                            onClick={() => setPreviewTestIndex(idx)}
+                            className={`yt-chip${idx === activeIdx ? ' active' : ''}`}
+                            style={{ fontSize: '0.7rem', padding: '5px 10px' }}
+                          >
+                            {t.name || `Test ${idx + 1}`}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <PdfViewer file={activeTest.pdfFile} pageNumber={1} />
+                  </div>
+                );
+              })()}
+
 
               <div style={{ marginBottom: '24px' }}>
                 <h3 style={{ margin: '0 0 12px 0', fontSize: '0.95rem' }}>Sınav Bilgileri ve Testler</h3>
@@ -2099,6 +2237,22 @@ export default function App() {
                     Puanınız kaydedildi ({myActiveRating} Yıldız)
                   </div>
                 )}
+
+                <div style={{ marginTop: '14px', textAlign: 'left' }}>
+                  <textarea
+                    value={reviewTextInput || studentResultsMap[activeStudentExamId]?.reviewText || ''}
+                    onChange={(e) => setReviewTextInput(e.target.value)}
+                    placeholder="İsteğe bağlı: bu içerik hakkında kısa bir yorum bırakın..."
+                    style={{ width: '100%', minHeight: '60px', padding: '8px', borderRadius: '8px', border: '1px solid var(--yt-line)', fontFamily: 'var(--yt-font-body)', fontSize: '0.85rem', boxSizing: 'border-box', resize: 'vertical' }}
+                  />
+                  <button
+                    onClick={() => handleSubmitReview(reviewTextInput || studentResultsMap[activeStudentExamId]?.reviewText || '')}
+                    className="yt-btn yt-btn-outline"
+                    style={{ marginTop: '8px', fontSize: '0.8rem' }}
+                  >
+                    Yorumu Kaydet
+                  </button>
+                </div>
               </div>
             )}
 
