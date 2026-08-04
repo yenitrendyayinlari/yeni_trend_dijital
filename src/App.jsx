@@ -1930,6 +1930,10 @@ export default function App() {
                   const ratingInfo = examRatingsMap[exam.id] || { average: '0,0', count: '0' };
                   const isPaid = exam.price && exam.price > 0;
                   const bubbleLabel = isCompleted ? '✓' : (isDeneme ? 'D' : 'T');
+                  const childTests = exams.filter(e => e.parentId === exam.id);
+                  const totalQuestions = childTests.length > 0
+                    ? childTests.reduce((sum, t) => sum + (t.numPages || 0), 0)
+                    : (exam.numPages || 0);
 
                   return (
                     <div
@@ -1963,7 +1967,8 @@ export default function App() {
 
                         <div style={{ display: 'flex', gap: '16px', fontFamily: 'var(--yt-font-mono)', fontSize: '0.78rem', color: 'var(--yt-graphite)', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
                           {isDeneme && <span>⏱ {exam.duration} DK</span>}
-                          <span>{exam.numPages || 0} SORU</span>
+                          <span>{totalQuestions} SORU</span>
+                          {childTests.length > 0 && <span>{childTests.length} TEST</span>}
                           {solvedCountMap[exam.id] > 0 && <span>{solvedCountMap[exam.id].toLocaleString('tr-TR')} KİŞİ ÇÖZDÜ</span>}
                           {getCampaignCountdown(exam) && <span className="yt-countdown">⏳ {getCampaignCountdown(exam)}</span>}
                         </div>
