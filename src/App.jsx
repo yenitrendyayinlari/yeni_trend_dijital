@@ -93,6 +93,27 @@ export default function App() {
     }
   }, [viewingSolutionQ]);
 
+  useEffect(() => {
+    // İyzico ödeme formundan siteye "?payment=success" gibi bir parametreyle
+    // geri dönüldüğünde kullanıcıyı bilgilendirip satın alma listesini tazeliyoruz.
+    const params = new URLSearchParams(window.location.search);
+    const paymentStatus = params.get('payment');
+    if (!paymentStatus) return;
+
+    if (paymentStatus === 'success') {
+      alert('✓ Ödemeniz başarıyla tamamlandı! Satın aldığınız içeriklere artık erişebilirsiniz.');
+      if (user) fetchUserPurchases(user.email);
+    } else if (paymentStatus === 'failed') {
+      alert('Ödeme tamamlanamadı ya da iptal edildi.');
+    } else {
+      alert('Ödeme sırasında bir sorun oluştu. Lütfen tekrar deneyin ya da bizimle iletişime geçin.');
+    }
+
+    // URL'i temizleyip parametrenin sayfa yenilendiğinde tekrar tetiklenmesini önlüyoruz.
+    const cleanUrl = window.location.origin + window.location.pathname;
+    window.history.replaceState({}, '', cleanUrl);
+  }, [user]);
+
   const fetchAllRatings = async () => {
     const { data, error } = await supabase
       .from('student_exams')
