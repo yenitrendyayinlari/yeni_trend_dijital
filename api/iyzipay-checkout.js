@@ -11,15 +11,45 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { price, email, examId } = req.body;
+  // items: [{ id, name, price }, ...]  -> sepetteki her içerik için tek tek gönderilir.
+  // Geriye dönük uyumluluk için tek examId ile çalışan eski çağrılar da desteklenir.
+  const { price, email, examId, examIds, items } = req.body;
+
+  let basketItems;
+  if (Array.isArray(items) && items.length > 0) {
+    basketItems = items.map((it) => ({
+      id: it.id.toString(),
+      name: it.name || 'Dijital Sınav / Test',
+      category1: 'Eğitim',
+      itemType: Iyzipay.BASKET_ITEM_TYPE.VIRTUAL,
+      price: Number(it.price).toString()
+    }));
+  } else {
+    // eski tek-ürün çağrısı
+    basketItems = [
+      {
+        id: examId ? examId.toString() : 'BI101',
+        name: 'Dijital Sınav / Test',
+        category1: 'Eğitim',
+        itemType: Iyzipay.BASKET_ITEM_TYPE.VIRTUAL,
+        price: price.toString()
+      }
+    ];
+  }
+
+  // basketId/conversationId'ye, ödeme başarılı olduğunda callback tarafında hangi
+  // içeriklerin satın alındığını çözebilmek için tüm examId'leri virgülle ayırarak koyuyoruz.
+  const idList = Array.isArray(examIds) && examIds.length > 0
+    ? examIds.join(',')
+    : (examId ? examId.toString() : '123456789');
 
   const request = {
     locale: Iyzipay.LOCALE.TR,
-    conversationId: examId ? examId.toString() : '123456789',
+    conversationId: idList,
     price: price.toString(),
     paidPrice: price.toString(),
     currency: Iyzipay.CURRENCY.TRY,
-    basketId: examId ? examId.toString() : 'B67832',
+    basketId: idList,
     paymentGroup: Iyzipay.PAYMENT_GROUP.PRODUCT,
     callbackUrl: `${req.headers.origin}/api/iyzipay-callback`,
     buyer: {
@@ -51,15 +81,7 @@ export default async function handler(req, res) {
       address: 'Türkiye',
       zipCode: '06000'
     },
-    basketItems: [
-      {
-        id: examId ? examId.toString() : 'BI101',
-        name: 'Dijital Sınav / Test',
-        category1: 'Eğitim',
-        itemType: Iyzipay.BASKET_ITEM_TYPE.VIRTUAL,
-        price: price.toString()
-      }
-    ]
+    basketItems
   };
 
   iyzipay.checkoutFormInitialize.create(request, (err, result) => {
