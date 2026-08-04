@@ -402,3 +402,89 @@ p {
 .yt-related-card:hover { border-color: var(--yt-ink); }
 .yt-related-card .name { font-family: var(--yt-font-display); font-weight: 600; font-size: 0.85rem; color: var(--yt-ink); margin-bottom: 6px; line-height: 1.3; }
 .yt-related-card .price { font-family: var(--yt-font-mono); font-size: 0.8rem; color: var(--yt-graphite); }
+
+/* ============================================================
+   Modal / form bileşenleri (Giriş-Kayıt modalı ve admin formları
+   için ortak stiller)
+   ============================================================ */
+
+.yt-modal-overlay {
+  position: fixed; inset: 0; background: rgba(23, 33, 58, 0.55);
+  display: flex; justify-content: center; align-items: center; z-index: 1000;
+  padding: 20px;
+}
+.yt-modal-card {
+  width: 100%; max-width: 400px; background: var(--yt-paper-2);
+  border-radius: 14px; border: 1.5px solid var(--yt-line);
+  padding: 30px; box-shadow: var(--yt-shadow); position: relative;
+}
+.yt-modal-close {
+  position: absolute; top: 14px; right: 14px; background: none; border: none;
+  font-size: 1.1rem; cursor: pointer; color: var(--yt-graphite-soft); line-height: 1;
+  width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+}
+.yt-modal-close:hover { background: var(--yt-paper); color: var(--yt-ink); }
+.yt-modal-title {
+  text-align: center; font-family: var(--yt-font-display); font-weight: 600; font-size: 1.25rem;
+  color: var(--yt-ink); margin: 0 0 24px;
+}
+
+.yt-field { margin-bottom: 16px; }
+.yt-field-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.yt-label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--yt-ink-2); margin-bottom: 6px; }
+.yt-input {
+  width: 100%; padding: 11px 12px; border-radius: 8px; border: 1.5px solid var(--yt-line);
+  font-family: var(--yt-font-body); font-size: 0.92rem; color: var(--yt-ink);
+  background: var(--yt-paper-2); box-sizing: border-box;
+}
+.yt-input:focus { outline: none; border-color: var(--yt-ink); }
+.yt-input::placeholder { color: var(--yt-graphite-soft); }
+
+.yt-link-btn {
+  background: none; border: none; color: var(--yt-mustard-deep); font-weight: 600;
+  cursor: pointer; padding: 0; font-size: inherit; font-family: inherit;
+}
+.yt-link-btn:hover { text-decoration: underline; }
+
+.yt-divider-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.yt-divider-row .line { flex: 1; height: 1px; background: var(--yt-line); }
+.yt-divider-row .word { font-size: 0.72rem; color: var(--yt-graphite-soft); font-family: var(--yt-font-mono); text-transform: uppercase; }
+
+.yt-btn-block { width: 100%; justify-content: center; padding: 12px; font-size: 0.95rem; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+.yt-btn-block:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.yt-google-btn {
+  width: 100%; padding: 11px; background: var(--yt-paper-2); color: var(--yt-ink-2);
+  border: 1.5px solid var(--yt-line); border-radius: 8px; font-weight: 600; font-size: 0.9rem;
+  cursor: pointer; margin-bottom: 16px; display: flex; align-items: center; justify-content: center; gap: 8px;
+  font-family: var(--yt-font-body);
+}
+.yt-google-btn:hover { border-color: var(--yt-ink); }
+
+.yt-form-foot { text-align: center; font-size: 0.85rem; color: var(--yt-graphite); }
+
+/* --- admin panel: genel form elemanları --- */
+.yt-admin-panel {
+  background: var(--yt-paper-2); border: 1.5px solid var(--yt-line); border-radius: 14px; padding: 26px;
+}
+.yt-admin-section-title {
+  font-family: var(--yt-font-display); font-weight: 600; font-size: 1rem; color: var(--yt-ink);
+  margin: 0 0 14px;
+}
+.yt-btn-add-dashed {
+  width: 100%; padding: 10px; font-size: 0.88rem; font-weight: 600; color: var(--yt-mustard-deep);
+  background: var(--yt-mustard-bg); border: 1.5px dashed var(--yt-mustard-deep); border-radius: 8px;
+  cursor: pointer; margin-bottom: 16px; font-family: var(--yt-font-body);
+}
+.yt-btn-add-dashed:hover { background: var(--yt-mustard); color: var(--yt-ink); }
+.yt-btn-full-primary {
+  width: 100%; padding: 10px; font-size: 0.9rem; font-weight: 600; color: var(--yt-paper-2);
+  background: var(--yt-ink); border: none; border-radius: 8px; cursor: pointer; margin-bottom: 16px;
+  font-family: var(--yt-font-body);
+}
+.yt-btn-full-primary:hover { background: var(--yt-ink-2); }
+.yt-edit-link {
+  background: none; border: none; color: var(--yt-mustard-deep); font-weight: 600; font-size: 0.8rem;
+  cursor: pointer; padding: 0; font-family: var(--yt-font-body);
+}
+.yt-edit-link:hover { text-decoration: underline; }

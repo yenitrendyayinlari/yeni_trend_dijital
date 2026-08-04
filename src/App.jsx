@@ -1072,7 +1072,7 @@ export default function App() {
         </header>
 
         {authLoading && (
-          <div style={{ textAlign: 'center', padding: '10px', backgroundColor: '#eff6ff', color: '#1e40af', marginBottom: '16px', borderRadius: '6px', fontWeight: 'bold' }}>
+          <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'var(--yt-mustard-bg)', color: 'var(--yt-mustard-deep)', marginBottom: '16px', borderRadius: '6px', fontWeight: 'bold' }}>
             ⏳ İşlem yapılıyor, lütfen bekleyin...
           </div>
         )}
@@ -1081,7 +1081,7 @@ export default function App() {
           <div>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h2 style={{ margin: 0 }}>Tüm Sınavlar ve Paketler</h2>
-              <button onClick={handleStartCreateExam} style={{ padding: '10px 20px', backgroundColor: '#2563eb', color: '#fff', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', border: 'none' }}>
+              <button onClick={handleStartCreateExam} className="yt-btn yt-btn-primary">
                 + Yeni Sınav / Paket Oluştur
               </button>
             </div>
@@ -1219,7 +1219,8 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleSaveNewExam}
-                style={{ flex: 1, padding: '12px', fontSize: '0.95rem', fontWeight: 'bold', color: '#ffffff', backgroundColor: '#2563eb', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
+                className="yt-btn yt-btn-primary"
+                style={{ flex: 1, padding: '12px', fontSize: '0.95rem' }}
               >
                 Kaydet
               </button>
@@ -1265,12 +1266,13 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => setActiveSubExamId(null)}
-                        style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', fontSize: '0.85rem', fontWeight: 'bold', color: '#2563eb', backgroundColor: '#eff6ff', borderRadius: '6px', border: '1px solid #bfdbfe', cursor: 'pointer', marginBottom: '16px' }}
+                        className="yt-btn yt-btn-outline"
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '16px' }}
                       >
                         ◀ Test Listesine Dön
                       </button>
 
-                      <div style={{ padding: '14px', borderRadius: '8px', border: '2px solid #2563eb', backgroundColor: '#f8fafc' }}>
+                      <div className="yt-admin-panel" style={{ padding: '14px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                           <strong style={{ color: '#0f172a', fontSize: '0.95rem' }}>Test {editingIndex + 1}</strong>
                           <button
@@ -1522,7 +1524,7 @@ export default function App() {
                           </div>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-                          <span style={{ color: '#2563eb', fontWeight: 'bold', fontSize: '0.8rem' }}>Düzenle ▸</span>
+                          <span className="yt-edit-link">Düzenle ▸</span>
                           <button
                             onClick={(e) => { e.stopPropagation(); deleteExam(subExam.id); }}
                             style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}
@@ -1541,7 +1543,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={handleAddSubTest}
-                  style={{ width: '100%', padding: '10px', fontSize: '0.9rem', fontWeight: 'bold', color: '#2563eb', backgroundColor: '#eff6ff', borderRadius: '6px', border: '1px dashed #2563eb', cursor: 'pointer', marginBottom: '16px' }}
+                  className="yt-btn-add-dashed"
                 >
                   + Yeni Test Ekle
                 </button>
@@ -1554,7 +1556,7 @@ export default function App() {
                     setActiveAdminExamId(null);
                     setActiveSubExamId(null);
                   }}
-                  style={{ width: '100%', padding: '10px', fontSize: '0.9rem', fontWeight: 'bold', color: '#ffffff', backgroundColor: '#2563eb', borderRadius: '6px', border: 'none', cursor: 'pointer' }}
+                  className="yt-btn-full-primary"
                 >
                   Listeye Dön
                 </button>
@@ -1575,11 +1577,11 @@ export default function App() {
     const renderAuthModal = () => {
     if (!showAuthModal) return null;
     return (
-      <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 }}>
-        <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', width: '100%', maxWidth: '400px', backgroundColor: '#ffffff', borderRadius: '12px', border: '1px solid #cbd5e1', padding: '30px', boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1)', color: '#1e293b', position: 'relative' }}>
-          <button onClick={() => setShowAuthModal(false)} style={{ position: 'absolute', top: '15px', right: '15px', background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#64748b' }}>✕</button>
+      <div className="yt-modal-overlay">
+        <div className="yt-modal-card">
+          <button onClick={() => setShowAuthModal(false)} className="yt-modal-close">✕</button>
 
-          <h2 style={{ textAlign: 'center', color: '#0f172a', marginBottom: '24px' }}>
+          <h2 className="yt-modal-title">
             {authMode === 'login' && '🔑 Kullanıcı Girişi'}
             {authMode === 'register' && '📝 Yeni Hesap Oluştur'}
             {authMode === 'forgot' && '🔒 Şifremi Unuttum'}
@@ -1587,53 +1589,49 @@ export default function App() {
 
           {authMode !== 'forgot' && (
             <>
-              <button
-                type="button"
-                onClick={handleGoogleSignIn}
-                style={{ width: '100%', padding: '11px', backgroundColor: '#ffffff', color: '#334155', border: '1px solid #cbd5e1', borderRadius: '6px', fontWeight: '600', fontSize: '0.9rem', cursor: 'pointer', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
-              >
+              <button type="button" onClick={handleGoogleSignIn} className="yt-google-btn">
                 <span style={{ fontSize: '1.1rem' }}>G</span> Google ile Devam Et
               </button>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-                <div style={{ flex: 1, height: '1px', backgroundColor: '#e2e8f0' }}></div>
-                <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>veya</span>
-                <div style={{ flex: 1, height: '1px', backgroundColor: '#e2e8f0' }}></div>
+              <div className="yt-divider-row">
+                <div className="line"></div>
+                <span className="word">veya</span>
+                <div className="line"></div>
               </div>
             </>
           )}
 
           <form onSubmit={handleAuth}>
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '6px' }}>E-posta Adresi:</label>
-              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ornek@mail.com" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} />
+            <div className="yt-field">
+              <label className="yt-label">E-posta Adresi:</label>
+              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ornek@mail.com" className="yt-input" />
             </div>
 
             {authMode !== 'forgot' && (
-              <div style={{ marginBottom: '20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <label style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Şifre:</label>
+              <div className="yt-field">
+                <div className="yt-field-row">
+                  <label className="yt-label" style={{ marginBottom: 0 }}>Şifre:</label>
                   {authMode === 'login' && (
-                    <button type="button" onClick={() => setAuthMode('forgot')} style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '0.75rem', cursor: 'pointer', padding: 0 }}>Şifremi Unuttum?</button>
+                    <button type="button" onClick={() => setAuthMode('forgot')} className="yt-link-btn" style={{ fontSize: '0.75rem' }}>Şifremi Unuttum?</button>
                   )}
                 </div>
-                <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} />
+                <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="yt-input" />
               </div>
             )}
 
-            <button type="submit" disabled={authLoading} style={{ width: '100%', padding: '12px', backgroundColor: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer', marginBottom: '16px' }}>
+            <button type="submit" disabled={authLoading} className="yt-btn yt-btn-primary yt-btn-block">
               {authLoading ? 'İşleniyor...' : (authMode === 'login' ? 'Giriş Yap' : authMode === 'register' ? 'Kayıt Ol' : 'Sıfırlama Bağlantısı Gönder')}
             </button>
           </form>
 
-          <div style={{ textAlign: 'center', fontSize: '0.85rem' }}>
+          <div className="yt-form-foot">
             {authMode === 'login' && (
-              <span>Hesabınız yok mu? <button onClick={() => setAuthMode('register')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>Kayıt Olun</button></span>
+              <span>Hesabınız yok mu? <button onClick={() => setAuthMode('register')} className="yt-link-btn">Kayıt Olun</button></span>
             )}
             {authMode === 'register' && (
-              <span>Zaten hesabınız var mı? <button onClick={() => setAuthMode('login')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>Giriş Yapın</button></span>
+              <span>Zaten hesabınız var mı? <button onClick={() => setAuthMode('login')} className="yt-link-btn">Giriş Yapın</button></span>
             )}
             {authMode === 'forgot' && (
-              <span><button onClick={() => setAuthMode('login')} style={{ background: 'none', border: 'none', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', padding: 0 }}>◀ Giriş Ekranına Dön</button></span>
+              <span><button onClick={() => setAuthMode('login')} className="yt-link-btn">◀ Giriş Ekranına Dön</button></span>
             )}
           </div>
         </div>
