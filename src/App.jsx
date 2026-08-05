@@ -2616,8 +2616,16 @@ export default function App() {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <button
                       onClick={() => setIsPaused(p => !p)}
-                      className="yt-btn yt-btn-outline"
-                      style={{ padding: '5px 12px', fontSize: '0.8rem' }}
+                      style={{
+                        padding: '5px 12px',
+                        fontSize: '0.8rem',
+                        fontWeight: 'bold',
+                        borderRadius: '6px',
+                        border: '1px solid rgba(251,249,243,0.45)',
+                        backgroundColor: isPaused ? 'var(--yt-mustard)' : 'transparent',
+                        color: isPaused ? '#1a1a2e' : '#FBF9F3',
+                        cursor: 'pointer'
+                      }}
                     >
                       {isPaused ? '▶ Devam Et' : '⏸ Mola Ver'}
                     </button>
