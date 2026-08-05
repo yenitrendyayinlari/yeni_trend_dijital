@@ -1015,13 +1015,21 @@ export default function App() {
     return { byDers, hasData };
   };
 
-  // Doğru/Toplam oranına göre 3 kademeli renk baremi: kırmızı (<%40), turuncu (%40-69), yeşil (>=%70)
-  const getBaremStyle = (correct, total) => {
-    if (!total) return { bg: 'rgba(255,255,255,0.08)', fg: 'var(--yt-graphite)' };
+  // Doğru/Toplam oranına göre bar rengi: kırmızı (<%40 veya hiç doğru yoksa), turuncu (%40-69), yeşil (>=%70)
+  const getBaremColor = (correct, total) => {
+    if (!total) return '#B4B2A9';
+    if (correct === 0) return '#E24B4A';
     const pct = correct / total;
-    if (pct >= 0.7) return { bg: 'var(--yt-correct-bg)', fg: 'var(--yt-correct)' };
-    if (pct >= 0.4) return { bg: 'var(--yt-mustard-bg)', fg: 'var(--yt-mustard-deep)' };
-    return { bg: 'var(--yt-wrong-bg)', fg: 'var(--yt-wrong)' };
+    if (pct >= 0.7) return '#639922';
+    if (pct >= 0.4) return '#FF9500';
+    return '#E24B4A';
+  };
+
+  // Hiç doğrusu yoksa çubuk tamamen dolu (yüzde 100) gösterilir ki "hiç yapamamış" net anlaşılsın.
+  const getBaremWidth = (correct, total) => {
+    if (!total) return 0;
+    if (correct === 0) return 100;
+    return Math.round((correct / total) * 100);
   };
 
   const saveAndFinishExam = async (ratingVal = 0) => {
@@ -2534,42 +2542,36 @@ export default function App() {
                 <h3 style={{ margin: '0 0 12px 0', fontSize: '1rem' }}>Kazanım Analizi</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {Object.entries(kazanimReport.byDers).map(([ders, dersData]) => {
-                    const dersBarem = getBaremStyle(dersData.correct, dersData.total);
+                    const dersColor = getBaremColor(dersData.correct, dersData.total);
+                    const dersWidth = getBaremWidth(dersData.correct, dersData.total);
                     return (
                       <div key={ders} className="yt-kazanim-box">
-                        <div className="head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                        <div className="head" style={{ display: 'grid', gridTemplateColumns: '1fr 150px', alignItems: 'center', gap: '12px' }}>
                           <span>{ders}</span>
-                          <span style={{
-                            backgroundColor: dersBarem.bg,
-                            color: dersBarem.fg,
-                            padding: '3px 12px',
-                            borderRadius: '20px',
-                            fontFamily: 'var(--yt-font-mono)',
-                            fontSize: '0.82rem',
-                            fontWeight: 'bold',
-                            whiteSpace: 'nowrap'
-                          }}>
-                            {dersData.correct}/{dersData.total}
-                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ flex: 1, height: '16px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: '#fff' }}>
+                              <div style={{ height: '100%', width: `${dersWidth}%`, backgroundColor: dersColor }}></div>
+                            </div>
+                            <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.8rem', fontWeight: 'bold', width: '38px', textAlign: 'right' }}>
+                              {dersData.correct}/{dersData.total}
+                            </span>
+                          </div>
                         </div>
-                        <ul style={{ margin: '8px 0 0 0', paddingLeft: 0, listStyle: 'none' }}>
+                        <ul style={{ margin: '10px 0 0 0', paddingLeft: 0, listStyle: 'none' }}>
                           {Object.entries(dersData.kazanimlar).map(([kazanim, k]) => {
-                            const kBarem = getBaremStyle(k.correct, k.total);
+                            const kColor = getBaremColor(k.correct, k.total);
+                            const kWidth = getBaremWidth(k.correct, k.total);
                             return (
-                              <li key={kazanim} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', padding: '4px 0' }}>
+                              <li key={kazanim} style={{ display: 'grid', gridTemplateColumns: '1fr 150px', alignItems: 'center', gap: '12px', padding: '5px 0' }}>
                                 <span>{kazanim}</span>
-                                <span style={{
-                                  backgroundColor: kBarem.bg,
-                                  color: kBarem.fg,
-                                  padding: '1px 9px',
-                                  borderRadius: '12px',
-                                  fontFamily: 'var(--yt-font-mono)',
-                                  fontSize: '0.76rem',
-                                  fontWeight: 'bold',
-                                  whiteSpace: 'nowrap'
-                                }}>
-                                  {k.correct}/{k.total}
-                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <div style={{ flex: 1, height: '13px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: '#fff' }}>
+                                    <div style={{ height: '100%', width: `${kWidth}%`, backgroundColor: kColor }}></div>
+                                  </div>
+                                  <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', fontWeight: 'bold', width: '38px', textAlign: 'right' }}>
+                                    {k.correct}/{k.total}
+                                  </span>
+                                </div>
                               </li>
                             );
                           })}
