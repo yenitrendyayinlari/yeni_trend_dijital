@@ -37,6 +37,7 @@ export default function App() {
   const [studentCurrentPage, setStudentCurrentPage] = useState(1);
   const [studentAnswers, setStudentAnswers] = useState({});
   const [timeLeft, setTimeLeft] = useState(0); 
+  const [isPaused, setIsPaused] = useState(false);
   const [isExamFinished, setIsExamFinished] = useState(false);
   const [showResults, setShowResults] = useState(false);
   
@@ -304,7 +305,9 @@ export default function App() {
             empty: res.empty_count,
             net: res.net,
             rating: res.rating || 0,
-            reviewText: res.review_text || ''
+            reviewText: res.review_text || '',
+            timeLeft: res.time_left ?? null,
+            currentPage: res.current_page ?? null
           };
         });
         setStudentResultsMap(resultMap);
@@ -474,7 +477,7 @@ export default function App() {
   const activeStudentExam = exams.find(e => e.id === activeStudentExamId);
   
   useEffect(() => {
-    if (user && appMode === 'student' && activeStudentExam && !isExamFinished && !showResults) {
+    if (user && appMode === 'student' && activeStudentExam && !isExamFinished && !showResults && !isPaused) {
       const timer = setInterval(() => {
         if (activeStudentExam.examType === 'deneme') {
           setTimeLeft((prev) => {
@@ -492,7 +495,7 @@ export default function App() {
       }, 1000);
       return () => clearInterval(timer);
     }
-  }, [user, appMode, activeStudentExam, isExamFinished, showResults]);
+  }, [user, appMode, activeStudentExam, isExamFinished, showResults, isPaused]);
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -791,14 +794,30 @@ export default function App() {
       return;
     }
 
+    // Yarım kalmış (bitirilmemiş) bir oturum varsa cevapları, süreyi ve sayfayı oradan geri yükle.
+    const existingRes = studentResultsMap[exam.id];
+    const hasUnfinishedSession = existingRes && !existingRes.is_finished && existingRes.answers && Object.keys(existingRes.answers).length > 0;
+
     setActiveStudentExamId(exam.id);
     setInspectingExamId(null);
-    setStudentAnswers({});
-    setStudentCurrentPage(1);
     setIsExamFinished(false);
     setShowResults(false);
     setViewingSolutionQ(false);
-    setTimeLeft(exam.examType === 'deneme' ? exam.duration * 60 : 0);
+    setIsPaused(false);
+
+    if (hasUnfinishedSession) {
+      setStudentAnswers(existingRes.answers || {});
+      setStudentCurrentPage(existingRes.currentPage || 1);
+      if (exam.examType === 'deneme') {
+        setTimeLeft(existingRes.timeLeft != null ? existingRes.timeLeft : exam.duration * 60);
+      } else {
+        setTimeLeft(existingRes.timeLeft || 0);
+      }
+    } else {
+      setStudentAnswers({});
+      setStudentCurrentPage(1);
+      setTimeLeft(exam.examType === 'deneme' ? exam.duration * 60 : 0);
+    }
   };
 
   const handleIyzicoPayment = (exam) => {
@@ -891,15 +910,55 @@ export default function App() {
     });
   };
 
-  const handleAnswerSelect = (option) => {
-    if (isExamFinished) return;
-    setStudentAnswers((prev) => {
-      if (prev[studentCurrentPage] === option) {
-        const updated = { ...prev };
-        delete updated[studentCurrentPage];
-        return updated;
+  // Sınav sırasında (henüz bitmemişken) her cevap işaretlemesinde ilerlemeyi kaydeder.
+  // Böylece bağlantı kopsa/sayfa kapansa bile öğrenci kaldığı yerden devam edebilir.
+  const saveProgress = async (updatedAnswers, currentTimeLeft, currentPage) => {
+    if (!user || !activeStudentExamId) return;
+    try {
+      const { error } = await supabase
+        .from('student_exams')
+        .upsert([
+          {
+            student_email: user.email,
+            exam_id: activeStudentExamId,
+            answers: updatedAnswers,
+            time_left: currentTimeLeft,
+            current_page: currentPage,
+            is_finished: false
+          }
+        ], { onConflict: 'student_email, exam_id' });
+
+      if (error) {
+        console.error("İlerleme kaydedilemedi:", error);
+      } else {
+        setStudentResultsMap(prev => ({
+          ...prev,
+          [activeStudentExamId]: {
+            ...(prev[activeStudentExamId] || {}),
+            is_finished: false,
+            answers: updatedAnswers,
+            timeLeft: currentTimeLeft,
+            currentPage: currentPage
+          }
+        }));
       }
-      return { ...prev, [studentCurrentPage]: option };
+    } catch (err) {
+      console.error("İlerleme kaydedilemedi:", err);
+    }
+  };
+
+  const handleAnswerSelect = (option) => {
+    if (isExamFinished || isPaused) return;
+    setStudentAnswers((prev) => {
+      let updated;
+      if (prev[studentCurrentPage] === option) {
+        updated = { ...prev };
+        delete updated[studentCurrentPage];
+      } else {
+        updated = { ...prev, [studentCurrentPage]: option };
+      }
+      saveProgress(updated, timeLeft, studentCurrentPage);
+      return updated;
     });
   };
 
@@ -931,24 +990,38 @@ export default function App() {
       return null;
     }
     const numP = activeStudentExam.numPages;
-    const byDers = {};
+    const byDers = {}; // { ders: { correct, total, kazanimlar: { kazanim: { correct, total } } } }
 
     for (let i = 1; i <= numP; i++) {
-      const studentAns = studentAnswers[i];
-      const correctAns = activeStudentExam.answerKey[i];
-      const isWrongOrEmpty = !studentAns || (correctAns && studentAns !== correctAns);
-      if (!isWrongOrEmpty) continue;
-
       const topic = activeStudentExam.topicMap[i];
       if (!topic || !topic.ders || !topic.kazanim) continue;
 
-      if (!byDers[topic.ders]) byDers[topic.ders] = {};
-      if (!byDers[topic.ders][topic.kazanim]) byDers[topic.ders][topic.kazanim] = 0;
-      byDers[topic.ders][topic.kazanim]++;
+      const studentAns = studentAnswers[i];
+      const correctAns = activeStudentExam.answerKey[i];
+      const isCorrect = !!(studentAns && correctAns && studentAns === correctAns);
+
+      if (!byDers[topic.ders]) byDers[topic.ders] = { correct: 0, total: 0, kazanimlar: {} };
+      byDers[topic.ders].total++;
+      if (isCorrect) byDers[topic.ders].correct++;
+
+      if (!byDers[topic.ders].kazanimlar[topic.kazanim]) {
+        byDers[topic.ders].kazanimlar[topic.kazanim] = { correct: 0, total: 0 };
+      }
+      byDers[topic.ders].kazanimlar[topic.kazanim].total++;
+      if (isCorrect) byDers[topic.ders].kazanimlar[topic.kazanim].correct++;
     }
 
     const hasData = Object.keys(byDers).length > 0;
     return { byDers, hasData };
+  };
+
+  // Doğru/Toplam oranına göre 3 kademeli renk baremi: kırmızı (<%40), turuncu (%40-69), yeşil (>=%70)
+  const getBaremStyle = (correct, total) => {
+    if (!total) return { bg: 'rgba(255,255,255,0.08)', fg: 'var(--yt-graphite)' };
+    const pct = correct / total;
+    if (pct >= 0.7) return { bg: 'var(--yt-correct-bg)', fg: 'var(--yt-correct)' };
+    if (pct >= 0.4) return { bg: 'var(--yt-mustard-bg)', fg: 'var(--yt-mustard-deep)' };
+    return { bg: 'var(--yt-wrong-bg)', fg: 'var(--yt-wrong)' };
   };
 
   const saveAndFinishExam = async (ratingVal = 0) => {
@@ -2460,18 +2533,50 @@ export default function App() {
               <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--yt-line)' }}>
                 <h3 style={{ margin: '0 0 12px 0', fontSize: '1rem' }}>Kazanım Analizi</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {Object.entries(kazanimReport.byDers).map(([ders, kazanimlar]) => (
-                    <div key={ders} className="yt-kazanim-box">
-                      <div className="head">{ders} dersinde şu konularda eksiğin var:</div>
-                      <ul style={{ margin: 0, paddingLeft: '20px' }}>
-                        {Object.entries(kazanimlar).map(([kazanim, count]) => (
-                          <li key={kazanim}>
-                            {kazanim} <b>({count} soru)</b>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  ))}
+                  {Object.entries(kazanimReport.byDers).map(([ders, dersData]) => {
+                    const dersBarem = getBaremStyle(dersData.correct, dersData.total);
+                    return (
+                      <div key={ders} className="yt-kazanim-box">
+                        <div className="head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                          <span>{ders}</span>
+                          <span style={{
+                            backgroundColor: dersBarem.bg,
+                            color: dersBarem.fg,
+                            padding: '3px 12px',
+                            borderRadius: '20px',
+                            fontFamily: 'var(--yt-font-mono)',
+                            fontSize: '0.82rem',
+                            fontWeight: 'bold',
+                            whiteSpace: 'nowrap'
+                          }}>
+                            {dersData.correct}/{dersData.total}
+                          </span>
+                        </div>
+                        <ul style={{ margin: '8px 0 0 0', paddingLeft: 0, listStyle: 'none' }}>
+                          {Object.entries(dersData.kazanimlar).map(([kazanim, k]) => {
+                            const kBarem = getBaremStyle(k.correct, k.total);
+                            return (
+                              <li key={kazanim} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', padding: '4px 0' }}>
+                                <span>{kazanim}</span>
+                                <span style={{
+                                  backgroundColor: kBarem.bg,
+                                  color: kBarem.fg,
+                                  padding: '1px 9px',
+                                  borderRadius: '12px',
+                                  fontFamily: 'var(--yt-font-mono)',
+                                  fontSize: '0.76rem',
+                                  fontWeight: 'bold',
+                                  whiteSpace: 'nowrap'
+                                }}>
+                                  {k.correct}/{k.total}
+                                </span>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -2508,8 +2613,17 @@ export default function App() {
                   })()}
                 </span>
                 {!showResults && (
-                  <div className={`yt-timer${timeLeft < 300 ? ' urgent' : ''}`} style={{ fontSize: '1.15rem', padding: '5px 12px' }}>
-                    {formatTime(timeLeft)}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <button
+                      onClick={() => setIsPaused(p => !p)}
+                      className="yt-btn yt-btn-outline"
+                      style={{ padding: '5px 12px', fontSize: '0.8rem' }}
+                    >
+                      {isPaused ? '▶ Devam Et' : '⏸ Mola Ver'}
+                    </button>
+                    <div className={`yt-timer${(!isPaused && timeLeft < 300) ? ' urgent' : ''}`} style={{ fontSize: '1.15rem', padding: '5px 12px', opacity: isPaused ? 0.6 : 1 }}>
+                      {isPaused ? 'MOLADA' : formatTime(timeLeft)}
+                    </div>
                   </div>
                 )}
                 <span>İŞARETLENEN: <b style={{ color: studentAnswers[studentCurrentPage] ? 'var(--yt-mustard)' : 'rgba(251,249,243,0.5)' }}>{studentAnswers[studentCurrentPage] || 'BOŞ'}</b></span>
@@ -2522,16 +2636,22 @@ export default function App() {
             />
 
             {!isExamFinished && (
-              <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', margin: '20px 0' }}>
-                {['A', 'B', 'C', 'D', 'E'].map(option => {
-                  const isSelected = studentAnswers[studentCurrentPage] === option;
-                  return (
-                    <button key={option} onClick={() => handleAnswerSelect(option)} className={`yt-abub${isSelected ? ' picked' : ''}`}>
-                      {option}
-                    </button>
-                  );
-                })}
-              </div>
+              isPaused ? (
+                <div style={{ textAlign: 'center', margin: '20px 0', padding: '14px', borderRadius: '8px', backgroundColor: 'var(--yt-mustard-bg)', color: 'var(--yt-mustard-deep)', fontWeight: 'bold' }}>
+                  Moladasın, cevap işaretleyemezsin. Devam etmek için "Devam Et"e bas.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', margin: '20px 0' }}>
+                  {['A', 'B', 'C', 'D', 'E'].map(option => {
+                    const isSelected = studentAnswers[studentCurrentPage] === option;
+                    return (
+                      <button key={option} onClick={() => handleAnswerSelect(option)} className={`yt-abub${isSelected ? ' picked' : ''}`}>
+                        {option}
+                      </button>
+                    );
+                  })}
+                </div>
+              )
             )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '16px', gap: '10px' }}>
