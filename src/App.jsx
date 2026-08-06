@@ -2475,15 +2475,14 @@ export default function App() {
                   flex-direction: column;
                   gap: 11px;
                   cursor: pointer;
-                  min-height: 300px;
                 }
                 .yt-exam-card h3 {
                   font-size: 1.02rem;
                   font-weight: 700;
                   line-height: 1.3;
-                  min-height: 2.6em;
+                  min-height: 3.9em;
                   display: -webkit-box;
-                  -webkit-line-clamp: 2;
+                  -webkit-line-clamp: 3;
                   -webkit-box-orient: vertical;
                   overflow: hidden;
                 }
@@ -2508,6 +2507,45 @@ export default function App() {
                 .yt-exam-card .yt-rating .count {
                   color: var(--yt-graphite);
                   font-size: 0.78rem;
+                }
+                .yt-exam-card .yt-meta-box {
+                  display: flex;
+                  gap: 8px;
+                  flex-wrap: wrap;
+                }
+                .yt-exam-card .yt-meta-box span {
+                  background-color: #F3F0E7;
+                  color: #5C594C;
+                  font-family: var(--yt-font-mono);
+                  font-size: 0.72rem;
+                  font-weight: 600;
+                  padding: 5px 10px;
+                  border-radius: 6px;
+                }
+                .yt-exam-card .yt-btn-explore {
+                  background-color: #2F5D8A;
+                  color: #fff;
+                  border: none;
+                  padding: 9px 14px;
+                  border-radius: 7px;
+                  font-size: 0.78rem;
+                  font-weight: 600;
+                  cursor: pointer;
+                }
+                .yt-exam-card .yt-btn-cart {
+                  background-color: #FFF4E0;
+                  color: #8A5A00;
+                  border: 1px solid #E8C87A;
+                  padding: 9px 10px;
+                  border-radius: 7px;
+                  font-size: 0.78rem;
+                  font-weight: 600;
+                  cursor: pointer;
+                }
+                .yt-exam-card .yt-btn-cart.in-cart {
+                  background-color: #E8F3EC;
+                  color: #1F6B44;
+                  border-color: #9FCFB2;
                 }
               `}</style>
               <div className="yt-card-grid">
@@ -2548,7 +2586,7 @@ export default function App() {
                         <span className="count">({ratingInfo.count})</span>
                       </div>
 
-                      <div style={{ display: 'flex', gap: '16px', fontFamily: 'var(--yt-font-mono)', fontSize: '0.78rem', color: 'var(--yt-graphite)', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <div className="yt-meta-box">
                         <span>{totalQuestions} SORU</span>
                         {childTests.length > 0 && <span>{childTests.length} TEST</span>}
                         {getCampaignCountdown(exam) && <span className="yt-countdown">⏳ {getCampaignCountdown(exam)}</span>}
@@ -2575,7 +2613,7 @@ export default function App() {
                           {isPaid && !isCompleted && !studentPurchases[exam.id] && (
                             <button
                               onClick={(e) => { e.stopPropagation(); toggleCartItem(exam.id); }}
-                              className={`yt-add-cart-btn${cartItems.includes(exam.id) ? ' in-cart' : ''}`}
+                              className={`yt-btn-cart${cartItems.includes(exam.id) ? ' in-cart' : ''}`}
                             >
                               {cartItems.includes(exam.id) ? '✓ Sepette' : '+ Sepete Ekle'}
                             </button>
@@ -2585,7 +2623,7 @@ export default function App() {
                               e.stopPropagation();
                               setInspectingExamId(exam.id);
                             }}
-                            className="yt-btn yt-btn-outline"
+                            className="yt-btn-explore"
                           >
                             {isCompleted ? 'Sonucu İncele →' : 'İçeriği İncele →'}
                           </button>
