@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import PdfViewer from './PdfViewer';
+import SecurePdfViewer from './SecurePdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
 
@@ -674,12 +674,11 @@ export default function App() {
         return;
       }
 
-      const { data: publicURLData } = supabase.storage
-        .from('exam-files')
-        .getPublicUrl(fileName);
-
+      // Storage artık private -- public URL yerine sadece dosya adını
+      // (path) saklıyoruz; görüntülenirken /api/get-pdf-url ile erişim
+      // hakkı doğrulanıp kısa ömürlü imzalı bir URL üretiliyor.
       setAuthLoading(false);
-      await updateExamInDb(examId, { pdfFile: publicURLData.publicUrl });
+      await updateExamInDb(examId, { pdfFile: fileName });
     };
     uploadPdf();
   };
@@ -703,12 +702,9 @@ export default function App() {
           return;
         }
 
-        const { data: publicURLData } = supabase.storage
-          .from('exam-files')
-          .getPublicUrl(fileName);
-
+        // Storage artık private -- sadece dosya adını (path) saklıyoruz.
         setAuthLoading(false);
-        await updateExamInDb(examId, { solutionPdfFile: publicURLData.publicUrl });
+        await updateExamInDb(examId, { solutionPdfFile: fileName });
       };
       uploadSolutionFile();
     }
@@ -1469,9 +1465,10 @@ export default function App() {
                 <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '12px' }}>
                   <strong>Toplam Soru Sayısı/Sayfa: {currentPreviewExam.numPages || '0'}</strong>
                 </div>
-                <PdfViewer 
-                  file={currentPreviewExam.pdfFile} 
-                  pageNumber={1} 
+                <SecurePdfViewer
+                  examId={currentPreviewExam.id}
+                  type="exam"
+                  pageNumber={1}
                 />
               </div>
             )}
@@ -2139,7 +2136,7 @@ export default function App() {
                   return isPaid && !isPurchased && previewSourceExam.pdfFile ? (
                     <div className="yt-preview-panel" style={{ marginBottom: '24px' }}>
                       <span className="yt-preview-label">Ücretsiz Önizleme — 1. Soru</span>
-                      <PdfViewer file={previewSourceExam.pdfFile} pageNumber={1} />
+                      <SecurePdfViewer examId={previewSourceExam.id} type="exam-preview" pageNumber={1} />
                     </div>
                   ) : null;
                 }
@@ -2176,7 +2173,7 @@ export default function App() {
                         ))}
                       </div>
                     )}
-                    <PdfViewer file={activeTest.pdfFile} pageNumber={1} />
+                    <SecurePdfViewer examId={activeTest.id} type="exam-preview" pageNumber={1} />
                   </div>
                 );
               })()}
@@ -2752,9 +2749,10 @@ export default function App() {
               </div>
             </div>
 
-            <PdfViewer 
-              file={activeStudentExam.pdfFile} 
-              pageNumber={studentCurrentPage} 
+            <SecurePdfViewer
+              examId={activeStudentExamId}
+              type="exam"
+              pageNumber={studentCurrentPage}
             />
 
             {!isExamFinished && (
@@ -2859,7 +2857,7 @@ export default function App() {
               <span>{studentCurrentPage}. Soru Çözümü Aşağıda</span>
               <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: 'rgba(0,0,0,0.2)', color: '#fff', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}>Kapat</button>
             </div>
-            <PdfViewer file={activeStudentExam.solutionPdfFile} pageNumber={studentCurrentPage} />
+            <SecurePdfViewer examId={activeStudentExamId} type="solution" pageNumber={studentCurrentPage} />
           </div>
         )}
       </div>
