@@ -2454,14 +2454,63 @@ export default function App() {
                 <p style={{ margin: 0, color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Seçilen kriterlere uygun aktif bir sınav veya paket bulunmamaktadır.</p>
               </div>
             ) : (
-              <div className="yt-row-list">
+              <>
+              <style>{`
+                .yt-card-grid {
+                  display: grid;
+                  grid-template-columns: 1fr 1fr;
+                  gap: 14px;
+                }
+                @media (max-width: 640px) {
+                  .yt-card-grid {
+                    grid-template-columns: 1fr;
+                  }
+                }
+                .yt-exam-card {
+                  background-color: #fff;
+                  border: 1px solid var(--yt-line);
+                  border-radius: 12px;
+                  padding: 18px;
+                  display: flex;
+                  flex-direction: column;
+                  gap: 11px;
+                  cursor: pointer;
+                }
+                .yt-exam-card h3 {
+                  font-size: 1.02rem;
+                  font-weight: 700;
+                  line-height: 1.3;
+                }
+                .yt-exam-card .yt-rating {
+                  display: flex;
+                  align-items: center;
+                  gap: 6px;
+                }
+                .yt-exam-card .yt-rating .avg {
+                  font-weight: 700;
+                  font-size: 0.88rem;
+                  color: #B8860B;
+                }
+                .yt-exam-card .yt-rating .stars {
+                  font-size: 1rem;
+                  letter-spacing: 1px;
+                  color: #E0A526;
+                }
+                .yt-exam-card .yt-rating .stars.empty {
+                  color: var(--yt-line);
+                }
+                .yt-exam-card .yt-rating .count {
+                  color: var(--yt-graphite);
+                  font-size: 0.78rem;
+                }
+              `}</style>
+              <div className="yt-card-grid">
                 {publishedExams.map(exam => {
                   const resData = studentResultsMap[exam.id];
                   const isCompleted = resData?.is_finished;
                   const isDeneme = exam.examType === 'deneme';
                   const ratingInfo = examRatingsMap[exam.id] || { average: '0,0', count: '0' };
                   const isPaid = exam.price && exam.price > 0;
-                  const bubbleLabel = isCompleted ? '✓' : (isDeneme ? 'D' : 'T');
                   const childTests = exams.filter(e => e.parentId === exam.id);
                   const totalQuestions = childTests.length > 0
                     ? childTests.reduce((sum, t) => sum + (t.numPages || 0), 0)
@@ -2471,81 +2520,76 @@ export default function App() {
                     <div
                       key={exam.id}
                       onClick={() => setInspectingExamId(exam.id)}
-                      className="yt-exam-row"
+                      className="yt-exam-card"
                     >
-                      <div className={`yt-bubble-mark${isCompleted ? ' done' : ''}`}>{bubbleLabel}</div>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span className="yt-tag">{exam.categoryExamType} · {exam.categoryLesson}</span>
+                        <span className={`yt-tag ${isDeneme ? 'deneme' : 'test'}`}>
+                          {isDeneme ? 'Deneme Sınavı' : 'Test'}
+                        </span>
+                        {user && isCompleted ? (
+                          <span className="yt-tag done">Çözüldü</span>
+                        ) : null}
+                      </div>
 
-                      <div style={{ flex: 1, minWidth: 0 }}>
+                      <h3 style={{ margin: 0 }}>{exam.name || 'İsimsiz İçerik'}</h3>
 
-                        <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap' }}>
-                          <span className="yt-tag">{exam.categoryExamType} · {exam.categoryLesson}</span>
-                          <span className={`yt-tag ${isDeneme ? 'deneme' : 'test'}`}>
-                            {isDeneme ? 'Deneme Sınavı' : 'Test'}
-                          </span>
-                          {user && isCompleted ? (
-                            <span className="yt-tag done">Çözüldü</span>
-                          ) : null}
+                      <div className="yt-rating">
+                        <span className="avg">{ratingInfo.average}</span>
+                        <span className={`stars${Number(ratingInfo.count) === 0 ? ' empty' : ''}`}>
+                          {'★'.repeat(Math.round(Number(ratingInfo.average.replace(',', '.')))).padEnd(5, '☆')}
+                        </span>
+                        <span className="count">({ratingInfo.count})</span>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '16px', fontFamily: 'var(--yt-font-mono)', fontSize: '0.78rem', color: 'var(--yt-graphite)', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <span>{totalQuestions} SORU</span>
+                        {childTests.length > 0 && <span>{childTests.length} TEST</span>}
+                        {getCampaignCountdown(exam) && <span className="yt-countdown">⏳ {getCampaignCountdown(exam)}</span>}
+                      </div>
+
+                      <div style={{ flex: 1 }} />
+
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                        <div className="yt-price">
+                          {isPaid ? (
+                            <>
+                              {exam.originalPrice && exam.originalPrice > exam.price ? (
+                                <span className="old">₺{exam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              ) : null}
+                              <span className="now">₺{exam.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            </>
+                          ) : (
+                            <span className="free">Ücretsiz</span>
+                          )}
+                          {isCompleted && <span className="net"> · Net: {resData.net}</span>}
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap', marginBottom: '8px' }}>
-                          <h3 style={{ margin: 0, fontSize: '1.08rem' }}>{exam.name || 'İsimsiz İçerik'}</h3>
-                          <div className="yt-rating">
-                            <span className="stars">
-                              {'★'.repeat(Math.round(Number(ratingInfo.average.replace(',', '.')))).padEnd(5, '☆')}
-                            </span>
-                            {ratingInfo.average} <span className="count">({ratingInfo.count})</span>
-                          </div>
-                        </div>
-
-                        <div style={{ display: 'flex', gap: '16px', fontFamily: 'var(--yt-font-mono)', fontSize: '0.78rem', color: 'var(--yt-graphite)', marginBottom: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-                          {isDeneme && <span>⏱ {exam.duration} DK</span>}
-                          <span>{totalQuestions} SORU</span>
-                          {childTests.length > 0 && <span>{childTests.length} TEST</span>}
-                          {solvedCountMap[exam.id] > 0 && <span>{solvedCountMap[exam.id].toLocaleString('tr-TR')} KİŞİ ÇÖZDÜ</span>}
-                          {getCampaignCountdown(exam) && <span className="yt-countdown">⏳ {getCampaignCountdown(exam)}</span>}
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-                          <div className="yt-price">
-                            {isPaid ? (
-                              <>
-                                {exam.originalPrice && exam.originalPrice > exam.price ? (
-                                  <span className="old">₺{exam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                                ) : null}
-                                <span className="now">₺{exam.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                              </>
-                            ) : (
-                              <span className="free">Ücretsiz</span>
-                            )}
-                            {isCompleted && <span className="net"> · Net: {resData.net}</span>}
-                          </div>
-
-                          <div style={{ display: 'flex', gap: '8px' }}>
-                            {isPaid && !isCompleted && !studentPurchases[exam.id] && (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); toggleCartItem(exam.id); }}
-                                className={`yt-add-cart-btn${cartItems.includes(exam.id) ? ' in-cart' : ''}`}
-                              >
-                                {cartItems.includes(exam.id) ? '✓ Sepette' : '+ Sepete Ekle'}
-                              </button>
-                            )}
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          {isPaid && !isCompleted && !studentPurchases[exam.id] && (
                             <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setInspectingExamId(exam.id);
-                              }}
-                              className="yt-btn yt-btn-outline"
+                              onClick={(e) => { e.stopPropagation(); toggleCartItem(exam.id); }}
+                              className={`yt-add-cart-btn${cartItems.includes(exam.id) ? ' in-cart' : ''}`}
                             >
-                              {isCompleted ? 'Sonucu İncele →' : 'İçeriği İncele →'}
+                              {cartItems.includes(exam.id) ? '✓ Sepette' : '+ Sepete Ekle'}
                             </button>
-                          </div>
+                          )}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setInspectingExamId(exam.id);
+                            }}
+                            className="yt-btn yt-btn-outline"
+                          >
+                            {isCompleted ? 'Sonucu İncele →' : 'İçeriği İncele →'}
+                          </button>
                         </div>
-
                       </div>
                     </div>
                   );
                 })}
               </div>
+              </>
             )}
           </main>
 
