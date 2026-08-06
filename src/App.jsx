@@ -1483,18 +1483,18 @@ export default function App() {
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: (activeSubExamId && currentPreviewExam?.pdfFile) ? '1fr 380px' : '1fr', gap: '24px', alignItems: 'start' }}>
             {activeSubExamId && currentPreviewExam?.pdfFile && (
-              <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px' }}>
-                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '12px' }}>
-                  <strong>Toplam Soru Sayısı/Sayfa: {currentPreviewExam.numPages || '0'}</strong>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '12px' }}>
+                    <strong>Toplam Soru Sayısı/Sayfa: {currentPreviewExam.numPages || '0'}</strong>
+                  </div>
+                  <SecurePdfViewer
+                    examId={currentPreviewExam.id}
+                    type="exam"
+                    pageNumber={1}
+                  />
                 </div>
-                <SecurePdfViewer
-                  examId={currentPreviewExam.id}
-                  type="exam"
-                  pageNumber={1}
-                />
-              </div>
-            )}
-            {activeSubExamId && currentPreviewExam?.pdfFile && editingExam && (
+                {editingExam && (
               <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px' }}>
                 <h3 style={{ margin: '0 0 12px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>📊 Kazanım Haritası</h3>
 
@@ -1613,6 +1613,8 @@ export default function App() {
                     </div>
                   </div>
                 )}
+              </div>
+            )}
               </div>
             )}
 
