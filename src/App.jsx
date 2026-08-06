@@ -166,7 +166,7 @@ export default function App() {
 
   const fetchAllRatings = async () => {
     const { data, error } = await supabase
-      .from('student_exams')
+      .from('public_exam_stats')
       .select('exam_id, rating')
       .gt('rating', 0);
 
@@ -208,7 +208,7 @@ export default function App() {
   // Kaç öğrencinin bir içeriği tamamladığını (sosyal kanıt için) hesaplar.
   const fetchSolvedCounts = async () => {
     const { data, error } = await supabase
-      .from('student_exams')
+      .from('public_exam_stats')
       .select('exam_id, is_finished')
       .eq('is_finished', true);
 
@@ -2475,11 +2475,17 @@ export default function App() {
                   flex-direction: column;
                   gap: 11px;
                   cursor: pointer;
+                  min-height: 300px;
                 }
                 .yt-exam-card h3 {
                   font-size: 1.02rem;
                   font-weight: 700;
                   line-height: 1.3;
+                  min-height: 2.6em;
+                  display: -webkit-box;
+                  -webkit-line-clamp: 2;
+                  -webkit-box-orient: vertical;
+                  overflow: hidden;
                 }
                 .yt-exam-card .yt-rating {
                   display: flex;
@@ -2510,7 +2516,7 @@ export default function App() {
                   const isCompleted = resData?.is_finished;
                   const isDeneme = exam.examType === 'deneme';
                   const ratingInfo = examRatingsMap[exam.id] || { average: '0,0', count: '0' };
-                  const isPaid = exam.price && exam.price > 0;
+                  const isPaid = !!(exam.price && exam.price > 0);
                   const childTests = exams.filter(e => e.parentId === exam.id);
                   const totalQuestions = childTests.length > 0
                     ? childTests.reduce((sum, t) => sum + (t.numPages || 0), 0)
