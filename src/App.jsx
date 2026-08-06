@@ -84,6 +84,18 @@ export default function App() {
   }, [cartItems]);
 
   useEffect(() => {
+    // Sınav listesi yüklendiğinde, localStorage'da kalmış ama artık mevcut
+    // olmayan (silinmiş/değişmiş) sınav ID'lerini sepetten temizle. Bu,
+    // sepet rozetinin gerçek içerikle tutarsız kalmasını önler.
+    if (exams.length === 0) return;
+    setCartItems((prev) => {
+      const validIds = new Set(exams.map(e => e.id));
+      const cleaned = prev.filter(id => validIds.has(id));
+      return cleaned.length === prev.length ? prev : cleaned;
+    });
+  }, [exams]);
+
+  useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) {
@@ -2379,7 +2391,7 @@ export default function App() {
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
                 <button onClick={() => setShowCart(true)} className="yt-cart-btn" title="Sepet">
                   🛒
-                  {cartItems.length > 0 && <span className="yt-cart-badge">{cartItems.length}</span>}
+                  {cartExams.length > 0 && <span className="yt-cart-badge">{cartExams.length}</span>}
                 </button>
                 {user ? (
                   <>
