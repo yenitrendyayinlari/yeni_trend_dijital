@@ -16,6 +16,7 @@ export default function App() {
   const [exams, setExams] = useState([]);
   const [activeAdminExamId, setActiveAdminExamId] = useState(null);
   const [activeSubExamId, setActiveSubExamId] = useState(null);
+  const [newKazanimSoruNo, setNewKazanimSoruNo] = useState('');
   const [isCreatingExam, setIsCreatingExam] = useState(false);
   const [newExamForm, setNewExamForm] = useState({
     name: '',
@@ -466,6 +467,12 @@ export default function App() {
       console.error("Cevap anahtarı kaydedilemedi:", error);
       alert("Cevap anahtarı kaydedilemedi: " + error.message);
     }
+  };
+
+  // Kazanım tablosunda yazarken her tuş vuruşunda veritabanına yazmamak için
+  // sadece yerel state'i güncelliyoruz; kayıt "Kaydet" butonuna basınca olur.
+  const updateTopicMapLocal = (id, newTopicMap) => {
+    setExams((prev) => prev.map(ex => ex.id === id ? { ...ex, topicMap: newTopicMap } : ex));
   };
 
   // Kazanım haritası güncellemesini ayrı tutuyoruz ki topic_map kolonu
@@ -1685,11 +1692,111 @@ export default function App() {
                             style={{ fontSize: '0.8rem', width: '100%' }}
                           />
                           <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '4px' }}>
-                            Sütun sırası: 1. Soru No, 2. Ders, 3. Kazanım (ilk satır başlık kabul edilir).
+                            Sütun sırası: 1. Soru No, 2. Ders, 3. Kazanım (ilk satır başlık kabul edilir). Yeniden yüklersen mevcut liste tamamen değişir.
                           </div>
+
                           {editingExam.topicMap && Object.keys(editingExam.topicMap).length > 0 && (
-                            <div style={{ fontSize: '0.75rem', color: '#16a34a', marginTop: '4px', fontWeight: 'bold' }}>
-                              ✓ {Object.keys(editingExam.topicMap).length} soru için kazanım eklendi.
+                            <div style={{ marginTop: '10px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                                <span style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 'bold' }}>
+                                  ✓ {Object.keys(editingExam.topicMap).length} soru için kazanım eklendi.
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => { updateTopicMapInDb(editingExam.id, editingExam.topicMap); alert('Kazanım haritası kaydedildi.'); }}
+                                  className="yt-btn"
+                                  style={{ fontSize: '0.72rem', padding: '4px 10px' }}
+                                >
+                                  💾 Kaydet
+                                </button>
+                              </div>
+
+                              <div style={{ maxHeight: '260px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem' }}>
+                                  <thead style={{ position: 'sticky', top: 0, backgroundColor: '#f8fafc' }}>
+                                    <tr>
+                                      <th style={{ padding: '4px 6px', textAlign: 'left', width: '44px' }}>Soru</th>
+                                      <th style={{ padding: '4px 6px', textAlign: 'left' }}>Ders</th>
+                                      <th style={{ padding: '4px 6px', textAlign: 'left' }}>Kazanım</th>
+                                      <th style={{ width: '26px' }}></th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {Object.keys(editingExam.topicMap)
+                                      .map(Number)
+                                      .sort((a, b) => a - b)
+                                      .map((soruNo) => {
+                                        const entry = editingExam.topicMap[soruNo];
+                                        return (
+                                          <tr key={soruNo} style={{ borderTop: '1px solid #f1f5f9' }}>
+                                            <td style={{ padding: '3px 6px', fontWeight: 'bold' }}>{soruNo}</td>
+                                            <td style={{ padding: '3px 4px' }}>
+                                              <input
+                                                type="text"
+                                                value={entry.ders}
+                                                onChange={(e) => {
+                                                  const updated = { ...editingExam.topicMap, [soruNo]: { ...entry, ders: e.target.value } };
+                                                  updateTopicMapLocal(editingExam.id, updated);
+                                                }}
+                                                style={{ width: '100%', fontSize: '0.75rem', padding: '3px 4px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box' }}
+                                              />
+                                            </td>
+                                            <td style={{ padding: '3px 4px' }}>
+                                              <input
+                                                type="text"
+                                                value={entry.kazanim}
+                                                onChange={(e) => {
+                                                  const updated = { ...editingExam.topicMap, [soruNo]: { ...entry, kazanim: e.target.value } };
+                                                  updateTopicMapLocal(editingExam.id, updated);
+                                                }}
+                                                style={{ width: '100%', fontSize: '0.75rem', padding: '3px 4px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box' }}
+                                              />
+                                            </td>
+                                            <td style={{ padding: '3px 6px', textAlign: 'center' }}>
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  const updated = { ...editingExam.topicMap };
+                                                  delete updated[soruNo];
+                                                  updateTopicMapInDb(editingExam.id, updated);
+                                                }}
+                                                style={{ border: 'none', background: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '0.85rem' }}
+                                                title="Bu soruyu kazanım listesinden sil"
+                                              >
+                                                ✕
+                                              </button>
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                  </tbody>
+                                </table>
+                              </div>
+
+                              <div style={{ display: 'flex', gap: '6px', marginTop: '8px', alignItems: 'center' }}>
+                                <input
+                                  type="number"
+                                  value={newKazanimSoruNo}
+                                  onChange={(e) => setNewKazanimSoruNo(e.target.value)}
+                                  placeholder="Soru No"
+                                  style={{ width: '80px', fontSize: '0.75rem', padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '4px' }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const soruNo = Number(newKazanimSoruNo);
+                                    if (!soruNo || soruNo < 1) { alert("Geçerli bir soru numarası girin."); return; }
+                                    if (editingExam.topicMap[soruNo]) { alert("Bu soru numarası zaten listede var."); return; }
+                                    const updated = { ...editingExam.topicMap, [soruNo]: { ders: '', kazanim: '' } };
+                                    updateTopicMapInDb(editingExam.id, updated);
+                                    setNewKazanimSoruNo('');
+                                  }}
+                                  className="yt-btn"
+                                  style={{ fontSize: '0.72rem', padding: '4px 10px' }}
+                                >
+                                  + Soru Ekle
+                                </button>
+                              </div>
                             </div>
                           )}
                         </div>
