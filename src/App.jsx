@@ -245,7 +245,12 @@ export default function App() {
     categoryLesson: item.category_lesson || 'Genel',
     pdfFile: item.pdf_file,
     solutionPdfFile: item.solution_pdf_file,
-    answerKey: item.answer_key || {},
+    // Güvenlik: answer_key artık genel sınav sorgusuyla hiç çekilmiyor
+    // (bkz. EXAM_PUBLIC_COLUMNS), o yüzden burada her zaman boş başlıyor.
+    // Sadece admin (kendi RLS yetkisiyle, fetchAndMergeAnswerKeys) veya
+    // sınavı bitirmiş/erişimi olan öğrenci (sunucu API'si üzerinden,
+    // saveAndFinishExam / fetchAnswerKeyForReview) bu alanı sonradan doldurur.
+    answerKey: {},
     sections: item.sections || [],
     isPublished: item.is_published,
     numPages: item.num_pages || 0,
@@ -258,10 +263,15 @@ export default function App() {
     campaignEndsAt: item.campaign_ends_at || null
   });
 
+  // Güvenlik: answer_key sütununu KASITLI olarak bu listeye eklemiyoruz.
+  // select('*') kullanırsak cevap anahtarı, sınavı satın almayan/bitirmeyen
+  // herkesin tarayıcısına (Network sekmesinden okunabilir şekilde) gider.
+  const EXAM_PUBLIC_COLUMNS = 'id,name,duration,exam_type,category_exam_type,category_lesson,pdf_file,solution_pdf_file,sections,is_published,num_pages,price,original_price,is_parent,parent_id,sort_order,topic_map,campaign_ends_at,created_at';
+
   const fetchPublicExams = async () => {
     const { data, error } = await supabase
       .from('exams')
-      .select('*')
+      .select(EXAM_PUBLIC_COLUMNS)
       .eq('is_published', true)
       .order('created_at', { ascending: false });
 
@@ -273,7 +283,7 @@ export default function App() {
   };
 
   const fetchExams = async (currentUser = user) => {
-    const query = supabase.from('exams').select('*').order('created_at', { ascending: false });
+    const query = supabase.from('exams').select(EXAM_PUBLIC_COLUMNS).order('created_at', { ascending: false });
     if (!currentUser || currentUser.email !== 'admin@yayinevi.com') {
       query.eq('is_published', true);
     }
@@ -416,7 +426,6 @@ export default function App() {
     if (updates.categoryLesson !== undefined) dbUpdates.category_lesson = updates.categoryLesson;
     if (updates.pdfFile !== undefined) dbUpdates.pdf_file = updates.pdfFile;
     if (updates.solutionPdfFile !== undefined) dbUpdates.solution_pdf_file = updates.solutionPdfFile;
-    if (updates.answerKey !== undefined) dbUpdates.answer_key = updates.answerKey;
     if (updates.sections !== undefined) dbUpdates.sections = updates.sections;
     if (updates.isPublished !== undefined) dbUpdates.is_published = updates.isPublished;
     if (updates.numPages !== undefined) dbUpdates.num_pages = updates.numPages;
@@ -430,6 +439,20 @@ export default function App() {
 
     if (error) {
       console.error("Güncelleme hatası:", error);
+    }
+  };
+
+  // Cevap anahtarını artık ayrı bir tabloya (exam_answer_keys) yazıyoruz,
+  // exams tablosuna değil — bu sayede genel sınav sorgusu hiçbir zaman
+  // cevap anahtarını içermiyor.
+  const updateAnswerKeyInDb = async (examId, newKey) => {
+    setExams((prev) => prev.map(ex => ex.id === examId ? { ...ex, answerKey: newKey } : ex));
+    const { error } = await supabase
+      .from('exam_answer_keys')
+      .upsert([{ exam_id: examId, answer_key: newKey }], { onConflict: 'exam_id' });
+    if (error) {
+      console.error("Cevap anahtarı kaydedilemedi:", error);
+      alert("Cevap anahtarı kaydedilemedi: " + error.message);
     }
   };
 
@@ -580,10 +603,35 @@ export default function App() {
     }
   };
 
+  // Cevap anahtarı artık ayrı bir tabloda (exam_answer_keys) tutuluyor ve
+  // genel sınav sorgusuyla hiç çekilmiyor. Admin bir ürünün alt testlerini
+  // açtığında, o testlere ait cevap anahtarlarını burada ayrıca çekip
+  // (sadece admin bu tabloyu okuyabiliyor) yerel `exams` state'ine işliyoruz.
+  const fetchAndMergeAnswerKeys = async (examIds) => {
+    if (!examIds || examIds.length === 0) return;
+    const { data, error } = await supabase
+      .from('exam_answer_keys')
+      .select('exam_id, answer_key')
+      .in('exam_id', examIds);
+
+    if (error) {
+      console.error("Cevap anahtarları çekilemedi:", error);
+      return;
+    }
+    if (data && data.length > 0) {
+      setExams(prev => prev.map(ex => {
+        const found = data.find(k => k.exam_id === ex.id);
+        return found ? { ...ex, answerKey: found.answer_key || {} } : ex;
+      }));
+    }
+  };
+
   const handleOpenDefinitionScreen = (examId) => {
     setActiveAdminExamId(examId);
     setActiveSubExamId(null);
     setIsCreatingExam(false);
+    const childIds = exams.filter(e => e.parentId === examId).map(e => e.id);
+    fetchAndMergeAnswerKeys(childIds);
   };
 
   const handleOpenSettingsScreen = (examId) => {
@@ -676,7 +724,7 @@ export default function App() {
         newKey[i + 1] = sanitizedText[i];
       }
     }
-    updateExamInDb(examId, { answerKey: newKey });
+    updateAnswerKeyInDb(examId, newKey);
   };
 
   const handleTopicMapUpload = (examId, e) => {
@@ -738,7 +786,6 @@ export default function App() {
       category_lesson: '', 
       duration: adminActiveExam.duration || 0,
       price: 0,
-      answer_key: {},
       sections: [],
       num_pages: 0
     };
@@ -1030,38 +1077,89 @@ export default function App() {
     return '#E24B4A';
   };
 
+  // Puanlama artık tarayıcıda değil, sunucuda (/api/finish-exam) yapılıyor.
+  // Böylece cevap anahtarı sınav bitene kadar hiçbir zaman client'a inmiyor.
   const saveAndFinishExam = async (ratingVal = 0) => {
-    const results = calculateResults();
-    setIsExamFinished(true);
-    setShowResults(true);
-
     const existingRes = studentResultsMap[activeStudentExamId] || {};
     const finalRating = ratingVal > 0 ? ratingVal : (existingRes.rating || 0);
 
-    const { error } = await supabase
-      .from('student_exams')
-      .upsert([
-        {
-          student_email: user.email,
-          exam_id: activeStudentExamId,
-          answers: studentAnswers,
-          correct_count: results.correct,
-          wrong_count: results.wrong,
-          empty_count: results.empty,
-          net: results.net,
-          is_finished: true,
-          rating: finalRating
-        }
-      ], { onConflict: 'student_email, exam_id' });
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if (!token) {
+      alert("Oturumunuz bulunamadı, lütfen tekrar giriş yapın.");
+      return;
+    }
 
-    if (error) {
-      console.error("Sonuç kaydedilemedi:", error);
-    } else {
+    try {
+      const resp = await fetch('/api/finish-exam', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          examId: activeStudentExamId,
+          answers: studentAnswers,
+          rating: finalRating
+        })
+      });
+      const result = await resp.json();
+
+      if (!resp.ok) {
+        alert("Sonuç kaydedilemedi: " + (result.error || 'Bilinmeyen hata'));
+        return;
+      }
+
+      // Sınav artık bitti, dönen cevap anahtarını (sadece bu sınav için)
+      // yerel state'e işleyip doğru/yanlış tablosunun render edilmesini sağlıyoruz.
+      setExams(prev => prev.map(ex => ex.id === activeStudentExamId ? { ...ex, answerKey: result.answerKey || {} } : ex));
+      setIsExamFinished(true);
+      setShowResults(true);
       setStudentResultsMap(prev => ({
         ...prev,
-        [activeStudentExamId]: { is_finished: true, ...results, answers: studentAnswers, rating: finalRating }
+        [activeStudentExamId]: {
+          is_finished: true,
+          correct: result.correct,
+          wrong: result.wrong,
+          empty: result.empty,
+          net: result.net,
+          answers: studentAnswers,
+          rating: finalRating
+        }
       }));
       fetchAllRatings();
+    } catch (err) {
+      console.error("Sonuç kaydedilemedi:", err);
+      alert("Sonuç kaydedilirken bir hata oluştu, lütfen tekrar deneyin.");
+    }
+  };
+
+  // Daha önce bitirilmiş bir sınavın sonucunu tekrar incelerken, cevap
+  // anahtarını sunucudan (/api/get-answer-key) çekip yerel state'e işliyoruz.
+  // Sunucu, gerçekten bu sınavı bitirdiğinizi doğruladıktan sonra verir.
+  const fetchAnswerKeyForReview = async (examId) => {
+    const exam = exams.find(e => e.id === examId);
+    if (exam && exam.answerKey && Object.keys(exam.answerKey).length > 0) return; // zaten yüklü
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if (!token) return;
+
+    try {
+      const resp = await fetch('/api/get-answer-key', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ examId })
+      });
+      const result = await resp.json();
+      if (resp.ok) {
+        setExams(prev => prev.map(ex => ex.id === examId ? { ...ex, answerKey: result.answerKey || {} } : ex));
+      }
+    } catch (err) {
+      console.error("Cevap anahtarı alınamadı:", err);
     }
   };
 
@@ -1842,6 +1940,7 @@ export default function App() {
                               setShowResults(true);
                               setViewingSolutionQ(false);
                               setShowAccountPage(false);
+                              fetchAnswerKeyForReview(e.id);
                             }}
                             className="yt-btn yt-btn-outline"
                           >
@@ -2116,6 +2215,7 @@ export default function App() {
                                   setIsExamFinished(true);
                                   setShowResults(true);
                                   setViewingSolutionQ(false);
+                                  fetchAnswerKeyForReview(child.id);
                                 } else {
                                   startExam(child);
                                 }
