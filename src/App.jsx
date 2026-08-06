@@ -867,7 +867,7 @@ export default function App() {
     }
   };
 
-  const handleIyzicoPayment = (exam) => {
+  const handleIyzicoPayment = async (exam) => {
     if (!user) {
       alert("Ödeme yapabilmek ve sınava katılabilmek için lütfen giriş yapın.");
       setAuthMode('login');
@@ -878,14 +878,21 @@ export default function App() {
     const confirmed = window.confirm(`"${exam.name}" isimli sınav ücretli (₺${exam.price}). İyzico ödeme formu açılacaktır. Onaylıyor musunuz?`);
     if (!confirmed) return;
 
+    // Not: price/email artık sunucuda (Authorization token'ı ve veritabanı
+    // üzerinden) doğrulanıyor, burada gönderilenler sadece referans amaçlı.
     const paymentData = {
-      price: exam.price.toString(),
-      email: user.email,
       examIds: [exam.id],
-      items: [{ id: exam.id, name: exam.name || 'Dijital Sınav / Test', price: exam.price }]
+      items: [{ id: exam.id }]
     };
 
-    initializePayment(paymentData, (err, result) => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if (!token) {
+      alert("Oturumunuz bulunamadı, lütfen tekrar giriş yapın.");
+      return;
+    }
+
+    initializePayment(paymentData, token, (err, result) => {
       if (err) {
         console.error("Ödeme hatası:", err);
         alert("Ödeme başlatılırken bir hata oluştu.");
@@ -912,7 +919,7 @@ export default function App() {
     setCartItems(prev => prev.includes(examId) ? prev.filter(id => id !== examId) : [...prev, examId]);
   };
 
-  const handleCartCheckout = () => {
+  const handleCartCheckout = async () => {
     if (!user) {
       alert("Ödeme yapabilmek için lütfen giriş yapın veya üye olun.");
       setAuthMode('login');
@@ -927,14 +934,21 @@ export default function App() {
     const confirmed = window.confirm(`Sepetinizdeki ${cartExams.length} içerik için toplam ₺${cartTotal.toLocaleString('tr-TR')} tutarında ödeme yapılacak. Onaylıyor musunuz?`);
     if (!confirmed) return;
 
+    // Not: price/email artık sunucuda (Authorization token'ı ve veritabanı
+    // üzerinden) doğrulanıyor, burada gönderilenler sadece referans amaçlı.
     const paymentData = {
-      price: cartTotal.toString(),
-      email: user.email,
       examIds: cartExams.map(e => e.id),
-      items: cartExams.map(e => ({ id: e.id, name: e.name || 'Dijital Sınav / Test', price: e.price }))
+      items: cartExams.map(e => ({ id: e.id }))
     };
 
-    initializePayment(paymentData, (err, result) => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if (!token) {
+      alert("Oturumunuz bulunamadı, lütfen tekrar giriş yapın.");
+      return;
+    }
+
+    initializePayment(paymentData, token, (err, result) => {
       if (err) {
         console.error("Ödeme hatası:", err);
         alert("Ödeme başlatılırken bir hata oluştu.");
