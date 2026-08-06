@@ -2370,7 +2370,15 @@ export default function App() {
       return (
         <div className="yt-shell">
 
-          <header className="yt-header">
+          <style>{`
+            .yt-header-modern {
+              box-shadow: 0 1px 0 rgba(27, 33, 56, 0.08), 0 2px 8px rgba(27, 33, 56, 0.04);
+            }
+            .yt-header-modern .yt-perf {
+              display: none;
+            }
+          `}</style>
+          <header className="yt-header yt-header-modern">
             <div className="yt-header-inner">
               <div className="yt-brand">
                 <span className="yt-brand-mark">YT</span>
@@ -2418,7 +2426,6 @@ export default function App() {
                 )}
               </div>
             </div>
-            <div className="yt-perf"></div>
           </header>
 
           <div className="wrap" style={{ maxWidth: '920px', margin: '0 auto', padding: '0 24px' }}>
@@ -2475,6 +2482,7 @@ export default function App() {
                   flex-direction: column;
                   gap: 11px;
                   cursor: pointer;
+                  min-height: 258px;
                 }
                 .yt-exam-card h3 {
                   font-size: 1.02rem;
