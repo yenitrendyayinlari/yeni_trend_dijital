@@ -2167,7 +2167,7 @@ export default function App() {
       const inspectExam = exams.find(e => e.id === inspectingExamId);
       if (!inspectExam) return null;
 
-      const childExams = exams.filter(e => e.parentId === inspectingExamId);
+      const childExams = exams.filter(e => e.parentId === inspectingExamId).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
       const ratingInfo = examRatingsMap[inspectExam.id] || { average: '0,0', count: '0' };
       const ratingBreakdown = examRatingBreakdownMap[inspectExam.id] || { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
       const totalRatingCount = Object.values(ratingBreakdown).reduce((a, b) => a + b, 0);
@@ -2224,6 +2224,18 @@ export default function App() {
               <h1 style={{ margin: '0 0 12px 0', fontSize: '1.6rem' }}>
                 {inspectExam.name || 'İsimsiz İçerik'}
               </h1>
+
+              {(() => {
+                const totalQuestions = childExams.length > 0
+                  ? childExams.reduce((sum, t) => sum + (t.numPages || 0), 0)
+                  : (inspectExam.numPages || 0);
+                return (
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+                    <span className="yt-chip">{totalQuestions} SORU</span>
+                    {childExams.length > 0 && <span className="yt-chip">{childExams.length} TEST</span>}
+                  </div>
+                );
+              })()}
 
               <div style={{ marginBottom: '10px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
                 <div className="yt-rating" style={{ fontSize: '0.85rem' }}>
@@ -2391,7 +2403,7 @@ export default function App() {
 
 
               <div style={{ marginBottom: '24px' }}>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '0.95rem' }}>Sınav Bilgileri ve Testler</h3>
+                <h3 style={{ margin: '0 0 12px 0', fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Testler</h3>
 
                 {inspectExam.sections && inspectExam.sections.length > 0 ? (
                   <div className="yt-subtest-list">
@@ -2463,15 +2475,48 @@ export default function App() {
             </div>
 
             {relatedExams.length > 0 && (
-              <div style={{ marginTop: '20px' }}>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '0.9rem', color: 'var(--yt-ink)' }}>Bunlar da İlgini Çekebilir</h3>
-                <div className="yt-related-grid">
-                  {relatedExams.map(re => (
-                    <div key={re.id} className="yt-related-card" onClick={() => setInspectingExamId(re.id)}>
-                      <div className="name">{re.name || 'İsimsiz İçerik'}</div>
-                      <div className="price">{re.price > 0 ? `₺${re.price}` : 'Ücretsiz'}</div>
-                    </div>
-                  ))}
+              <div style={{ marginTop: '32px' }}>
+                <h3 style={{ margin: '0 0 14px 0', fontSize: '1rem', color: 'var(--yt-ink)', fontFamily: 'var(--yt-font-display)' }}>Bunlar da İlgini Çekebilir</h3>
+                <div className="yt-related-scroll">
+                  {relatedExams.map((re, idx) => {
+                    const reRating = examRatingsMap[re.id] || { average: '0,0', count: '0' };
+                    const reChildren = exams.filter(e => e.parentId === re.id);
+                    const reQuestions = reChildren.length > 0
+                      ? reChildren.reduce((sum, t) => sum + (t.numPages || 0), 0)
+                      : (re.numPages || 0);
+                    const reIsFree = !re.price || re.price <= 0;
+                    const reOnCampaign = re.originalPrice && re.originalPrice > re.price;
+                    const tileTone = ['ink', 'mustard', 'graphite'][idx % 3];
+                    const initials = (re.categoryLesson || re.name || '?').trim().slice(0, 2).toUpperCase();
+                    return (
+                      <div key={re.id} className="yt-related-card-v2" onClick={() => setInspectingExamId(re.id)}>
+                        <div className={`yt-related-tile tone-${tileTone}`}>
+                          {initials}
+                          {reIsFree && <span className="yt-related-badge free">ÜCRETSİZ</span>}
+                          {!reIsFree && reOnCampaign && <span className="yt-related-badge sale">İNDİRİMDE</span>}
+                        </div>
+                        <div className="yt-related-body">
+                          <div className="yt-related-cat">{re.categoryExamType} · {re.categoryLesson}</div>
+                          <div className="yt-related-name">{re.name || 'İsimsiz İçerik'}</div>
+                          <div className="yt-related-rating">
+                            <span className="stars">{'★'.repeat(Math.round(Number(reRating.average.replace(',', '.')))).padEnd(5, '☆')}</span>
+                            <span>{reRating.average} ({reRating.count})</span>
+                          </div>
+                          <div className="yt-related-meta">{reQuestions} soru{reChildren.length > 0 ? ` · ${reChildren.length} test` : ''}</div>
+                          <div className="yt-related-price">
+                            {reIsFree ? (
+                              <span className="free">Ücretsiz</span>
+                            ) : (
+                              <>
+                                {reOnCampaign && <span className="old">₺{re.originalPrice}</span>}
+                                <span className="now">₺{re.price}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

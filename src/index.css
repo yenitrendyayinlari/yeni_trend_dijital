@@ -395,13 +395,57 @@ p {
 }
 
 /* --- cross-sell --- */
-.yt-related-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
-.yt-related-card {
-  background: var(--yt-paper); border: 1.5px solid var(--yt-line); border-radius: 10px; padding: 12px; cursor: pointer;
+.yt-related-scroll {
+  display: flex; gap: 14px; overflow-x: auto; padding-bottom: 8px; scroll-snap-type: x proximity;
 }
-.yt-related-card:hover { border-color: var(--yt-ink); }
-.yt-related-card .name { font-family: var(--yt-font-display); font-weight: 600; font-size: 0.85rem; color: var(--yt-ink); margin-bottom: 6px; line-height: 1.3; }
-.yt-related-card .price { font-family: var(--yt-font-mono); font-size: 0.8rem; color: var(--yt-graphite); }
+.yt-related-scroll::-webkit-scrollbar { height: 6px; }
+.yt-related-scroll::-webkit-scrollbar-thumb { background: var(--yt-line); border-radius: 3px; }
+
+.yt-related-card-v2 {
+  flex: 0 0 190px; scroll-snap-align: start; cursor: pointer;
+  background: #fff; border: 1.5px solid var(--yt-line); border-radius: 12px; overflow: hidden;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.yt-related-card-v2:hover { border-color: var(--yt-mustard); box-shadow: var(--yt-shadow); transform: translateY(-2px); }
+
+.yt-related-tile {
+  height: 76px; display: flex; align-items: center; justify-content: center;
+  font-family: var(--yt-font-display); font-size: 1.3rem; font-weight: 700; color: #fff;
+  position: relative;
+}
+.yt-related-tile.tone-ink { background: var(--yt-ink); }
+.yt-related-tile.tone-mustard { background: var(--yt-mustard); }
+.yt-related-tile.tone-graphite { background: var(--yt-graphite); }
+
+.yt-related-badge {
+  position: absolute; top: 8px; left: 8px; font-family: var(--yt-font-mono); font-size: 0.6rem;
+  font-weight: 700; letter-spacing: 0.04em; padding: 3px 7px; border-radius: 5px;
+}
+.yt-related-badge.free { background: var(--yt-correct-bg); color: var(--yt-correct); }
+.yt-related-badge.sale { background: var(--yt-mustard-bg); color: var(--yt-mustard-deep); }
+
+.yt-related-body { padding: 12px; }
+.yt-related-cat {
+  font-family: var(--yt-font-mono); font-size: 0.62rem; color: var(--yt-graphite-soft);
+  text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 4px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.yt-related-name {
+  font-family: var(--yt-font-display); font-weight: 600; font-size: 0.85rem; color: var(--yt-ink);
+  line-height: 1.3; margin-bottom: 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  min-height: 2.2em;
+}
+.yt-related-rating {
+  display: flex; align-items: center; gap: 5px; font-size: 0.72rem; color: var(--yt-graphite); margin-bottom: 4px;
+}
+.yt-related-rating .stars { color: var(--yt-mustard); letter-spacing: -1px; }
+.yt-related-meta {
+  font-family: var(--yt-font-mono); font-size: 0.68rem; color: var(--yt-graphite-soft); margin-bottom: 8px;
+}
+.yt-related-price { font-family: var(--yt-font-mono); font-size: 0.85rem; }
+.yt-related-price .now { font-weight: 700; color: var(--yt-ink); }
+.yt-related-price .old { text-decoration: line-through; color: var(--yt-graphite-soft); margin-right: 6px; font-size: 0.75rem; }
+.yt-related-price .free { font-weight: 700; color: var(--yt-correct); }
 
 /* ============================================================
    Modal / form bileşenleri (Giriş-Kayıt modalı ve admin formları
