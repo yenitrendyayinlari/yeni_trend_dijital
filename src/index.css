@@ -409,9 +409,9 @@ p {
 .yt-related-card-v2:hover { border-color: var(--yt-mustard); box-shadow: var(--yt-shadow); transform: translateY(-2px); }
 
 .yt-related-tile {
-  height: 76px; display: flex; align-items: center; justify-content: center;
-  font-family: var(--yt-font-display); font-size: 1.3rem; font-weight: 700; color: #fff;
-  position: relative;
+  height: 76px; display: flex; align-items: center; justify-content: center; text-align: center;
+  padding: 6px 34px; font-family: var(--yt-font-display); font-size: 0.95rem; font-weight: 700;
+  letter-spacing: 0.02em; line-height: 1.2; color: #fff; position: relative;
 }
 .yt-related-tile.tone-ink { background: var(--yt-ink); }
 .yt-related-tile.tone-mustard { background: var(--yt-mustard); }
@@ -425,11 +425,6 @@ p {
 .yt-related-badge.sale { background: var(--yt-mustard-bg); color: var(--yt-mustard-deep); }
 
 .yt-related-body { padding: 12px; }
-.yt-related-cat {
-  font-family: var(--yt-font-mono); font-size: 0.62rem; color: var(--yt-graphite-soft);
-  text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 4px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
 .yt-related-name {
   font-family: var(--yt-font-display); font-weight: 600; font-size: 0.85rem; color: var(--yt-ink);
   line-height: 1.3; margin-bottom: 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
