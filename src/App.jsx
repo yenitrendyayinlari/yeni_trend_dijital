@@ -2487,20 +2487,18 @@ export default function App() {
                     const reIsFree = !re.price || re.price <= 0;
                     const reOnCampaign = re.originalPrice && re.originalPrice > re.price;
                     const tileTone = ['ink', 'mustard', 'graphite'][idx % 3];
-                    const tileLabel = `${re.categoryExamType || ''} ${re.categoryLesson || ''}`.trim().toLocaleUpperCase('tr-TR') || (re.name || '?').toLocaleUpperCase('tr-TR');
                     return (
                       <div key={re.id} className="yt-related-card-v2" onClick={() => setInspectingExamId(re.id)}>
                         <div className={`yt-related-tile tone-${tileTone}`}>
-                          {tileLabel}
                           {reIsFree && <span className="yt-related-badge free">ÜCRETSİZ</span>}
                           {!reIsFree && reOnCampaign && <span className="yt-related-badge sale">İNDİRİMDE</span>}
-                        </div>
-                        <div className="yt-related-body">
-                          <div className="yt-related-name">{re.name || 'İsimsiz İçerik'}</div>
                           <div className="yt-related-rating">
                             <span className="stars">{'★'.repeat(Math.round(Number(reRating.average.replace(',', '.')))).padEnd(5, '☆')}</span>
                             <span>{reRating.average} ({reRating.count})</span>
                           </div>
+                        </div>
+                        <div className="yt-related-body">
+                          <div className="yt-related-name">{re.name || 'İsimsiz İçerik'}</div>
                           <div className="yt-related-meta">{reQuestions} soru{reChildren.length > 0 ? ` · ${reChildren.length} test` : ''}</div>
                           <div className="yt-related-price">
                             {reIsFree ? (

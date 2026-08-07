@@ -410,8 +410,7 @@ p {
 
 .yt-related-tile {
   height: 76px; display: flex; align-items: center; justify-content: center; text-align: center;
-  padding: 6px 34px; font-family: var(--yt-font-display); font-size: 0.95rem; font-weight: 700;
-  letter-spacing: 0.02em; line-height: 1.2; color: #fff; position: relative;
+  padding: 6px 12px; position: relative;
 }
 .yt-related-tile.tone-ink { background: var(--yt-ink); }
 .yt-related-tile.tone-mustard { background: var(--yt-mustard); }
@@ -424,16 +423,22 @@ p {
 .yt-related-badge.free { background: var(--yt-correct-bg); color: var(--yt-correct); }
 .yt-related-badge.sale { background: var(--yt-mustard-bg); color: var(--yt-mustard-deep); }
 
+.yt-related-tile .yt-related-rating {
+  display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 0.75rem;
+  font-family: var(--yt-font-mono); color: rgba(255,255,255,0.85);
+}
+.yt-related-tile .yt-related-rating .stars {
+  color: var(--yt-mustard); font-size: 1.15rem; letter-spacing: 1px;
+}
+.yt-related-tile.tone-mustard .yt-related-rating .stars { color: var(--yt-ink); }
+.yt-related-tile.tone-mustard .yt-related-rating { color: rgba(26,26,46,0.75); }
+
 .yt-related-body { padding: 12px; }
 .yt-related-name {
   font-family: var(--yt-font-display); font-weight: 600; font-size: 0.85rem; color: var(--yt-ink);
   line-height: 1.3; margin-bottom: 6px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   min-height: 2.2em;
 }
-.yt-related-rating {
-  display: flex; align-items: center; gap: 5px; font-size: 0.72rem; color: var(--yt-graphite); margin-bottom: 4px;
-}
-.yt-related-rating .stars { color: var(--yt-mustard); letter-spacing: -1px; }
 .yt-related-meta {
   font-family: var(--yt-font-mono); font-size: 0.68rem; color: var(--yt-graphite-soft); margin-bottom: 8px;
 }
