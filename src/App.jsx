@@ -63,43 +63,6 @@ export default function App() {
     }
   });
   const [showCart, setShowCart] = useState(false);
-
-  // --- Kart üzerine gelince açılan "flyout" önizleme (Udemy tarzı) ---
-  const [hoveredExam, setHoveredExam] = useState(null); // { exam, rect, placement }
-  const hoverOpenTimerRef = useRef(null);
-  const hoverCloseTimerRef = useRef(null);
-
-  const HOVER_OPEN_DELAY = 300;  // göz gezdirirken her kartta açılmasın
-  const HOVER_CLOSE_DELAY = 150; // karttan flyout'a geçerken anında kapanmasın
-  const HOVER_FLYOUT_WIDTH = 340;
-
-  const clearHoverTimers = () => {
-    if (hoverOpenTimerRef.current) clearTimeout(hoverOpenTimerRef.current);
-    if (hoverCloseTimerRef.current) clearTimeout(hoverCloseTimerRef.current);
-  };
-
-  const handleExamCardEnter = (exam, node) => {
-    clearHoverTimers();
-    hoverOpenTimerRef.current = setTimeout(() => {
-      const rect = node.getBoundingClientRect();
-      const placement = rect.right + HOVER_FLYOUT_WIDTH + 20 > window.innerWidth ? 'left' : 'right';
-      setHoveredExam({ exam, rect, placement });
-    }, HOVER_OPEN_DELAY);
-  };
-
-  const handleExamCardLeave = () => {
-    if (hoverOpenTimerRef.current) clearTimeout(hoverOpenTimerRef.current);
-    hoverCloseTimerRef.current = setTimeout(() => setHoveredExam(null), HOVER_CLOSE_DELAY);
-  };
-
-  const handleFlyoutEnter = () => {
-    if (hoverCloseTimerRef.current) clearTimeout(hoverCloseTimerRef.current);
-  };
-
-  const handleFlyoutLeave = () => {
-    hoverCloseTimerRef.current = setTimeout(() => setHoveredExam(null), HOVER_CLOSE_DELAY);
-  };
-
   const [productReviews, setProductReviews] = useState([]);
   const [reviewTextInput, setReviewTextInput] = useState('');
   const [previewTestIndex, setPreviewTestIndex] = useState(0);
@@ -164,22 +127,6 @@ export default function App() {
       fetchSolvedCounts();
     }
   }, [exams.length]);
-
-  useEffect(() => {
-    // Sayfa kaydırıldığında ya da pencere yeniden boyutlandırıldığında
-    // flyout'un konumu bozulmasın diye kapatıyoruz.
-    if (!hoveredExam) return;
-    const closeOnMove = () => {
-      clearHoverTimers();
-      setHoveredExam(null);
-    };
-    window.addEventListener('scroll', closeOnMove, true);
-    window.addEventListener('resize', closeOnMove);
-    return () => {
-      window.removeEventListener('scroll', closeOnMove, true);
-      window.removeEventListener('resize', closeOnMove);
-    };
-  }, [hoveredExam]);
 
   useEffect(() => {
     if (viewingSolutionQ && solutionRef.current) {
@@ -2722,56 +2669,6 @@ export default function App() {
                   color: #1F6B44;
                   border-color: #9FCFB2;
                 }
-
-                .yt-exam-flyout {
-                  position: fixed;
-                  width: ${HOVER_FLYOUT_WIDTH}px;
-                  z-index: 60;
-                  animation: yt-flyout-in 0.14s ease-out;
-                }
-                @keyframes yt-flyout-in {
-                  from { opacity: 0; transform: translateX(-6px) scale(0.98); }
-                  to { opacity: 1; transform: translateX(0) scale(1); }
-                }
-                .yt-exam-flyout-inner {
-                  background: #fff;
-                  border: 1px solid var(--yt-line);
-                  border-radius: 12px;
-                  box-shadow: 0 20px 40px -12px rgba(23,33,58,0.35);
-                  padding: 18px;
-                }
-                .yt-exam-flyout-title {
-                  font-family: var(--yt-font-display);
-                  font-size: 1rem;
-                  color: var(--yt-ink);
-                  margin: 0 0 10px;
-                  line-height: 1.3;
-                }
-                .yt-exam-flyout-features {
-                  list-style: none;
-                  padding: 0;
-                  margin: 0 0 14px;
-                  display: flex;
-                  flex-direction: column;
-                  gap: 6px;
-                }
-                .yt-exam-flyout-features li {
-                  font-size: 0.8rem;
-                  color: var(--yt-ink);
-                  display: flex;
-                  gap: 8px;
-                }
-                .yt-exam-flyout-check {
-                  color: var(--yt-correct);
-                  font-weight: 700;
-                }
-                .yt-exam-flyout-footer {
-                  display: flex;
-                  justify-content: space-between;
-                  align-items: center;
-                  padding-top: 12px;
-                  border-top: 1px solid var(--yt-line);
-                }
               `}</style>
               <div className="yt-card-grid">
                 {publishedExams.map(exam => {
@@ -2789,8 +2686,6 @@ export default function App() {
                     <div
                       key={exam.id}
                       onClick={() => setInspectingExamId(exam.id)}
-                      onMouseEnter={(e) => handleExamCardEnter(exam, e.currentTarget)}
-                      onMouseLeave={handleExamCardLeave}
                       className="yt-exam-card"
                     >
                       <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -2860,79 +2755,6 @@ export default function App() {
                   );
                 })}
               </div>
-
-              {hoveredExam && (() => {
-                const exam = hoveredExam.exam;
-                const ratingInfo = examRatingsMap[exam.id] || { average: '0,0', count: '0' };
-                const childTests = exams.filter(e => e.parentId === exam.id);
-                const totalQuestions = childTests.length > 0
-                  ? childTests.reduce((sum, t) => sum + (t.numPages || 0), 0)
-                  : (exam.numPages || 0);
-                const isPaid = !!(exam.price && exam.price > 0);
-                const isCompleted = studentResultsMap[exam.id]?.is_finished;
-                const isDeneme = exam.examType === 'deneme';
-
-                const style = {
-                  top: Math.max(12, hoveredExam.rect.top - 12),
-                  left: hoveredExam.placement === 'right'
-                    ? hoveredExam.rect.right + 10
-                    : hoveredExam.rect.left - HOVER_FLYOUT_WIDTH - 10,
-                };
-
-                return (
-                  <div
-                    className="yt-exam-flyout"
-                    style={style}
-                    onMouseEnter={handleFlyoutEnter}
-                    onMouseLeave={handleFlyoutLeave}
-                  >
-                    <div className="yt-exam-flyout-inner">
-                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
-                        <span className="yt-tag">{exam.categoryExamType} · {exam.categoryLesson}</span>
-                        <span className={`yt-tag ${isDeneme ? 'deneme' : 'test'}`}>{isDeneme ? 'Deneme Sınavı' : 'Test'}</span>
-                      </div>
-
-                      <h4 className="yt-exam-flyout-title">{exam.name || 'İsimsiz İçerik'}</h4>
-
-                      <div className="yt-rating" style={{ marginBottom: '10px' }}>
-                        <span className="avg">{ratingInfo.average}</span>
-                        <span className={`stars${Number(ratingInfo.count) === 0 ? ' empty' : ''}`}>
-                          {'★'.repeat(Math.round(Number(ratingInfo.average.replace(',', '.')))).padEnd(5, '☆')}
-                        </span>
-                        <span className="count">({ratingInfo.count})</span>
-                      </div>
-
-                      <ul className="yt-exam-flyout-features">
-                        <li><span className="yt-exam-flyout-check">✓</span>{totalQuestions} soru{childTests.length > 0 ? `, ${childTests.length} ayrı test` : ''}</li>
-                        {exam.solutionPdfFile && <li><span className="yt-exam-flyout-check">✓</span>Detaylı çözüm PDF'i</li>}
-                        {isDeneme && exam.duration ? <li><span className="yt-exam-flyout-check">✓</span>{exam.duration} dakika süreli</li> : null}
-                        {getCampaignCountdown(exam) && <li><span className="yt-exam-flyout-check">✓</span>Kampanya: {getCampaignCountdown(exam)}</li>}
-                      </ul>
-
-                      <div className="yt-exam-flyout-footer">
-                        <div className="yt-price">
-                          {isPaid ? (
-                            <>
-                              {exam.originalPrice && exam.originalPrice > exam.price ? (
-                                <span className="old">₺{exam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                              ) : null}
-                              <span className="now">₺{exam.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                            </>
-                          ) : (
-                            <span className="free">Ücretsiz</span>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => { setInspectingExamId(exam.id); setHoveredExam(null); }}
-                          className="yt-btn-explore"
-                        >
-                          {isCompleted ? 'Sonucu İncele →' : 'İçeriği İncele →'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
               </>
             )}
           </main>
