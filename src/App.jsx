@@ -29,9 +29,9 @@ export default function App() {
     isParent: true,
     answerKey: {},
     sections: [],
-    numPages: 0
+    numPages: 0,
+    description: ''
   });
-
   const [activeStudentExamId, setActiveStudentExamId] = useState(null);
   const [inspectingExamId, setInspectingExamId] = useState(null);
 
@@ -273,13 +273,14 @@ export default function App() {
     parentId: item.parent_id || null,
     sortOrder: item.sort_order ?? 0,
     topicMap: item.topic_map || {},
+    description: item.description || '',
     campaignEndsAt: item.campaign_ends_at || null
   });
 
   // Güvenlik: answer_key sütununu KASITLI olarak bu listeye eklemiyoruz.
   // select('*') kullanırsak cevap anahtarı, sınavı satın almayan/bitirmeyen
   // herkesin tarayıcısına (Network sekmesinden okunabilir şekilde) gider.
-  const EXAM_PUBLIC_COLUMNS = 'id,name,duration,exam_type,category_exam_type,category_lesson,pdf_file,solution_pdf_file,sections,is_published,num_pages,price,original_price,is_parent,parent_id,sort_order,topic_map,campaign_ends_at,created_at';
+  const EXAM_PUBLIC_COLUMNS = 'id,name,duration,exam_type,category_exam_type,category_lesson,pdf_file,solution_pdf_file,sections,is_published,num_pages,price,original_price,is_parent,parent_id,sort_order,topic_map,campaign_ends_at,description,created_at';
 
   const fetchPublicExams = async () => {
     const { data, error } = await supabase
@@ -444,6 +445,7 @@ export default function App() {
     if (updates.numPages !== undefined) dbUpdates.num_pages = updates.numPages;
     if (updates.price !== undefined) dbUpdates.price = updates.price;
     if (updates.originalPrice !== undefined) dbUpdates.original_price = updates.originalPrice;
+    if (updates.description !== undefined) dbUpdates.description = updates.description;
 
     const { error } = await supabase
       .from('exams')
@@ -570,7 +572,8 @@ export default function App() {
       isParent: true,
       answerKey: {},
       sections: [],
-      numPages: 0
+      numPages: 0,
+      description: ''
     });
     setIsCreatingExam(true);
     setActiveAdminExamId(null);
@@ -589,7 +592,8 @@ export default function App() {
         categoryExamType: newExamForm.categoryExamType,
         categoryLesson: newExamForm.categoryLesson,
         price: Number(newExamForm.price) || 0,
-        originalPrice: Number(newExamForm.originalPrice) || 0
+        originalPrice: Number(newExamForm.originalPrice) || 0,
+        description: newExamForm.description || ''
       });
       setAuthLoading(false);
       setIsCreatingExam(false);
@@ -607,7 +611,8 @@ export default function App() {
       price: Number(newExamForm.price) || 0,
       original_price: Number(newExamForm.originalPrice) || 0,
       is_parent: true,
-      sections: []
+      sections: [],
+      description: newExamForm.description || ''
     };
 
     const { data, error } = await supabase.from('exams').insert([newExamData]).select();
@@ -667,7 +672,8 @@ export default function App() {
       isParent: true,
       answerKey: exam.answerKey || {},
       sections: exam.sections || [],
-      numPages: exam.numPages || 0
+      numPages: exam.numPages || 0,
+      description: exam.description || ''
     });
     setActiveAdminExamId(examId);
     setActiveSubExamId(null);
@@ -1384,6 +1390,23 @@ export default function App() {
                 onChange={(e) => setNewExamForm({ ...newExamForm, name: e.target.value })} 
                 style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
               />
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>
+                Açıklama <span style={{ fontWeight: 'normal', color: '#64748b' }}>(sınav detay sayfasında, puanların altında gösterilir)</span>:
+              </label>
+              <textarea
+                placeholder="Örn: Sınav öncesi son tekrar için hazırlanmış, gerçek sınav formatında 3 deneme."
+                value={newExamForm.description}
+                onChange={(e) => setNewExamForm({ ...newExamForm, description: e.target.value })}
+                rows={3}
+                maxLength={400}
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontFamily: 'inherit', resize: 'vertical' }}
+              />
+              <div style={{ textAlign: 'right', fontSize: '0.72rem', color: '#94a3b8', marginTop: '2px' }}>
+                {(newExamForm.description || '').length}/400
+              </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
@@ -2218,19 +2241,81 @@ export default function App() {
               </div>
 
               {totalRatingCount > 0 && (
-                <div className="yt-rating-histogram" style={{ marginBottom: '24px', maxWidth: '280px' }}>
-                  {[5, 4, 3, 2, 1].map(star => {
-                    const pct = totalRatingCount > 0 ? Math.round((ratingBreakdown[star] / totalRatingCount) * 100) : 0;
-                    return (
-                      <div key={star} className="yt-hist-row">
-                        <span>{star}★</span>
-                        <div className="yt-hist-track"><div className="yt-hist-fill" style={{ width: `${pct}%` }}></div></div>
-                        <span>{pct}%</span>
-                      </div>
-                    );
-                  })}
-                </div>
+                <details style={{ marginBottom: '16px' }}>
+                  <summary style={{ cursor: 'pointer', fontSize: '0.75rem', color: 'var(--yt-mustard-deep)', fontFamily: 'var(--yt-font-mono)', width: 'fit-content' }}>
+                    Puan dağılımını gör
+                  </summary>
+                  <div className="yt-rating-histogram" style={{ marginTop: '10px', maxWidth: '280px' }}>
+                    {[5, 4, 3, 2, 1].map(star => {
+                      const pct = totalRatingCount > 0 ? Math.round((ratingBreakdown[star] / totalRatingCount) * 100) : 0;
+                      return (
+                        <div key={star} className="yt-hist-row">
+                          <span>{star}★</span>
+                          <div className="yt-hist-track"><div className="yt-hist-fill" style={{ width: `${pct}%` }}></div></div>
+                          <span>{pct}%</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
               )}
+
+              {inspectExam.description && (
+                <p style={{ fontSize: '0.9rem', color: 'var(--yt-graphite)', lineHeight: 1.6, margin: '0 0 20px', paddingBottom: '20px', borderBottom: '1px solid var(--yt-line)' }}>
+                  {inspectExam.description}
+                </p>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
+                <div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--yt-graphite)', marginBottom: '4px', fontFamily: 'var(--yt-font-mono)' }}>SINAV FİYATI</div>
+                  <div className="yt-price" style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
+                    {isPaid ? (
+                      <>
+                        <span className="now" style={{ fontSize: '1.5rem' }}>
+                          ₺{inspectExam.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                        {inspectExam.originalPrice && inspectExam.originalPrice > inspectExam.price ? (
+                          <span className="old">
+                            ₺{inspectExam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span className="free" style={{ fontSize: '1.3rem' }}>Ücretsiz</span>
+                    )}
+                  </div>
+                </div>
+
+                {isPaid && !isPurchased && childExams.length > 0 && (
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => toggleCartItem(inspectExam.id)} className={`yt-add-cart-btn${inCart ? ' in-cart' : ''}`}>
+                      {inCart ? '✓ Sepette' : '+ Sepete Ekle'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (!user) {
+                          alert("Satın alabilmek için lütfen giriş yapın veya üye olun.");
+                          setAuthMode('login');
+                          setShowAuthModal(true);
+                          return;
+                        }
+                        handleIyzicoPayment(inspectExam);
+                      }}
+                      className="yt-btn yt-btn-buy"
+                    >
+                      Hemen Satın Al (₺{inspectExam.price}) →
+                    </button>
+                  </div>
+                )}
+
+                {childExams.length === 0 && (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--yt-graphite-soft)', fontStyle: 'italic' }}>
+                    Test eklendiğinde burada &quot;Teste Başla&quot; seçeneği görünecek.
+                  </div>
+                )}
+              </div>
+
 
               {productReviews.length > 0 && (
                 <div style={{ marginBottom: '24px' }}>
@@ -2371,56 +2456,6 @@ export default function App() {
                 ) : (
                   <div style={{ textAlign: 'center', padding: '20px', color: 'var(--yt-graphite-soft)', fontSize: '0.9rem' }}>
                     Bu içerik için henüz test eklenmedi. Yakında yayında olacak.
-                  </div>
-                )}
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1.5px solid var(--yt-line)', paddingTop: '20px', flexWrap: 'wrap', gap: '16px' }}>
-                <div>
-                  <div style={{ fontSize: '0.78rem', color: 'var(--yt-graphite)', marginBottom: '4px', fontFamily: 'var(--yt-font-mono)' }}>SINAV FİYATI</div>
-                  <div className="yt-price" style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
-                    {isPaid ? (
-                      <>
-                        <span className="now" style={{ fontSize: '1.5rem' }}>
-                          ₺{inspectExam.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </span>
-                        {inspectExam.originalPrice && inspectExam.originalPrice > inspectExam.price ? (
-                          <span className="old">
-                            ₺{inspectExam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
-                        ) : null}
-                      </>
-                    ) : (
-                      <span className="free" style={{ fontSize: '1.3rem' }}>Ücretsiz</span>
-                    )}
-                  </div>
-                </div>
-
-                {isPaid && !isPurchased && childExams.length > 0 && (
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button onClick={() => toggleCartItem(inspectExam.id)} className={`yt-add-cart-btn${inCart ? ' in-cart' : ''}`}>
-                      {inCart ? '✓ Sepette' : '+ Sepete Ekle'}
-                    </button>
-                    <button
-                      onClick={() => {
-                        if (!user) {
-                          alert("Satın alabilmek için lütfen giriş yapın veya üye olun.");
-                          setAuthMode('login');
-                          setShowAuthModal(true);
-                          return;
-                        }
-                        handleIyzicoPayment(inspectExam);
-                      }}
-                      className="yt-btn yt-btn-buy"
-                    >
-                      Hemen Satın Al (₺{inspectExam.price}) →
-                    </button>
-                  </div>
-                )}
-
-                {childExams.length === 0 && (
-                  <div style={{ fontSize: '0.8rem', color: 'var(--yt-graphite-soft)', fontStyle: 'italic' }}>
-                    Test eklendiğinde burada &quot;Teste Başla&quot; seçeneği görünecek.
                   </div>
                 )}
               </div>
