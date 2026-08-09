@@ -64,6 +64,7 @@ export default function App() {
   const [announceMessage, setAnnounceMessage] = useState('');
   const [announceAudience, setAnnounceAudience] = useState('all');
   const [announceExamId, setAnnounceExamId] = useState('');
+  const [announceExamType, setAnnounceExamType] = useState('');
   const [announceStudentEmail, setAnnounceStudentEmail] = useState('');
   const [announceSending, setAnnounceSending] = useState(false);
 
@@ -290,6 +291,7 @@ export default function App() {
   const sendAnnouncement = async () => {
     if (!announceTitle.trim() || !announceMessage.trim() || announceSending) return;
     if (announceAudience === 'buyers' && !announceExamId) { alert("Lütfen bir ürün/paket seçin."); return; }
+    if (announceAudience === 'exam_type' && !announceExamType) { alert("Lütfen bir sınav türü seçin."); return; }
     if (announceAudience === 'single' && !announceStudentEmail.trim()) { alert("Lütfen öğrenci e-postasını girin."); return; }
 
     setAnnounceSending(true);
@@ -300,6 +302,7 @@ export default function App() {
         message: announceMessage.trim(),
         audience_type: announceAudience,
         audience_exam_id: announceAudience === 'buyers' ? announceExamId : null,
+        audience_category_exam_type: announceAudience === 'exam_type' ? announceExamType : null,
         target_student_email: announceAudience === 'single' ? announceStudentEmail.trim() : null
       }]);
     setAnnounceSending(false);
@@ -315,6 +318,7 @@ export default function App() {
     setAnnounceMessage('');
     setAnnounceAudience('all');
     setAnnounceExamId('');
+    setAnnounceExamType('');
     setAnnounceStudentEmail('');
     alert("✓ Duyuru gönderildi.");
   };
@@ -1611,6 +1615,7 @@ export default function App() {
               >
                 <option value="all">Tüm Üyelere</option>
                 <option value="buyers">Belirli Bir Ürünü Alanlara</option>
+                <option value="exam_type">Belirli Bir Sınav Türü Alanlara</option>
                 <option value="single">Tek Bir Öğrenciye</option>
               </select>
 
@@ -1623,6 +1628,19 @@ export default function App() {
                   <option value="">Ürün / Paket Seçin</option>
                   {exams.filter(e => !e.parentId).map(pe => (
                     <option key={pe.id} value={pe.id}>{pe.name || 'İsimsiz İçerik'}</option>
+                  ))}
+                </select>
+              )}
+
+              {announceAudience === 'exam_type' && (
+                <select
+                  value={announceExamType}
+                  onChange={(e) => setAnnounceExamType(e.target.value)}
+                  style={{ width: '100%', padding: '9px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '12px', fontSize: '0.88rem' }}
+                >
+                  <option value="">Sınav Türü Seçin</option>
+                  {Array.from(new Set(exams.filter(e => !e.parentId && e.categoryExamType).map(e => e.categoryExamType.trim()))).map(type => (
+                    <option key={type} value={type}>{type}</option>
                   ))}
                 </select>
               )}
