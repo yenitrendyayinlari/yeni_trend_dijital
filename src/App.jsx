@@ -46,6 +46,17 @@ export default function App() {
   const solutionRef = useRef(null);
   const [studentResultsMap, setStudentResultsMap] = useState({});
   const [studentPurchases, setStudentPurchases] = useState({}); 
+
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportText, setReportText] = useState('');
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [reportedQuestions, setReportedQuestions] = useState({}); 
+
+  const [showReportsAdmin, setShowReportsAdmin] = useState(false);
+  const [adminReports, setAdminReports] = useState([]);
+  const [adminReportsLoading, setAdminReportsLoading] = useState(false);
+  const [adminReportsFilter, setAdminReportsFilter] = useState('open');
+  const [openReportsCount, setOpenReportsCount] = useState(0);
   
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Tümü');
@@ -164,6 +175,74 @@ export default function App() {
     const cleanUrl = window.location.origin + window.location.pathname;
     window.history.replaceState({}, '', cleanUrl);
   }, [user]);
+
+  useEffect(() => {
+    if (appMode === 'admin' && user) {
+      fetchAdminReports('open');
+      fetchOpenReportsCount();
+    }
+  }, [appMode, user]);
+
+  const fetchOpenReportsCount = async () => {
+    const { count, error } = await supabase
+      .from('question_reports')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'open');
+
+    if (!error && typeof count === 'number') {
+      setOpenReportsCount(count);
+    }
+  };
+
+  const fetchAdminReports = async (filter) => {
+    setAdminReportsLoading(true);
+    let query = supabase
+      .from('question_reports')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (filter && filter !== 'all') {
+      query = query.eq('status', filter);
+    }
+
+    const { data, error } = await query;
+    setAdminReportsLoading(false);
+
+    if (!error && data) {
+      setAdminReports(data);
+    } else if (error) {
+      console.error("Bildirimler alınamadı:", error);
+    }
+  };
+
+  const markReportStatus = async (reportId, status) => {
+    const { error } = await supabase
+      .from('question_reports')
+      .update({ status })
+      .eq('id', reportId);
+
+    if (!error) {
+      setAdminReports(prev => prev.filter(r => r.id !== reportId));
+      fetchOpenReportsCount();
+    } else {
+      alert("İşlem başarısız oldu.");
+    }
+  };
+
+  const deleteAdminReport = async (reportId) => {
+    if (!window.confirm("Bu bildirimi kalıcı olarak silmek istiyor musunuz?")) return;
+    const { error } = await supabase
+      .from('question_reports')
+      .delete()
+      .eq('id', reportId);
+
+    if (!error) {
+      setAdminReports(prev => prev.filter(r => r.id !== reportId));
+      fetchOpenReportsCount();
+    } else {
+      alert("Silme işlemi başarısız oldu.");
+    }
+  };
 
   const fetchAllRatings = async () => {
     const { data, error } = await supabase
@@ -1282,6 +1361,37 @@ export default function App() {
     }
   };
 
+  const reportKey = (examId, qNum) => `${examId}_${qNum}`;
+
+  const handleSubmitQuestionReport = async () => {
+    const trimmed = reportText.trim();
+    if (!trimmed || !activeStudentExamId || !user || reportSubmitting) return;
+
+    setReportSubmitting(true);
+    const { error } = await supabase
+      .from('question_reports')
+      .insert([
+        {
+          exam_id: activeStudentExamId,
+          question_number: studentCurrentPage,
+          student_email: user.email,
+          message: trimmed.slice(0, 300)
+        }
+      ]);
+    setReportSubmitting(false);
+
+    if (error) {
+      console.error("Bildirim gönderilemedi:", error);
+      alert("Bildirim gönderilemedi. Lütfen daha sonra tekrar deneyin.");
+      return;
+    }
+
+    setReportedQuestions(prev => ({ ...prev, [reportKey(activeStudentExamId, studentCurrentPage)]: true }));
+    setReportText('');
+    setShowReportModal(false);
+    alert("✓ Bildiriminiz alındı, teşekkürler!");
+  };
+
   const fetchProductReviews = async (parentId, childIds) => {
     const allIds = [parentId, ...childIds];
     const { data, error } = await supabase
@@ -1317,8 +1427,84 @@ export default function App() {
       <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', maxWidth: '1200px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px' }}>
           <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>⚙️ Yönetici Paneli ({user.email})</h1>
-          <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <button
+              onClick={() => { setShowReportsAdmin(true); fetchAdminReports(adminReportsFilter); }}
+              style={{ position: 'relative', padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              🚩 Bildirimler
+              {openReportsCount > 0 && (
+                <span style={{ position: 'absolute', top: '-8px', right: '-8px', backgroundColor: '#dc2626', color: '#fff', borderRadius: '999px', fontSize: '0.7rem', minWidth: '18px', height: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px' }}>
+                  {openReportsCount}
+                </span>
+              )}
+            </button>
+            <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
+          </div>
         </header>
+
+        {showReportsAdmin && (
+          <div style={{ marginBottom: '20px', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+              <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🚩 Soru / Çözüm Bildirimleri</h2>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <select
+                  value={adminReportsFilter}
+                  onChange={(e) => { setAdminReportsFilter(e.target.value); fetchAdminReports(e.target.value); }}
+                  style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                >
+                  <option value="open">Açık Bildirimler</option>
+                  <option value="resolved">Çözülenler</option>
+                  <option value="all">Tümü</option>
+                </select>
+                <button onClick={() => setShowReportsAdmin(false)} style={{ padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+              </div>
+            </div>
+
+            {adminReportsLoading ? (
+              <p style={{ color: '#64748b' }}>Yükleniyor...</p>
+            ) : adminReports.length === 0 ? (
+              <p style={{ color: '#64748b' }}>Bu filtrede bildirim bulunmuyor.</p>
+            ) : (
+              <div style={{ display: 'grid', gap: '10px' }}>
+                {adminReports.map(rep => {
+                  const relatedExam = exams.find(e => e.id === rep.exam_id);
+                  return (
+                    <div key={rep.id} style={{ border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px 14px', backgroundColor: '#f8fafc' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', marginBottom: '6px' }}>
+                        <span style={{ fontWeight: 'bold', fontSize: '0.88rem', color: '#0f172a' }}>
+                          {relatedExam ? relatedExam.name : rep.exam_id} · {rep.question_number}. Soru
+                        </span>
+                        <span style={{ fontSize: '0.76rem', color: '#94a3b8' }}>
+                          {new Date(rep.created_at).toLocaleString('tr-TR')}
+                        </span>
+                      </div>
+                      <p style={{ margin: '0 0 8px 0', fontSize: '0.88rem', color: '#334155', whiteSpace: 'pre-wrap' }}>{rep.message}</p>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                        <span style={{ fontSize: '0.76rem', color: '#64748b' }}>{rep.student_email || 'E-posta yok'}</span>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          {rep.status === 'open' ? (
+                            <button onClick={() => markReportStatus(rep.id, 'resolved')} style={{ padding: '6px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#fff', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}>
+                              ✓ Çözüldü İşaretle
+                            </button>
+                          ) : (
+                            <button onClick={() => markReportStatus(rep.id, 'open')} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', color: '#0f172a', cursor: 'pointer', fontSize: '0.78rem' }}>
+                              ↺ Tekrar Aç
+                            </button>
+                          )}
+                          <button onClick={() => deleteAdminReport(rep.id)} style={{ padding: '6px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#ef4444', color: '#fff', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}>
+                            Sil
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
 
         {authLoading && (
           <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'var(--yt-mustard-bg)', color: 'var(--yt-mustard-deep)', marginBottom: '16px', borderRadius: '6px', fontWeight: 'bold' }}>
@@ -3157,6 +3343,71 @@ export default function App() {
               <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: 'rgba(0,0,0,0.2)', color: '#fff', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}>Kapat</button>
             </div>
             <SecurePdfViewer examId={activeStudentExamId} type="solution" pageNumber={studentCurrentPage} />
+
+            {reportedQuestions[reportKey(activeStudentExamId, studentCurrentPage)] ? (
+              <button disabled className="yt-btn yt-btn-outline" style={{ width: '100%', marginTop: '12px', opacity: 0.6, cursor: 'not-allowed' }}>
+                ✓ Bildirildi
+              </button>
+            ) : (
+              <button onClick={() => setShowReportModal(true)} className="yt-btn yt-btn-outline" style={{ width: '100%', marginTop: '12px' }}>
+                ⚠ Hata / Geri Bildirim
+              </button>
+            )}
+          </div>
+        )}
+
+        {showReportModal && (
+          <div
+            onClick={() => !reportSubmitting && setShowReportModal(false)}
+            style={{
+              position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px'
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="yt-exam-shell"
+              style={{ width: '100%', maxWidth: '440px', padding: '20px' }}
+            >
+              <h3 style={{ margin: '0 0 6px 0', fontSize: '1rem' }}>
+                {studentCurrentPage}. Soru İçin Bildirim
+              </h3>
+              <p style={{ margin: '0 0 12px 0', fontSize: '0.82rem', color: 'rgba(251,249,243,0.6)' }}>
+                Soruda veya çözümde bir hata mı var? Görüşünüzü kısaca yazın, ekibimiz inceleyecek.
+              </p>
+              <textarea
+                value={reportText}
+                onChange={(e) => setReportText(e.target.value.slice(0, 300))}
+                maxLength={300}
+                rows={4}
+                placeholder="Örn: C şıkkındaki çözüm hatalı, doğru cevap D olmalı..."
+                style={{
+                  width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '8px',
+                  border: '1px solid rgba(251,249,243,0.25)', backgroundColor: 'rgba(255,255,255,0.06)',
+                  color: '#FBF9F3', fontSize: '0.88rem', resize: 'vertical', fontFamily: 'inherit'
+                }}
+              />
+              <div style={{ textAlign: 'right', fontSize: '0.72rem', color: 'rgba(251,249,243,0.5)', margin: '4px 0 14px' }}>
+                {reportText.length}/300
+              </div>
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => { setShowReportModal(false); setReportText(''); }}
+                  disabled={reportSubmitting}
+                  className="yt-btn yt-btn-outline"
+                >
+                  Vazgeç
+                </button>
+                <button
+                  onClick={handleSubmitQuestionReport}
+                  disabled={reportSubmitting || !reportText.trim()}
+                  className="yt-btn yt-btn-primary"
+                  style={(reportSubmitting || !reportText.trim()) ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                >
+                  {reportSubmitting ? 'Gönderiliyor...' : 'Gönder'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
