@@ -161,7 +161,7 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const examParam = params.get('exam');
     if (!examParam) return;
-    const found = exams.find(e => e.id === examParam);
+    const found = exams.find(e => String(e.id) === examParam);
     if (found) {
       setInspectingExamId(examParam);
     }
