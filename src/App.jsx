@@ -155,6 +155,35 @@ export default function App() {
   }, [exams.length]);
 
   useEffect(() => {
+    // Sayfa "?exam=<id>" parametresiyle açıldıysa (örn. paylaşılan bir ürün linki),
+    // exams listesi yüklendikten sonra ilgili sınavın detay ekranını otomatik aç.
+    if (exams.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const examParam = params.get('exam');
+    if (!examParam) return;
+    const found = exams.find(e => e.id === examParam);
+    if (found) {
+      setInspectingExamId(examParam);
+    }
+  }, [exams.length]);
+
+  useEffect(() => {
+    // Detay ekranı açık/kapalıyken adres çubuğunu senkron tutuyoruz ki
+    // ürün sayfası paylaşılabilir bir link olsun (?exam=<id>).
+    const params = new URLSearchParams(window.location.search);
+    if (inspectingExamId) {
+      params.set('exam', inspectingExamId);
+    } else {
+      params.delete('exam');
+    }
+    const newSearch = params.toString();
+    const newUrl = window.location.pathname + (newSearch ? `?${newSearch}` : '');
+    if (newUrl !== window.location.pathname + window.location.search) {
+      window.history.replaceState({}, '', newUrl);
+    }
+  }, [inspectingExamId]);
+
+  useEffect(() => {
     if (viewingSolutionQ && solutionRef.current) {
       solutionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
@@ -186,8 +215,11 @@ export default function App() {
       alert('Ödeme sırasında bir sorun oluştu. Lütfen tekrar deneyin ya da bizimle iletişime geçin.');
     }
 
-    // URL'i temizleyip parametrenin sayfa yenilendiğinde tekrar tetiklenmesini önlüyoruz.
-    const cleanUrl = window.location.origin + window.location.pathname;
+    // "payment" parametresini temizleyip sayfa yenilendiğinde tekrar tetiklenmesini
+    // önlüyoruz; ancak "exam" gibi diğer parametreleri (paylaşılan ürün linki) koruyoruz.
+    params.delete('payment');
+    const remaining = params.toString();
+    const cleanUrl = window.location.origin + window.location.pathname + (remaining ? `?${remaining}` : '');
     window.history.replaceState({}, '', cleanUrl);
   }, [user]);
 
@@ -2632,6 +2664,18 @@ export default function App() {
                 ◀ Tüm Listeye Dön
               </button>
               <div style={{ flex: 1, fontFamily: 'var(--yt-font-display)', fontWeight: '600', fontSize: '1.05rem', color: 'var(--yt-ink)' }}>İçerik Detayları</div>
+              <button
+                onClick={() => {
+                  const shareUrl = `${window.location.origin}${window.location.pathname}?exam=${inspectExam.id}`;
+                  navigator.clipboard.writeText(shareUrl)
+                    .then(() => alert('Bağlantı kopyalandı: ' + shareUrl))
+                    .catch(() => prompt('Bağlantıyı kopyalayın:', shareUrl));
+                }}
+                className="yt-btn yt-btn-ghost"
+                title="Bu ürünün linkini kopyala"
+              >
+                🔗 Paylaş
+              </button>
               {user ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <button onClick={() => setShowAccountPage(true)} className="yt-btn yt-btn-ghost">
