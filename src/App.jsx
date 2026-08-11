@@ -3060,7 +3060,7 @@ export default function App() {
       const uniqueExamTypes = Array.from(
         new Set(
           exams
-            .filter(e => e.isPublished && e.categoryExamType)
+            .filter(e => e.isPublished && !e.parentId && e.categoryExamType)
             .map(e => e.categoryExamType.trim())
         )
       );
