@@ -34,6 +34,13 @@ export default function App() {
   });
   const [activeStudentExamId, setActiveStudentExamId] = useState(null);
   const [inspectingExamId, setInspectingExamId] = useState(null);
+  // Paylaşılan bir ürün linkiyle (?exam=<id>) açıldıysak, id'yi mount anında
+  // bir kere okuyup burada saklıyoruz. exams listesi Supabase'ten async
+  // geldiği için birkaç render/efekt arada çalışabiliyor; window.location'ı
+  // tekrar tekrar okumak yerine bu ref'e güveniyoruz.
+  const pendingSharedExamIdRef = useRef(
+    typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('exam') : null
+  );
 
   const [studentCurrentPage, setStudentCurrentPage] = useState(1);
   const [studentAnswers, setStudentAnswers] = useState({});
@@ -157,19 +164,38 @@ export default function App() {
   useEffect(() => {
     // Sayfa "?exam=<id>" parametresiyle açıldıysa (örn. paylaşılan bir ürün linki),
     // exams listesi yüklendikten sonra ilgili sınavın detay ekranını otomatik aç.
+    // Not: examParam'ı window.location.search'ten HER seferinde yeniden okumuyoruz;
+    // aşağıdaki URL-senkron efekti, exams henüz yüklenmeden "exam" parametresini
+    // adres çubuğundan silebiliyordu (inspectingExamId henüz null olduğu için).
+    // Bu yüzden paylaşılan id'yi mount anında bir kere yakalayıp pendingSharedExamIdRef'te tutuyoruz.
+    if (pendingSharedExamIdRef.current === null) return;
     if (exams.length === 0) return;
-    const params = new URLSearchParams(window.location.search);
-    const examParam = params.get('exam');
-    if (!examParam) return;
+
+    const examParam = pendingSharedExamIdRef.current;
+    pendingSharedExamIdRef.current = null; // artık çözümlendi (bulunsun ya da bulunmasın), bir daha bekleme
+
     const found = exams.find(e => String(e.id) === examParam);
     if (found) {
       setInspectingExamId(found.id);
+    } else {
+      // Geçersiz/silinmiş bir exam id'si paylaşılmışsa adres çubuğundaki
+      // "exam" parametresini temizleyelim.
+      const params = new URLSearchParams(window.location.search);
+      params.delete('exam');
+      const newSearch = params.toString();
+      window.history.replaceState({}, '', window.location.pathname + (newSearch ? `?${newSearch}` : ''));
     }
   }, [exams.length]);
 
   useEffect(() => {
     // Detay ekranı açık/kapalıyken adres çubuğunu senkron tutuyoruz ki
     // ürün sayfası paylaşılabilir bir link olsun (?exam=<id>).
+    // Paylaşılan bir link henüz çözümlenmeyi bekliyorsa (exams yüklenmedi),
+    // "exam" parametresini silmiyoruz - yoksa yukarıdaki efekt exams
+    // yüklendiğinde artık URL'de parametreyi bulamaz.
+    if (inspectingExamId === null && pendingSharedExamIdRef.current !== null) {
+      return;
+    }
     const params = new URLSearchParams(window.location.search);
     if (inspectingExamId) {
       params.set('exam', inspectingExamId);
