@@ -163,7 +163,7 @@ export default function App() {
     if (!examParam) return;
     const found = exams.find(e => String(e.id) === examParam);
     if (found) {
-      setInspectingExamId(examParam);
+      setInspectingExamId(found.id);
     }
   }, [exams.length]);
 
