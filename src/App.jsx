@@ -17,6 +17,8 @@ export default function App() {
   const [activeAdminExamId, setActiveAdminExamId] = useState(null);
   const [activeSubExamId, setActiveSubExamId] = useState(null);
   const [newKazanimSoruNo, setNewKazanimSoruNo] = useState('');
+  const [quickKazanimDers, setQuickKazanimDers] = useState('');
+  const [quickKazanimText, setQuickKazanimText] = useState('');
   const [isCreatingExam, setIsCreatingExam] = useState(false);
   const [newExamForm, setNewExamForm] = useState({
     name: '',
@@ -1015,6 +1017,30 @@ export default function App() {
       }
     }
     updateAnswerKeyInDb(examId, newKey);
+  };
+
+  // Bir testin TÜM sorularının aynı Ders/Kazanım'ı kapsadığı durumlar için
+  // (soru bankalarında konu konu bölünmüş testler gibi): Excel hazırlamadan,
+  // tek bir Ders/Kazanım girip 1'den numPages'e kadar tüm soru numaralarına
+  // aynı değeri uygular.
+  const handleApplySingleTopicToAll = (examId, numPages, ders, kazanim) => {
+    const cleanDers = (ders || '').trim();
+    const cleanKazanim = (kazanim || '').trim();
+    if (!cleanDers || !cleanKazanim) {
+      alert("Ders ve Kazanım alanlarını doldurun.");
+      return;
+    }
+    const total = Number(numPages) || 0;
+    if (total < 1) {
+      alert("Bu test için önce Soru / Sayfa Sayısı girilmeli.");
+      return;
+    }
+    const newTopicMap = {};
+    for (let i = 1; i <= total; i++) {
+      newTopicMap[i] = { ders: cleanDers, kazanim: cleanKazanim };
+    }
+    updateTopicMapInDb(examId, newTopicMap);
+    alert(`✓ ${total} sorunun tamamına "${cleanDers} / ${cleanKazanim}" uygulandı.`);
   };
 
   const handleTopicMapUpload = (examId, e) => {
@@ -2030,6 +2056,39 @@ export default function App() {
                 />
                 <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '4px' }}>
                   Sütun sırası: 1. Soru No, 2. Ders, 3. Kazanım (ilk satır başlık kabul edilir). Yeniden yüklersen mevcut liste tamamen değişir.
+                </div>
+
+                <div style={{ marginTop: '14px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>
+                    ⚡ Tek Kazanım Uygula (bu testin tüm soruları aynı konuysa)
+                  </label>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <input
+                      type="text"
+                      value={quickKazanimDers}
+                      onChange={(e) => setQuickKazanimDers(e.target.value)}
+                      placeholder="Ders (örn: Anayasa Hukuku)"
+                      style={{ flex: '1 1 160px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box' }}
+                    />
+                    <input
+                      type="text"
+                      value={quickKazanimText}
+                      onChange={(e) => setQuickKazanimText(e.target.value)}
+                      placeholder="Kazanım (örn: Yürütme)"
+                      style={{ flex: '1 1 160px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleApplySingleTopicToAll(editingExam.id, editingExam.numPages, quickKazanimDers, quickKazanimText)}
+                      className="yt-btn"
+                      style={{ fontSize: '0.8rem', padding: '6px 14px', whiteSpace: 'nowrap' }}
+                    >
+                      Tüm Sorulara Uygula ({editingExam.numPages || 0} soru)
+                    </button>
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '6px' }}>
+                    1'den {editingExam.numPages || 0}'e kadar tüm sorulara aynı Ders/Kazanım atanır ve mevcut kazanım haritasının üzerine yazılır.
+                  </div>
                 </div>
 
                 {editingExam.topicMap && Object.keys(editingExam.topicMap).length > 0 && (
