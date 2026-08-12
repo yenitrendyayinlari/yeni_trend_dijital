@@ -602,7 +602,8 @@ export default function App() {
             rating: res.rating || 0,
             reviewText: res.review_text || '',
             timeLeft: res.time_left ?? null,
-            currentPage: res.current_page ?? null
+            currentPage: res.current_page ?? null,
+            reset_count: res.reset_count || 0
           };
         });
         setStudentResultsMap(resultMap);
@@ -1494,9 +1495,85 @@ export default function App() {
   };
 
   const finishExam = () => {
-    const confirmText = activeStudentExam.examType === 'deneme' ? "Sınavı bitirmek istediğinize emin misiniz?" : "Testi bitirmek ve sonuçları görmek istediğinize emin misiniz?";
+    const confirmText = activeStudentExam.examType === 'deneme'
+      ? "Sınavı bitirmek istediğinize emin misiniz? Bitirdikten sonra cevaplarınızı değiştiremezsiniz, sadece sonuçlarınızı görüntüleyebilirsiniz."
+      : "Testi bitirmek istediğinize emin misiniz? Bitirdikten sonra cevaplarınızı değiştiremezsiniz, sadece sonuçlarınızı görüntüleyebilirsiniz.";
     if (window.confirm(confirmText)) {
       saveAndFinishExam(0);
+    }
+  };
+
+  // Öğrenci başına, bu sınav için izin verilen sıfırlama (baştan çözme) hakkı sayısı.
+  const MAX_EXAM_RESETS = 1;
+
+  // Sınavı sıfırlar: cevaplar, süre ve sonuç sunucuda temizlenir, öğrenci
+  // 1. sorudan yeniden başlar. Kalan sıfırlama hakkı reset_count ile takip edilir.
+  const resetExam = async () => {
+    if (!user || !activeStudentExamId || !activeStudentExam) return;
+
+    const existingRes = studentResultsMap[activeStudentExamId] || {};
+    const usedResets = existingRes.reset_count || 0;
+    if (usedResets >= MAX_EXAM_RESETS) return;
+
+    const kalanHak = MAX_EXAM_RESETS - usedResets;
+    const confirmed = window.confirm(
+      `Sınavı sıfırlamak istediğinize emin misiniz? Önceki cevaplarınız ve sonucunuz silinecek, 1. sorudan yeniden başlayacaksınız. (Bu işlem sonrası kalan sıfırlama hakkınız: ${kalanHak - 1})`
+    );
+    if (!confirmed) return;
+
+    const newResetCount = usedResets + 1;
+    const freshTimeLeft = activeStudentExam.examType === 'deneme' ? activeStudentExam.duration * 60 : 0;
+
+    try {
+      const { error } = await supabase
+        .from('student_exams')
+        .upsert([
+          {
+            student_email: user.email,
+            exam_id: activeStudentExamId,
+            answers: {},
+            correct_count: 0,
+            wrong_count: 0,
+            empty_count: 0,
+            net: 0,
+            is_finished: false,
+            time_left: freshTimeLeft,
+            current_page: 1,
+            reset_count: newResetCount
+          }
+        ], { onConflict: 'student_email, exam_id' });
+
+      if (error) {
+        alert("Sınav sıfırlanamadı: " + error.message);
+        return;
+      }
+
+      setStudentResultsMap(prev => ({
+        ...prev,
+        [activeStudentExamId]: {
+          is_finished: false,
+          correct: 0,
+          wrong: 0,
+          empty: 0,
+          net: 0,
+          answers: {},
+          timeLeft: freshTimeLeft,
+          currentPage: 1,
+          reset_count: newResetCount,
+          rating: existingRes.rating || 0,
+          reviewText: existingRes.reviewText || ''
+        }
+      }));
+
+      setStudentAnswers({});
+      setStudentCurrentPage(1);
+      setTimeLeft(freshTimeLeft);
+      setIsExamFinished(false);
+      setShowResults(false);
+      setViewingSolutionQ(false);
+    } catch (err) {
+      console.error("Sınav sıfırlanamadı:", err);
+      alert("Sınav sıfırlanırken bir hata oluştu, lütfen tekrar deneyin.");
     }
   };
 
@@ -3496,7 +3573,28 @@ export default function App() {
       <div className="yt-shell" style={{ maxWidth: '1300px', margin: '0 auto', padding: '24px' }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid var(--yt-ink)', paddingBottom: '14px', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
           <h1 style={{ margin: 0, fontSize: '1.3rem' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
-          <button onClick={() => setActiveStudentExamId(null)} className="yt-btn yt-btn-ghost">İçerik Listesine Dön</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span
+              title="İstediğin zaman çıkabilirsin, cevapların otomatik kaydedilir. Geri döndüğünde tam kaldığın yerden devam edersin."
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: '20px',
+                height: '20px',
+                borderRadius: '50%',
+                border: '1.5px solid var(--yt-ink)',
+                fontSize: '0.75rem',
+                fontWeight: 'bold',
+                fontStyle: 'italic',
+                cursor: 'help',
+                flexShrink: 0
+              }}
+            >
+              i
+            </span>
+            <button onClick={() => setActiveStudentExamId(null)} className="yt-btn yt-btn-ghost">İçerik Listesine Dön</button>
+          </div>
         </header>
 
         {showResults && results ? (
@@ -3555,6 +3653,22 @@ export default function App() {
               <div className="yt-stat-box"><span className="lbl">BOŞ</span><div className="val">{results.empty}</div></div>
               <div className="yt-stat-box net"><span className="lbl">NET</span><div className="val">{results.net}</div></div>
             </div>
+
+            {user && (() => {
+              const usedResets = results.reset_count || 0;
+              const kalanHak = MAX_EXAM_RESETS - usedResets;
+              return kalanHak > 0 ? (
+                <div style={{ textAlign: 'center', marginTop: '16px' }}>
+                  <button onClick={resetExam} className="yt-btn yt-btn-outline" style={{ fontSize: '0.82rem' }}>
+                    ↺ Sınavı Sıfırla ve Baştan Çöz ({kalanHak} hak kaldı)
+                  </button>
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center', marginTop: '16px', fontSize: '0.78rem', color: 'rgba(0,0,0,0.5)' }}>
+                  Bu sınav için sıfırlama hakkınızı kullandınız.
+                </div>
+              );
+            })()}
 
             {kazanimReport && kazanimReport.hasData && (
               <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--yt-line)' }}>
