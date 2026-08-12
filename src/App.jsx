@@ -3433,6 +3433,11 @@ export default function App() {
                   const totalQuestions = childTests.length > 0
                     ? childTests.reduce((sum, t) => sum + (t.numPages || 0), 0)
                     : (exam.numPages || 0);
+                  const completedChildCount = childTests.length > 0
+                    ? childTests.filter(t => studentResultsMap[t.id]?.is_finished).length
+                    : 0;
+                  const childProgressPct = childTests.length > 0 ? Math.round((completedChildCount / childTests.length) * 100) : 0;
+                  const allChildDone = childTests.length > 0 && completedChildCount === childTests.length;
 
                   return (
                     <div
@@ -3445,7 +3450,7 @@ export default function App() {
                         <span className={`yt-tag ${isDeneme ? 'deneme' : 'test'}`}>
                           {isDeneme ? 'Deneme Sınavı' : 'Test'}
                         </span>
-                        {user && isCompleted ? (
+                        {user && (isCompleted || allChildDone) ? (
                           <span className="yt-tag done">Çözüldü</span>
                         ) : null}
                       </div>
@@ -3465,6 +3470,21 @@ export default function App() {
                         {childTests.length > 0 && <span>{childTests.length} TEST</span>}
                         {getCampaignCountdown(exam) && <span className="yt-countdown">⏳ {getCampaignCountdown(exam)}</span>}
                       </div>
+
+                      {user && childTests.length > 0 && completedChildCount > 0 && (
+                        <div style={{ marginTop: '2px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', fontFamily: 'var(--yt-font-mono)', color: 'var(--yt-graphite)', marginBottom: '4px' }}>
+                            <span>{completedChildCount}/{childTests.length} test tamamlandı</span>
+                            <span>%{childProgressPct}</span>
+                          </div>
+                          <div className="yt-subtest-progress-track" style={{ maxWidth: 'none' }}>
+                            <div
+                              className="yt-subtest-progress-fill"
+                              style={{ width: `${childProgressPct}%`, backgroundColor: allChildDone ? 'var(--yt-correct)' : 'var(--yt-mustard)' }}
+                            />
+                          </div>
+                        </div>
+                      )}
 
                       <div style={{ flex: 1 }} />
 
