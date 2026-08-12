@@ -48,6 +48,7 @@ export default function App() {
   const [studentAnswers, setStudentAnswers] = useState({});
   const [timeLeft, setTimeLeft] = useState(0); 
   const [isPaused, setIsPaused] = useState(false);
+  const [examStarted, setExamStarted] = useState(false); // Öğrenci "Başla"ya basana kadar süre işlemeye başlamaz
   const [isExamFinished, setIsExamFinished] = useState(false);
   const [showResults, setShowResults] = useState(false);
   
@@ -1167,9 +1168,11 @@ export default function App() {
     setIsExamFinished(false);
     setShowResults(false);
     setViewingSolutionQ(false);
-    setIsPaused(false);
 
     if (hasUnfinishedSession) {
+      // Daha önce başlanmış bir oturuma dönüyor, süre kaldığı yerden akmaya devam etsin.
+      setIsPaused(false);
+      setExamStarted(true);
       setStudentAnswers(existingRes.answers || {});
       setStudentCurrentPage(existingRes.currentPage || 1);
       if (exam.examType === 'deneme') {
@@ -1178,6 +1181,9 @@ export default function App() {
         setTimeLeft(existingRes.timeLeft || 0);
       }
     } else {
+      // Sıfırdan başlıyor: soru ekranı gelsin ama öğrenci "Başla"ya basana kadar süre işlemesin.
+      setIsPaused(true);
+      setExamStarted(false);
       setStudentAnswers({});
       setStudentCurrentPage(1);
       setTimeLeft(exam.examType === 'deneme' ? exam.duration * 60 : 0);
@@ -1449,6 +1455,7 @@ export default function App() {
       setStudentResultsMap(prev => ({
         ...prev,
         [activeStudentExamId]: {
+          ...(prev[activeStudentExamId] || {}), // reset_count gibi alanları koru, üzerine yazma
           is_finished: true,
           correct: result.correct,
           wrong: result.wrong,
@@ -1571,6 +1578,8 @@ export default function App() {
       setIsExamFinished(false);
       setShowResults(false);
       setViewingSolutionQ(false);
+      setIsPaused(true);
+      setExamStarted(false);
     } catch (err) {
       console.error("Sınav sıfırlanamadı:", err);
       alert("Sınav sıfırlanırken bir hata oluştu, lütfen tekrar deneyin.");
@@ -3573,28 +3582,7 @@ export default function App() {
       <div className="yt-shell" style={{ maxWidth: '1300px', margin: '0 auto', padding: '24px' }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid var(--yt-ink)', paddingBottom: '14px', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
           <h1 style={{ margin: 0, fontSize: '1.3rem' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span
-              title="İstediğin zaman çıkabilirsin, cevapların otomatik kaydedilir. Geri döndüğünde tam kaldığın yerden devam edersin."
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: '20px',
-                height: '20px',
-                borderRadius: '50%',
-                border: '1.5px solid var(--yt-ink)',
-                fontSize: '0.75rem',
-                fontWeight: 'bold',
-                fontStyle: 'italic',
-                cursor: 'help',
-                flexShrink: 0
-              }}
-            >
-              i
-            </span>
-            <button onClick={() => setActiveStudentExamId(null)} className="yt-btn yt-btn-ghost">İçerik Listesine Dön</button>
-          </div>
+          <button onClick={() => setActiveStudentExamId(null)} className="yt-btn yt-btn-ghost">İçerik Listesine Dön</button>
         </header>
 
         {showResults && results ? (
@@ -3735,6 +3723,28 @@ export default function App() {
         <div className="exam-layout">
 
           <div>
+            {!showResults && !examStarted && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '10px',
+                padding: '12px 16px',
+                marginBottom: '12px',
+                borderRadius: '8px',
+                backgroundColor: 'var(--yt-mustard-bg)',
+                color: 'var(--yt-mustard-deep)',
+                fontSize: '0.85rem',
+                lineHeight: 1.5,
+                fontWeight: 600
+              }}>
+                <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>ℹ️</span>
+                <span>
+                  Sınav sırasında istediğin zaman çıkabilirsin — cevapların otomatik olarak kaydedilir, geri döndüğünde tam kaldığın yerden devam edersin.
+                  Süre, aşağıdaki <b>"Başla"</b> butonuna bastığında işlemeye başlar.
+                </span>
+              </div>
+            )}
+
             <div className="yt-exam-shell" style={{ padding: '14px 20px', marginBottom: '12px' }}>
               <div className="yt-topbar" style={{ marginBottom: 0 }}>
                 <span>
@@ -3750,22 +3760,29 @@ export default function App() {
                 {!showResults && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <button
-                      onClick={() => setIsPaused(p => !p)}
+                      onClick={() => {
+                        if (!examStarted) {
+                          setExamStarted(true);
+                          setIsPaused(false);
+                        } else {
+                          setIsPaused(p => !p);
+                        }
+                      }}
                       style={{
                         padding: '5px 12px',
                         fontSize: '0.8rem',
                         fontWeight: 'bold',
                         borderRadius: '6px',
                         border: '1px solid rgba(251,249,243,0.45)',
-                        backgroundColor: isPaused ? 'var(--yt-mustard)' : 'transparent',
-                        color: isPaused ? '#1a1a2e' : '#FBF9F3',
+                        backgroundColor: (isPaused || !examStarted) ? 'var(--yt-mustard)' : 'transparent',
+                        color: (isPaused || !examStarted) ? '#1a1a2e' : '#FBF9F3',
                         cursor: 'pointer'
                       }}
                     >
-                      {isPaused ? '▶ Devam Et' : '⏸ Mola Ver'}
+                      {!examStarted ? '▶ Başla' : (isPaused ? '▶ Devam Et' : '⏸ Mola Ver')}
                     </button>
-                    <div className={`yt-timer${(!isPaused && timeLeft < 300) ? ' urgent' : ''}`} style={{ fontSize: '1.15rem', padding: '5px 12px', opacity: isPaused ? 0.6 : 1 }}>
-                      {isPaused ? 'MOLADA' : formatTime(timeLeft)}
+                    <div className={`yt-timer${(examStarted && !isPaused && timeLeft < 300) ? ' urgent' : ''}`} style={{ fontSize: '1.15rem', padding: '5px 12px', opacity: (examStarted && isPaused) ? 0.6 : 1 }}>
+                      {examStarted && isPaused ? 'MOLADA' : formatTime(timeLeft)}
                     </div>
                   </div>
                 )}
@@ -3780,9 +3797,11 @@ export default function App() {
             />
 
             {!isExamFinished && (
-              isPaused ? (
+              (!examStarted || isPaused) ? (
                 <div style={{ textAlign: 'center', margin: '20px 0', padding: '14px', borderRadius: '8px', backgroundColor: 'var(--yt-mustard-bg)', color: 'var(--yt-mustard-deep)', fontWeight: 'bold' }}>
-                  Moladasın, cevap işaretleyemezsin. Devam etmek için "Devam Et"e bas.
+                  {!examStarted
+                    ? 'Süre henüz başlamadı. Cevap işaretlemek için yukarıdaki "Başla" butonuna bas.'
+                    : 'Moladasın, cevap işaretleyemezsin. Devam etmek için "Devam Et"e bas.'}
                 </div>
               ) : (
                 <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', margin: '20px 0' }}>
