@@ -305,6 +305,22 @@ p {
   background: var(--yt-paper-2);
 }
 .yt-subtest-bubble.done { background: var(--yt-correct); border-color: var(--yt-correct); color: #fff; }
+.yt-subtest-bubble.in-progress { background: var(--yt-mustard); border-color: var(--yt-mustard); color: #1a1a2e; }
+
+.yt-subtest-progress-track {
+  margin-top: 6px;
+  height: 6px;
+  width: 100%;
+  max-width: 220px;
+  border-radius: 3px;
+  background: rgba(0,0,0,0.08);
+  overflow: hidden;
+}
+.yt-subtest-progress-fill {
+  height: 100%;
+  background: var(--yt-mustard);
+  border-radius: 3px;
+}
 
 .yt-btn-correct { background: var(--yt-correct); color: #fff; border: 1.5px solid var(--yt-correct); }
 .yt-btn-correct:hover { background: #257a3e; }

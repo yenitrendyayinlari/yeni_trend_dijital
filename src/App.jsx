@@ -3078,16 +3078,28 @@ export default function App() {
                     {childExams.map((child, index) => {
                       const childRes = studentResultsMap[child.id];
                       const childCompleted = childRes?.is_finished;
-                      const ctaClass = childCompleted ? 'yt-btn-ghost' : (!isPaid || isPurchased ? 'yt-btn-outline' : 'yt-btn-locked');
+                      const answeredCount = childRes?.answers ? Object.keys(childRes.answers).length : 0;
+                      const childInProgress = !childCompleted && answeredCount > 0;
+                      const totalQ = child.numPages || 0;
+                      const progressPct = totalQ > 0 ? Math.round((answeredCount / totalQ) * 100) : 0;
+                      const ctaClass = childCompleted ? 'yt-btn-ghost' : (childInProgress ? 'yt-btn-primary' : (!isPaid || isPurchased ? 'yt-btn-outline' : 'yt-btn-locked'));
                       return (
                         <div key={child.id} className="yt-subtest-row">
-                          <div className={`yt-subtest-bubble${childCompleted ? ' done' : ''}`}>{childCompleted ? '✓' : index + 1}</div>
+                          <div className={`yt-subtest-bubble${childCompleted ? ' done' : (childInProgress ? ' in-progress' : '')}`}>
+                            {childCompleted ? '✓' : (childInProgress ? '…' : index + 1)}
+                          </div>
                           <div style={{ flex: 1, minWidth: '160px' }}>
                             <strong style={{ color: 'var(--yt-ink)' }}>{child.name || 'İsimsiz Test'}</strong>
                             <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px', display: 'flex', gap: '12px' }}>
                               <span>{child.numPages || '?'} SORU</span>
                               {childCompleted && <span style={{ color: 'var(--yt-correct)' }}>Net: {childRes.net}</span>}
+                              {childInProgress && <span style={{ color: 'var(--yt-mustard-deep)' }}>{answeredCount}/{totalQ} soru yapıldı</span>}
                             </div>
+                            {childInProgress && (
+                              <div className="yt-subtest-progress-track">
+                                <div className="yt-subtest-progress-fill" style={{ width: `${progressPct}%` }} />
+                              </div>
+                            )}
                           </div>
                           <button
                             onClick={() => {
@@ -3116,7 +3128,7 @@ export default function App() {
                             }}
                             className={`yt-btn ${ctaClass}`}
                           >
-                            {childCompleted ? 'Sonucu İncele' : (!isPaid || isPurchased ? 'Teste Başla →' : '🔒 Kilitli')}
+                            {childCompleted ? 'Sonucu İncele' : (childInProgress ? 'Devam Et →' : (!isPaid || isPurchased ? 'Teste Başla →' : '🔒 Kilitli'))}
                           </button>
                         </div>
                       );
