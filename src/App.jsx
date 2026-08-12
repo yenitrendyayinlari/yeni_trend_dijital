@@ -3582,7 +3582,16 @@ export default function App() {
       <div className="yt-shell" style={{ maxWidth: '1300px', margin: '0 auto', padding: '24px' }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid var(--yt-ink)', paddingBottom: '14px', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
           <h1 style={{ margin: 0, fontSize: '1.3rem' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
-          <button onClick={() => setActiveStudentExamId(null)} className="yt-btn yt-btn-ghost">İçerik Listesine Dön</button>
+          <button
+            onClick={() => {
+              const targetId = activeStudentExam.parentId || activeStudentExam.id;
+              setActiveStudentExamId(null);
+              setInspectingExamId(targetId);
+            }}
+            className="yt-btn yt-btn-ghost"
+          >
+            İçerik Listesine Dön
+          </button>
         </header>
 
         {showResults && results ? (
@@ -3796,12 +3805,10 @@ export default function App() {
               pageNumber={studentCurrentPage}
             />
 
-            {!isExamFinished && (
-              (!examStarted || isPaused) ? (
+            {!isExamFinished && examStarted && (
+              isPaused ? (
                 <div style={{ textAlign: 'center', margin: '20px 0', padding: '14px', borderRadius: '8px', backgroundColor: 'var(--yt-mustard-bg)', color: 'var(--yt-mustard-deep)', fontWeight: 'bold' }}>
-                  {!examStarted
-                    ? 'Süre henüz başlamadı. Cevap işaretlemek için yukarıdaki "Başla" butonuna bas.'
-                    : 'Moladasın, cevap işaretleyemezsin. Devam etmek için "Devam Et"e bas.'}
+                  Moladasın, cevap işaretleyemezsin. Devam etmek için "Devam Et"e bas.
                 </div>
               ) : (
                 <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', margin: '20px 0' }}>
