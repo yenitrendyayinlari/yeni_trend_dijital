@@ -106,6 +106,7 @@ export default function App() {
 
   const [showAccountPage, setShowAccountPage] = useState(false);
   const [accountTab, setAccountTab] = useState('exams');
+  const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [newPasswordInput, setNewPasswordInput] = useState('');
   const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
   const [passwordChangeLoading, setPasswordChangeLoading] = useState(false);
@@ -2656,6 +2657,100 @@ export default function App() {
     );
   };
 
+  // Tüm sayfalarda aynı şekilde görünen üst menü: Sınavlarım, Sepet, Bildirim, Hesap (e-posta) menüsü
+  const renderHeaderRight = () => (
+    <>
+      {user && (
+        <button
+          onClick={() => { setInspectingExamId(null); setActiveStudentExamId(null); setAccountTab('exams'); setShowAccountPage(true); setShowAccountMenu(false); }}
+          className="yt-btn yt-btn-ghost"
+        >
+          Sınavlarım
+        </button>
+      )}
+      <button onClick={() => setShowCart(true)} className="yt-cart-btn" title="Sepet">
+        🛒
+        {cartItems.length > 0 && <span className="yt-cart-badge">{cartItems.length}</span>}
+      </button>
+      {user && (
+        <button onClick={openStudentNotifs} className="yt-cart-btn" title="Bildirimler">
+          🔔
+          {studentUnreadCount > 0 && <span className="yt-cart-badge">{studentUnreadCount}</span>}
+        </button>
+      )}
+      {user ? (
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => setShowAccountMenu(v => !v)}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: 'var(--yt-paper)', padding: '6px 12px', borderRadius: '20px', border: '1px solid var(--yt-line)', cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            <span style={{ fontSize: '0.95rem' }}>👤</span>
+            <span style={{ fontSize: '0.85rem', fontWeight: '500', color: 'var(--yt-ink)' }}>{user.email}</span>
+          </button>
+          {showAccountMenu && (
+            <>
+              <div onClick={() => setShowAccountMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }}></div>
+              <div style={{ position: 'absolute', top: 'calc(100% + 8px)', right: 0, width: '280px', backgroundColor: 'var(--yt-paper-2)', border: '1px solid var(--yt-line)', borderRadius: '10px', boxShadow: 'var(--yt-shadow)', padding: '16px', zIndex: 50 }}>
+                <h4 className="yt-admin-section-title" style={{ marginTop: 0 }}>Şifre Değiştir</h4>
+                <form onSubmit={handleChangePassword}>
+                  <div className="yt-field">
+                    <label className="yt-label">Yeni Şifre</label>
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      value={newPasswordInput}
+                      onChange={(e) => setNewPasswordInput(e.target.value)}
+                      placeholder="••••••••"
+                      className="yt-input"
+                    />
+                  </div>
+                  <div className="yt-field">
+                    <label className="yt-label">Yeni Şifre (Tekrar)</label>
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      value={confirmPasswordInput}
+                      onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                      placeholder="••••••••"
+                      className="yt-input"
+                    />
+                  </div>
+                  {passwordChangeMessage && (
+                    <div style={{
+                      padding: '10px 12px', borderRadius: '8px', fontSize: '0.85rem', marginBottom: '12px',
+                      backgroundColor: passwordChangeMessage.type === 'success' ? 'var(--yt-correct-bg)' : 'var(--yt-wrong-bg)',
+                      color: passwordChangeMessage.type === 'success' ? 'var(--yt-correct)' : 'var(--yt-wrong)'
+                    }}>
+                      {passwordChangeMessage.text}
+                    </div>
+                  )}
+                  <button type="submit" disabled={passwordChangeLoading} className="yt-btn yt-btn-primary yt-btn-block">
+                    {passwordChangeLoading ? 'Güncelleniyor...' : 'Şifreyi Güncelle'}
+                  </button>
+                </form>
+                <div style={{ borderTop: '1px solid var(--yt-line)', margin: '14px 0' }}></div>
+                <button onClick={handleLogout} className="yt-btn yt-btn-ghost yt-btn-block" style={{ color: 'var(--yt-wrong)' }}>
+                  Çıkış Yap
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="yt-btn yt-btn-outline">
+            Giriş Yap
+          </button>
+          <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} className="yt-btn yt-btn-primary">
+            Kayıt Ol
+          </button>
+        </div>
+      )}
+    </>
+  );
+
   if (showAccountPage && user) {
     const myPurchases = exams.filter(e => studentPurchases[e.id]);
     const mySolved = exams.filter(e => studentResultsMap[e.id]?.is_finished);
@@ -2664,144 +2759,91 @@ export default function App() {
       <div className="yt-shell">
         <header className="yt-header">
           <div className="yt-header-inner">
-            <div className="yt-brand">
+            <div className="yt-brand" style={{ cursor: 'pointer' }} onClick={() => setShowAccountPage(false)}>
               <img src={sualinkLogo} alt="Sualink" className="yt-brand-logo" />
             </div>
             <div style={{ flex: 1 }}></div>
-            <button onClick={() => setShowAccountPage(false)} className="yt-btn yt-btn-ghost">
-              ◀ Kataloğa Dön
-            </button>
+            {renderHeaderRight()}
           </div>
         </header>
 
         <div className="wrap" style={{ maxWidth: '840px', margin: '0 auto', padding: '32px 24px 60px' }}>
-          <h1 style={{ fontFamily: 'var(--yt-font-display)', fontWeight: '600', fontSize: '1.5rem', color: 'var(--yt-ink)', margin: '0 0 4px' }}>Hesabım</h1>
+          <h1 style={{ fontFamily: 'var(--yt-font-display)', fontWeight: '600', fontSize: '1.5rem', color: 'var(--yt-ink)', margin: '0 0 4px' }}>Sınavlarım</h1>
           <p style={{ color: 'var(--yt-graphite)', fontSize: '0.88rem', margin: '0 0 24px' }}>{user.email}</p>
 
-          <div className="yt-chip-row" style={{ padding: '0 0 20px' }}>
-            <button className={`yt-chip${accountTab === 'exams' ? ' active' : ''}`} onClick={() => setAccountTab('exams')}>Sınavlarım</button>
-            <button className={`yt-chip${accountTab === 'settings' ? ' active' : ''}`} onClick={() => setAccountTab('settings')}>Ayarlar</button>
-          </div>
+          <div>
+            <div className="yt-session-card" style={{ marginBottom: '20px' }}>
+              <h3 className="yt-admin-section-title">Satın Aldıklarım ({myPurchases.length})</h3>
+              {myPurchases.length === 0 ? (
+                <div style={{ color: 'var(--yt-graphite-soft)', fontSize: '0.9rem', textAlign: 'center', padding: '20px 0' }}>
+                  Henüz satın aldığınız bir içerik yok.
+                </div>
+              ) : (
+                <div className="yt-subtest-list">
+                  {myPurchases.map(e => (
+                    <div key={e.id} className="yt-subtest-row">
+                      <div style={{ flex: 1, minWidth: '160px' }}>
+                        <strong style={{ color: 'var(--yt-ink)' }}>{e.name || 'İsimsiz'}</strong>
+                        <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px' }}>
+                          {e.categoryLesson} · {e.categoryExamType}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => { setInspectingExamId(e.id); setShowAccountPage(false); }}
+                        className="yt-btn yt-btn-outline"
+                      >
+                        İçeriği Gör
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
-          {accountTab === 'exams' ? (
-            <div>
-              <div className="yt-session-card" style={{ marginBottom: '20px' }}>
-                <h3 className="yt-admin-section-title">Satın Aldıklarım ({myPurchases.length})</h3>
-                {myPurchases.length === 0 ? (
-                  <div style={{ color: 'var(--yt-graphite-soft)', fontSize: '0.9rem', textAlign: 'center', padding: '20px 0' }}>
-                    Henüz satın aldığınız bir içerik yok.
-                  </div>
-                ) : (
-                  <div className="yt-subtest-list">
-                    {myPurchases.map(e => (
+            <div className="yt-session-card">
+              <h3 className="yt-admin-section-title">Çözdüğüm Testler ({mySolved.length})</h3>
+              {mySolved.length === 0 ? (
+                <div style={{ color: 'var(--yt-graphite-soft)', fontSize: '0.9rem', textAlign: 'center', padding: '20px 0' }}>
+                  Henüz tamamladığınız bir test yok.
+                </div>
+              ) : (
+                <div className="yt-subtest-list">
+                  {mySolved.map(e => {
+                    const res = studentResultsMap[e.id];
+                    return (
                       <div key={e.id} className="yt-subtest-row">
+                        <div className="yt-subtest-bubble done">✓</div>
                         <div style={{ flex: 1, minWidth: '160px' }}>
-                          <strong style={{ color: 'var(--yt-ink)' }}>{e.name || 'İsimsiz'}</strong>
-                          <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px' }}>
-                            {e.categoryLesson} · {e.categoryExamType}
+                          <strong style={{ color: 'var(--yt-ink)' }}>{e.name || 'İsimsiz Test'}</strong>
+                          <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px', display: 'flex', gap: '10px' }}>
+                            <span style={{ color: 'var(--yt-correct)' }}>D: {res.correct}</span>
+                            <span style={{ color: 'var(--yt-wrong)' }}>Y: {res.wrong}</span>
+                            <span>Net: {res.net}</span>
                           </div>
                         </div>
                         <button
-                          onClick={() => { setInspectingExamId(e.id); setShowAccountPage(false); }}
+                          onClick={() => {
+                            setActiveStudentExamId(e.id);
+                            setInspectingExamId(null);
+                            setStudentAnswers(res.answers || {});
+                            setStudentCurrentPage(1);
+                            setIsExamFinished(true);
+                            setShowResults(true);
+                            setViewingSolutionQ(false);
+                            setShowAccountPage(false);
+                            fetchAnswerKeyForReview(e.id);
+                          }}
                           className="yt-btn yt-btn-outline"
                         >
-                          İçeriği Gör
+                          Sonucu İncele
                         </button>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="yt-session-card">
-                <h3 className="yt-admin-section-title">Çözdüğüm Testler ({mySolved.length})</h3>
-                {mySolved.length === 0 ? (
-                  <div style={{ color: 'var(--yt-graphite-soft)', fontSize: '0.9rem', textAlign: 'center', padding: '20px 0' }}>
-                    Henüz tamamladığınız bir test yok.
-                  </div>
-                ) : (
-                  <div className="yt-subtest-list">
-                    {mySolved.map(e => {
-                      const res = studentResultsMap[e.id];
-                      return (
-                        <div key={e.id} className="yt-subtest-row">
-                          <div className="yt-subtest-bubble done">✓</div>
-                          <div style={{ flex: 1, minWidth: '160px' }}>
-                            <strong style={{ color: 'var(--yt-ink)' }}>{e.name || 'İsimsiz Test'}</strong>
-                            <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px', display: 'flex', gap: '10px' }}>
-                              <span style={{ color: 'var(--yt-correct)' }}>D: {res.correct}</span>
-                              <span style={{ color: 'var(--yt-wrong)' }}>Y: {res.wrong}</span>
-                              <span>Net: {res.net}</span>
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => {
-                              setActiveStudentExamId(e.id);
-                              setInspectingExamId(null);
-                              setStudentAnswers(res.answers || {});
-                              setStudentCurrentPage(1);
-                              setIsExamFinished(true);
-                              setShowResults(true);
-                              setViewingSolutionQ(false);
-                              setShowAccountPage(false);
-                              fetchAnswerKeyForReview(e.id);
-                            }}
-                            className="yt-btn yt-btn-outline"
-                          >
-                            Sonucu İncele
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="yt-session-card" style={{ maxWidth: '440px' }}>
-              <h3 className="yt-admin-section-title">Şifre Değiştir</h3>
-              <form onSubmit={handleChangePassword}>
-                <div className="yt-field">
-                  <label className="yt-label">Yeni Şifre</label>
-                  <input
-                    type="password"
-                    required
-                    minLength={6}
-                    value={newPasswordInput}
-                    onChange={(e) => setNewPasswordInput(e.target.value)}
-                    placeholder="••••••••"
-                    className="yt-input"
-                  />
+                    );
+                  })}
                 </div>
-                <div className="yt-field">
-                  <label className="yt-label">Yeni Şifre (Tekrar)</label>
-                  <input
-                    type="password"
-                    required
-                    minLength={6}
-                    value={confirmPasswordInput}
-                    onChange={(e) => setConfirmPasswordInput(e.target.value)}
-                    placeholder="••••••••"
-                    className="yt-input"
-                  />
-                </div>
-
-                {passwordChangeMessage && (
-                  <div style={{
-                    padding: '10px 12px', borderRadius: '8px', fontSize: '0.85rem', marginBottom: '16px',
-                    backgroundColor: passwordChangeMessage.type === 'success' ? 'var(--yt-correct-bg)' : 'var(--yt-wrong-bg)',
-                    color: passwordChangeMessage.type === 'success' ? 'var(--yt-correct)' : 'var(--yt-wrong)'
-                  }}>
-                    {passwordChangeMessage.text}
-                  </div>
-                )}
-
-                <button type="submit" disabled={passwordChangeLoading} className="yt-btn yt-btn-primary yt-btn-block">
-                  {passwordChangeLoading ? 'Güncelleniyor...' : 'Şifreyi Güncelle'}
-                </button>
-              </form>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
     );
@@ -2846,36 +2888,7 @@ export default function App() {
               >
                 🔗 Paylaş
               </button>
-              {user && (
-                <button onClick={openStudentNotifs} className="yt-cart-btn" title="Bildirimler">
-                  🔔
-                  {studentUnreadCount > 0 && <span className="yt-cart-badge">{studentUnreadCount}</span>}
-                </button>
-              )}
-              <button onClick={() => setShowCart(true)} className="yt-cart-btn" title="Sepet">
-                🛒
-                {cartItems.length > 0 && <span className="yt-cart-badge">{cartItems.length}</span>}
-              </button>
-              {user ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <button onClick={() => setShowAccountPage(true)} className="yt-btn yt-btn-ghost">
-                    👤 Hesabım
-                  </button>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: 'var(--yt-paper)', padding: '6px 12px', borderRadius: '20px', border: '1px solid var(--yt-line)' }}>
-                    <span style={{ width: '8px', height: '8px', backgroundColor: 'var(--yt-correct)', borderRadius: '50%' }}></span>
-                    <span style={{ fontSize: '0.85rem', fontWeight: '500', color: 'var(--yt-ink)' }}>{user.email}</span>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="yt-btn yt-btn-outline">
-                    Giriş Yap
-                  </button>
-                  <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} className="yt-btn yt-btn-primary">
-                    Kayıt Ol
-                  </button>
-                </div>
-              )}
+              {renderHeaderRight()}
             </div>
           </header>
 
@@ -3261,39 +3274,7 @@ export default function App() {
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
-                {user && (
-                  <button onClick={openStudentNotifs} className="yt-cart-btn" title="Bildirimler">
-                    🔔
-                    {studentUnreadCount > 0 && <span className="yt-cart-badge">{studentUnreadCount}</span>}
-                  </button>
-                )}
-                <button onClick={() => setShowCart(true)} className="yt-cart-btn" title="Sepet">
-                  🛒
-                  {cartExams.length > 0 && <span className="yt-cart-badge">{cartExams.length}</span>}
-                </button>
-                {user ? (
-                  <>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: 'var(--yt-paper)', padding: '6px 12px', borderRadius: '20px', border: '1px solid var(--yt-line)' }}>
-                      <span style={{ width: '8px', height: '8px', backgroundColor: 'var(--yt-correct)', borderRadius: '50%' }}></span>
-                      <span style={{ fontSize: '0.85rem', fontWeight: '500', color: 'var(--yt-ink)' }}>{user.email}</span>
-                    </div>
-                    <button onClick={() => setShowAccountPage(true)} className="yt-btn yt-btn-ghost">
-                      👤 Hesabım
-                    </button>
-                    <button onClick={handleLogout} className="yt-btn yt-btn-ghost">
-                      Çıkış Yap
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="yt-btn yt-btn-outline">
-                      Giriş Yap
-                    </button>
-                    <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} className="yt-btn yt-btn-primary">
-                      Kayıt Ol
-                    </button>
-                  </>
-                )}
+                {renderHeaderRight()}
               </div>
             </div>
           </header>
@@ -3617,7 +3598,19 @@ export default function App() {
     return (
       <div className="yt-shell" style={{ maxWidth: '1300px', margin: '0 auto', padding: '24px' }}>
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid var(--yt-ink)', paddingBottom: '14px', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
-          <h1 style={{ margin: 0, fontSize: '1.3rem' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '18px', minWidth: 0 }}>
+            <div
+              style={{ cursor: 'pointer', flexShrink: 0 }}
+              onClick={() => {
+                const targetId = activeStudentExam.parentId || activeStudentExam.id;
+                setActiveStudentExamId(null);
+                setInspectingExamId(targetId);
+              }}
+            >
+              <img src={sualinkLogo} alt="Sualink" style={{ height: '30px', width: 'auto', display: 'block' }} />
+            </div>
+            <h1 style={{ margin: 0, fontSize: '1.3rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
+          </div>
           <button
             onClick={() => {
               const targetId = activeStudentExam.parentId || activeStudentExam.id;
