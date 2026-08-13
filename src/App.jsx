@@ -3273,7 +3273,7 @@ export default function App() {
                 />
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, marginLeft: 'auto' }}>
                 {renderHeaderRight()}
               </div>
             </div>
