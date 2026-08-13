@@ -3597,34 +3597,41 @@ export default function App() {
 
     return (
       <div className="yt-shell" style={{ maxWidth: '1300px', margin: '0 auto', padding: '24px' }}>
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid var(--yt-ink)', paddingBottom: '14px', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '18px', minWidth: 0 }}>
+        <header className="yt-header" style={{ marginBottom: '20px' }}>
+          <div className="yt-header-inner">
             <div
-              style={{ cursor: 'pointer', flexShrink: 0 }}
+              className="yt-brand"
+              style={{ cursor: 'pointer' }}
               onClick={() => {
                 const targetId = activeStudentExam.parentId || activeStudentExam.id;
                 setActiveStudentExamId(null);
                 setInspectingExamId(targetId);
               }}
             >
-              <img src={sualinkLogo} alt="Sualink" style={{ height: '30px', width: 'auto', display: 'block' }} />
+              <img src={sualinkLogo} alt="Sualink" className="yt-brand-logo" />
             </div>
-            <h1 style={{ margin: 0, fontSize: '1.3rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
+            {!showResults && (
+              <h1 style={{ margin: 0, fontSize: '1.1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
+            )}
+            <div style={{ flex: 1 }}></div>
+            <button
+              onClick={() => {
+                const targetId = activeStudentExam.parentId || activeStudentExam.id;
+                setActiveStudentExamId(null);
+                setInspectingExamId(targetId);
+              }}
+              className="yt-btn yt-btn-ghost"
+            >
+              İçerik Listesine Dön
+            </button>
+            {renderHeaderRight()}
           </div>
-          <button
-            onClick={() => {
-              const targetId = activeStudentExam.parentId || activeStudentExam.id;
-              setActiveStudentExamId(null);
-              setInspectingExamId(targetId);
-            }}
-            className="yt-btn yt-btn-ghost"
-          >
-            İçerik Listesine Dön
-          </button>
         </header>
 
         {showResults && results ? (
           <div className="yt-session-card" style={{ maxWidth: '700px', margin: '0 auto 24px auto' }}>
+
+            <h2 style={{ fontFamily: 'var(--yt-font-display)', fontWeight: '600', fontSize: '1.2rem', color: 'var(--yt-ink)', textAlign: 'center', margin: '0 0 20px' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h2>
 
             {user && (
               <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: 'var(--yt-paper)', borderRadius: '10px', border: '1px solid var(--yt-line)', textAlign: 'center' }}>
