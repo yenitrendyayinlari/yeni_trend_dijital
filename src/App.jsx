@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import SecurePdfViewer from './SecurePdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
+import sualinkLogo from './sualinklogo.png';
 
 export default function App() {
   const [appMode, setAppMode] = useState('student'); 
@@ -2664,8 +2665,7 @@ export default function App() {
         <header className="yt-header">
           <div className="yt-header-inner">
             <div className="yt-brand">
-              <span className="yt-brand-mark">YT</span>
-              Yeni Trend
+              <img src={sualinkLogo} alt="Sualink" className="yt-brand-logo" />
             </div>
             <div style={{ flex: 1 }}></div>
             <button onClick={() => setShowAccountPage(false)} className="yt-btn yt-btn-ghost">
@@ -3241,8 +3241,7 @@ export default function App() {
           <header className="yt-header yt-header-modern">
             <div className="yt-header-inner">
               <div className="yt-brand">
-                <span className="yt-brand-mark">YT</span>
-                Yeni Trend
+                <img src={sualinkLogo} alt="Sualink" className="yt-brand-logo" />
               </div>
 
               <div style={{ flex: '1 1 300px', maxWidth: '450px', position: 'relative', minWidth: '200px' }}>

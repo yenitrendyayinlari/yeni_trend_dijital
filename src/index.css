@@ -1,7 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
 
 :root {
-  /* --- Yeni Trend marka paleti (kağıt / optik form / kurşun kalem) --- */
+  /* --- Sualink marka paleti (kağıt / optik form / kurşun kalem) --- */
   --yt-paper: #f1ecdf;
   --yt-paper-2: #fbf9f3;
   --yt-ink: #17213a;
@@ -122,6 +122,11 @@ p {
   font-weight: 600;
   color: var(--yt-ink);
   background: var(--yt-mustard-bg);
+}
+.yt-brand-logo {
+  height: 34px;
+  width: auto;
+  display: block;
 }
 .yt-perf {
   height: 1px;
