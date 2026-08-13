@@ -2672,7 +2672,6 @@ export default function App() {
               ◀ Kataloğa Dön
             </button>
           </div>
-          <div className="yt-perf"></div>
         </header>
 
         <div className="wrap" style={{ maxWidth: '840px', margin: '0 auto', padding: '32px 24px 60px' }}>
@@ -2831,10 +2830,10 @@ export default function App() {
         <div className="yt-shell">
           <header className="yt-header">
             <div className="yt-header-inner">
-              <button onClick={() => setInspectingExamId(null)} className="yt-btn yt-btn-ghost">
-                ◀ Tüm Listeye Dön
-              </button>
-              <div style={{ flex: 1, fontFamily: 'var(--yt-font-display)', fontWeight: '600', fontSize: '1.05rem', color: 'var(--yt-ink)' }}>İçerik Detayları</div>
+              <div className="yt-brand" style={{ cursor: 'pointer' }} onClick={() => setInspectingExamId(null)}>
+                <img src={sualinkLogo} alt="Sualink" className="yt-brand-logo" />
+              </div>
+              <div style={{ flex: 1 }}></div>
               <button
                 onClick={() => {
                   const shareUrl = `${window.location.origin}${window.location.pathname}?exam=${inspectExam.id}`;
@@ -2846,6 +2845,16 @@ export default function App() {
                 title="Bu ürünün linkini kopyala"
               >
                 🔗 Paylaş
+              </button>
+              {user && (
+                <button onClick={openStudentNotifs} className="yt-cart-btn" title="Bildirimler">
+                  🔔
+                  {studentUnreadCount > 0 && <span className="yt-cart-badge">{studentUnreadCount}</span>}
+                </button>
+              )}
+              <button onClick={() => setShowCart(true)} className="yt-cart-btn" title="Sepet">
+                🛒
+                {cartItems.length > 0 && <span className="yt-cart-badge">{cartItems.length}</span>}
               </button>
               {user ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -2868,7 +2877,6 @@ export default function App() {
                 </div>
               )}
             </div>
-            <div className="yt-perf"></div>
           </header>
 
           <main style={{ maxWidth: '760px', margin: '40px auto', padding: '0 24px' }}>
@@ -3234,9 +3242,6 @@ export default function App() {
             .yt-header-modern {
               box-shadow: 0 1px 0 rgba(27, 33, 56, 0.08), 0 2px 8px rgba(27, 33, 56, 0.04);
             }
-            .yt-header-modern .yt-perf {
-              display: none;
-            }
           `}</style>
           <header className="yt-header yt-header-modern">
             <div className="yt-header-inner">
@@ -3248,7 +3253,7 @@ export default function App() {
                 <span style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--yt-graphite-soft)', fontSize: '0.9rem' }}>○</span>
                 <input
                   type="text"
-                  placeholder="Ne öğrenmek veya çözmek istiyorsunuz?"
+                  placeholder="Ne çözmek istiyorsunuz?"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   style={{ width: '100%', padding: '10px 14px 10px 36px', borderRadius: '8px', border: '1.5px solid var(--yt-line)', backgroundColor: 'var(--yt-paper-2)', outline: 'none', fontSize: '0.9rem', fontFamily: 'var(--yt-font-body)', color: 'var(--yt-ink)', boxSizing: 'border-box' }}
