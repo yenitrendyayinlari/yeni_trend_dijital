@@ -89,6 +89,14 @@ export default async function handler(req, res) {
   // satın alındığını çözebilmek için tüm exam id'lerini virgülle ayırarak koyuyoruz.
   const idList = examRows.map((e) => e.id).join(',');
 
+  // Origin header bazı durumlarda (ör. tarayıcı/istemci farklılıkları) boş
+  // gelebilir; bu yüzden host + proto üzerinden güvenli bir fallback
+  // kullanıyoruz. Bu sayede callbackUrl hangi domainden istek gelirse
+  // gelsin (sualink.com, www.sualink.com, önizleme domain'leri vb.)
+  // doğru şekilde oluşuyor -- domain değiştiğinde kodda değişiklik gerekmez.
+  const origin = req.headers.origin
+    || `${req.headers['x-forwarded-proto'] || 'https'}://${req.headers.host}`;
+
   const request = {
     locale: Iyzipay.LOCALE.TR,
     // conversationId'ye doğrulanmış kullanıcının e-postasını koyuyoruz;
@@ -99,7 +107,7 @@ export default async function handler(req, res) {
     currency: Iyzipay.CURRENCY.TRY,
     basketId: idList,
     paymentGroup: Iyzipay.PAYMENT_GROUP.PRODUCT,
-    callbackUrl: `${req.headers.origin}/api/iyzipay-callback`,
+    callbackUrl: `${origin}/api/iyzipay-callback`,
     buyer: {
       id: 'BY789',
       name: 'Öğrenci',
