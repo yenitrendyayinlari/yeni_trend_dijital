@@ -12,6 +12,16 @@ import sualinkLogo from './sualinklogo.png';
 // böylece iyzico'nun ödeme formu gerçekten render edilip görünür hale gelir.
 function renderIyzicoCheckoutForm(container, htmlContent) {
   if (!container) return;
+  // ÖNEMLİ: htmlContent boş/hatalı gelirse (ör. iyzico isteği başarısız
+  // olduysa) container'a SADECE kapatma butonunu basmıyoruz -- çünkü
+  // .popup:not(:empty) kuralı container'ı tam ekran bir overlay'e çeviriyor.
+  // İçerik yoksa overlay'i hiç açmadan kullanıcıyı bilgilendiriyoruz, aksi
+  // halde sayfa "boş overlay" yüzünden tamamen tıklanamaz hale geliyor.
+  if (!htmlContent) {
+    container.innerHTML = '';
+    alert('Ödeme formu yüklenemedi. Lütfen tekrar deneyin.');
+    return;
+  }
   // İyzico'nun kendi widget'ı bazen "kapat" yerine küçük bir tetikleyici
   // butona dönüşüyor, ama container hâlâ dolu kaldığı için bizim overlay'imiz
   // açık kalıp sayfayı kilitleyebiliyor. Bu yüzden her zaman görünen, kendi
