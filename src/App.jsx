@@ -5,41 +5,6 @@ import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
 import sualinkLogo from './sualinklogo.png';
 
-// İyzico'nun checkoutFormContent alanı içindeki <script> etiketi,
-// innerHTML ile DOM'a eklendiğinde tarayıcı tarafından ÇALIŞTIRILMAZ
-// (bu bilinen bir DOM kısıtlamasıdır). Bu yüzden script'i manuel olarak
-// yeni bir <script> elementi olarak yeniden oluşturup DOM'a ekliyoruz,
-// böylece iyzico'nun ödeme formu gerçekten render edilip görünür hale gelir.
-function renderIyzicoCheckoutForm(container, htmlContent) {
-  if (!container) return;
-  // ÖNEMLİ: htmlContent boş/hatalı gelirse (ör. iyzico isteği başarısız
-  // olduysa) container'a SADECE kapatma butonunu basmıyoruz -- çünkü
-  // .popup:not(:empty) kuralı container'ı tam ekran bir overlay'e çeviriyor.
-  // İçerik yoksa overlay'i hiç açmadan kullanıcıyı bilgilendiriyoruz, aksi
-  // halde sayfa "boş overlay" yüzünden tamamen tıklanamaz hale geliyor.
-  if (!htmlContent) {
-    container.innerHTML = '';
-    alert('Ödeme formu yüklenemedi. Lütfen tekrar deneyin.');
-    return;
-  }
-  // İyzico'nun kendi widget'ı bazen "kapat" yerine küçük bir tetikleyici
-  // butona dönüşüyor, ama container hâlâ dolu kaldığı için bizim overlay'imiz
-  // açık kalıp sayfayı kilitleyebiliyor. Bu yüzden her zaman görünen, kendi
-  // kontrolümüzdeki bir kapatma butonu ekliyoruz -- tıklanınca container'ı
-  // tamamen boşaltıyor, bu da CSS'teki .popup:empty kuralıyla overlay'i gizliyor.
-  container.innerHTML =
-    '<button type="button" class="iyzico-close-btn" aria-label="Kapat" onclick="document.getElementById(\'iyzipay-checkout-form\').innerHTML=\'\';">✕</button>' +
-    htmlContent;
-  const oldScripts = container.querySelectorAll('script');
-  oldScripts.forEach((oldScript) => {
-    const newScript = document.createElement('script');
-    Array.from(oldScript.attributes).forEach((attr) => {
-      newScript.setAttribute(attr.name, attr.value);
-    });
-    newScript.textContent = oldScript.textContent;
-    oldScript.parentNode.replaceChild(newScript, oldScript);
-  });
-}
 
 export default function App() {
   const [appMode, setAppMode] = useState('student'); 
@@ -1260,15 +1225,14 @@ export default function App() {
         return;
       }
 
-      if (result.status === 'success') {
-        const checkoutDiv = document.getElementById('iyzipay-checkout-form');
-        renderIyzicoCheckoutForm(checkoutDiv, result.checkoutFormContent);
-
-        if (window.iyzipayCheckout && typeof window.iyzipayCheckout.show === 'function') {
-          window.iyzipayCheckout.show();
-        }
+      // Gömülü widget yerine iyzico'nun kendi barındırdığı ödeme sayfasına
+      // yönlendiriyoruz -- widget'ın kendi "küçültme/kapatma" davranışıyla
+      // ilgili sorunları tamamen ortadan kaldırıyor. Ödeme bitince iyzico
+      // callbackUrl üzerinden kullanıcıyı otomatik olarak siteye geri getirir.
+      if (result.status === 'success' && result.paymentPageUrl) {
+        window.location.href = result.paymentPageUrl;
       } else {
-        alert("İşlem başarısız: " + result.errorMessage);
+        alert("İşlem başarısız: " + (result.errorMessage || 'Ödeme sayfası oluşturulamadı.'));
       }
     });
   };
@@ -1314,16 +1278,16 @@ export default function App() {
         return;
       }
 
-      if (result.status === 'success') {
-        const checkoutDiv = document.getElementById('iyzipay-checkout-form');
-        renderIyzicoCheckoutForm(checkoutDiv, result.checkoutFormContent);
-        if (window.iyzipayCheckout && typeof window.iyzipayCheckout.show === 'function') {
-          window.iyzipayCheckout.show();
-        }
+      // Gömülü widget yerine iyzico'nun kendi barındırdığı ödeme sayfasına
+      // yönlendiriyoruz -- widget'ın kendi "küçültme/kapatma" davranışıyla
+      // ilgili sorunları tamamen ortadan kaldırıyor. Ödeme bitince iyzico
+      // callbackUrl üzerinden kullanıcıyı otomatik olarak siteye geri getirir.
+      if (result.status === 'success' && result.paymentPageUrl) {
         setCartItems([]);
         setShowCart(false);
+        window.location.href = result.paymentPageUrl;
       } else {
-        alert("İşlem başarısız: " + result.errorMessage);
+        alert("İşlem başarısız: " + (result.errorMessage || 'Ödeme sayfası oluşturulamadı.'));
       }
     });
   };
