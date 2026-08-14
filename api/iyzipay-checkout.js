@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 const iyzipay = new Iyzipay({
   apiKey: process.env.IYZICO_API_KEY,
   secretKey: process.env.IYZICO_SECRET_KEY,
-  uri: 'https://sandbox-api.iyzipay.com' // Canlı ortama geçtiğinizde 'https://api.iyzipay.com' yapabilirsiniz
+  uri: 'https://api.iyzipay.com'
 });
 
 // Service Role Key ile oluşturulan bu istemci RLS kurallarını atlayabilir,
