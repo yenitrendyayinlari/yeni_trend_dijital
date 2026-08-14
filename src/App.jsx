@@ -12,7 +12,14 @@ import sualinkLogo from './sualinklogo.png';
 // böylece iyzico'nun ödeme formu gerçekten render edilip görünür hale gelir.
 function renderIyzicoCheckoutForm(container, htmlContent) {
   if (!container) return;
-  container.innerHTML = htmlContent;
+  // İyzico'nun kendi widget'ı bazen "kapat" yerine küçük bir tetikleyici
+  // butona dönüşüyor, ama container hâlâ dolu kaldığı için bizim overlay'imiz
+  // açık kalıp sayfayı kilitleyebiliyor. Bu yüzden her zaman görünen, kendi
+  // kontrolümüzdeki bir kapatma butonu ekliyoruz -- tıklanınca container'ı
+  // tamamen boşaltıyor, bu da CSS'teki .popup:empty kuralıyla overlay'i gizliyor.
+  container.innerHTML =
+    '<button type="button" class="iyzico-close-btn" aria-label="Kapat" onclick="document.getElementById(\'iyzipay-checkout-form\').innerHTML=\'\';">✕</button>' +
+    htmlContent;
   const oldScripts = container.querySelectorAll('script');
   oldScripts.forEach((oldScript) => {
     const newScript = document.createElement('script');

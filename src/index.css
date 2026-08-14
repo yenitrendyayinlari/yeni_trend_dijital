@@ -566,3 +566,33 @@ p {
   padding: 24px;
   overflow-y: auto;
 }
+
+/* Header'daki sualink logosu — resmin kendi çözünürlüğü büyük olduğu için
+   sabit bir yükseklik veriyoruz, genişlik orantılı küçülüyor. */
+.yt-brand-logo {
+  height: 40px;
+  width: auto;
+  display: block;
+}
+
+/* İyzico overlay'inin her zaman görünen kapatma butonu (bkz. App.jsx
+   renderIyzicoCheckoutForm) — iyzico'nun kendi kapatma davranışına
+   bağlı kalmadan kullanıcının her zaman çıkabilmesini sağlar. */
+.iyzico-close-btn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(23, 33, 58, 0.85);
+  color: #fff;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 10000;
+}
+.iyzico-close-btn:hover {
+  background: var(--yt-ink);
+}
