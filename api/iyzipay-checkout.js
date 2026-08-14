@@ -108,6 +108,10 @@ export default async function handler(req, res) {
     basketId: idList,
     paymentGroup: Iyzipay.PAYMENT_GROUP.PRODUCT,
     callbackUrl: `${origin}/api/iyzipay-callback`,
+    // Kullanıcı iyzico'nun barındırdığı ödeme sayfasında "vazgeç" derse
+    // buraya döner -- artık gömülü widget değil, tam sayfa yönlendirme
+    // (paymentPageUrl) kullandığımız için bu geri dönüş yolu önemli.
+    cancelUrl: `${origin}/?payment=cancelled`,
     buyer: {
       id: 'BY789',
       name: 'Öğrenci',
