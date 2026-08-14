@@ -5,6 +5,25 @@ import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
 import sualinkLogo from './sualinklogo.png';
 
+// İyzico'nun checkoutFormContent alanı içindeki <script> etiketi,
+// innerHTML ile DOM'a eklendiğinde tarayıcı tarafından ÇALIŞTIRILMAZ
+// (bu bilinen bir DOM kısıtlamasıdır). Bu yüzden script'i manuel olarak
+// yeni bir <script> elementi olarak yeniden oluşturup DOM'a ekliyoruz,
+// böylece iyzico'nun ödeme formu gerçekten render edilip görünür hale gelir.
+function renderIyzicoCheckoutForm(container, htmlContent) {
+  if (!container) return;
+  container.innerHTML = htmlContent;
+  const oldScripts = container.querySelectorAll('script');
+  oldScripts.forEach((oldScript) => {
+    const newScript = document.createElement('script');
+    Array.from(oldScript.attributes).forEach((attr) => {
+      newScript.setAttribute(attr.name, attr.value);
+    });
+    newScript.textContent = oldScript.textContent;
+    oldScript.parentNode.replaceChild(newScript, oldScript);
+  });
+}
+
 export default function App() {
   const [appMode, setAppMode] = useState('student'); 
   const [authMode, setAuthMode] = useState('login'); 
@@ -1226,9 +1245,7 @@ export default function App() {
 
       if (result.status === 'success') {
         const checkoutDiv = document.getElementById('iyzipay-checkout-form');
-        if (checkoutDiv) {
-          checkoutDiv.innerHTML = result.checkoutFormContent;
-        }
+        renderIyzicoCheckoutForm(checkoutDiv, result.checkoutFormContent);
 
         if (window.iyzipayCheckout && typeof window.iyzipayCheckout.show === 'function') {
           window.iyzipayCheckout.show();
@@ -1282,9 +1299,7 @@ export default function App() {
 
       if (result.status === 'success') {
         const checkoutDiv = document.getElementById('iyzipay-checkout-form');
-        if (checkoutDiv) {
-          checkoutDiv.innerHTML = result.checkoutFormContent;
-        }
+        renderIyzicoCheckoutForm(checkoutDiv, result.checkoutFormContent);
         if (window.iyzipayCheckout && typeof window.iyzipayCheckout.show === 'function') {
           window.iyzipayCheckout.show();
         }
