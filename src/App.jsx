@@ -947,12 +947,6 @@ export default function App() {
     }
   };
 
-  // Kazanım tablosunda yazarken her tuş vuruşunda veritabanına yazmamak için
-  // sadece yerel state'i güncelliyoruz; kayıt "Kaydet" butonuna basınca olur.
-  const updateTopicMapLocal = (id, newTopicMap) => {
-    setExams((prev) => prev.map(ex => ex.id === id ? { ...ex, topicMap: newTopicMap } : ex));
-  };
-
   // Kazanım haritası güncellemesini ayrı tutuyoruz ki topic_map kolonu
   // henüz eklenmemişse diğer alanların kaydedilmesini etkilemesin.
   const updateTopicMapInDb = async (id, newTopicMap) => {
@@ -965,6 +959,42 @@ export default function App() {
       console.error("Kazanım haritası kaydedilemedi (topic_map kolonu eksik olabilir):", error);
       alert("Kazanım haritası kaydedilemedi. Veritabanına 'topic_map' kolonu eklenmiş mi kontrol edin.");
     }
+  };
+
+  // ÖNEMLİ (bug fix): Kazanım tablosundaki tek bir satırı güncellerken
+  // ("Ders"/"Kazanım" seç, "+ Yeni Kazanım Ekle" vb.) topicMap'i doğrudan
+  // o anki `editingExam.topicMap` üzerinden (closure ile) alıp spread
+  // etmek yerine, React'in FONKSİYONEL state güncellemesini kullanıyoruz.
+  // Neden: "+ Yeni Kazanım Ekle" / "+ Yeni Ders Türü Ekle" sunucuya istek
+  // atıp cevap bekliyor (async). Kullanıcı bu bekleme sırasında başka
+  // satırları doldurmaya devam ederse, closure'daki topicMap ARTIK BAYAT
+  // (stale) olur; istek sonuçlandığında o eski haritanın üzerine tek
+  // alanı ekleyip yazmak, aradaki tüm yeni girdileri SİLERDİ. Fonksiyonel
+  // güncelleme her zaman state'in O ANKİ en güncel halini (`prev`) kullanır,
+  // bu yüzden hiçbir girdi kaybolmaz.
+  const applyTopicMapPatch = (examId, patchFn, { persist = false } = {}) => {
+    setExams((prev) => {
+      const next = prev.map((ex) => {
+        if (ex.id !== examId) return ex;
+        return { ...ex, topicMap: patchFn(ex.topicMap || {}) };
+      });
+      if (persist) {
+        const updatedExam = next.find((ex) => ex.id === examId);
+        if (updatedExam) {
+          supabase
+            .from('exams')
+            .update({ topic_map: updatedExam.topicMap })
+            .eq('id', examId)
+            .then(({ error }) => {
+              if (error) {
+                console.error("Kazanım haritası kaydedilemedi (topic_map kolonu eksik olabilir):", error);
+                alert("Kazanım haritası kaydedilemedi. Veritabanına 'topic_map' kolonu eklenmiş mi kontrol edin.");
+              }
+            });
+        }
+      }
+      return next;
+    });
   };
 
   // Sıralama güncellemesini ayrı tutuyoruz ki sort_order kolonu
@@ -2737,14 +2767,18 @@ export default function App() {
                                           const name = window.prompt('Yeni Ders Türü adı:');
                                           if (name && name.trim()) {
                                             addLessonCategoryForExamType(effectiveExamType, name, (created) => {
-                                              const updated = { ...editingExam.topicMap, [soruNo]: { ders: created.name, kazanim: '' } };
-                                              updateTopicMapLocal(editingExam.id, updated);
+                                              applyTopicMapPatch(editingExam.id, (tm) => ({
+                                                ...tm,
+                                                [soruNo]: { ders: created.name, kazanim: '' }
+                                              }));
                                             });
                                           }
                                           return;
                                         }
-                                        const updated = { ...editingExam.topicMap, [soruNo]: { ders: e.target.value, kazanim: '' } };
-                                        updateTopicMapLocal(editingExam.id, updated);
+                                        applyTopicMapPatch(editingExam.id, (tm) => ({
+                                          ...tm,
+                                          [soruNo]: { ders: e.target.value, kazanim: '' }
+                                        }));
                                       }}
                                       style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: '#fff' }}
                                     >
@@ -2771,14 +2805,18 @@ export default function App() {
                                           const name = window.prompt('Yeni Kazanım adı:');
                                           if (name && name.trim()) {
                                             handleAddLearningOutcome(ders.id, name, (created) => {
-                                              const updated = { ...editingExam.topicMap, [soruNo]: { ...entry, kazanim: created.name } };
-                                              updateTopicMapLocal(editingExam.id, updated);
+                                              applyTopicMapPatch(editingExam.id, (tm) => ({
+                                                ...tm,
+                                                [soruNo]: { ...tm[soruNo], kazanim: created.name }
+                                              }));
                                             });
                                           }
                                           return;
                                         }
-                                        const updated = { ...editingExam.topicMap, [soruNo]: { ...entry, kazanim: e.target.value } };
-                                        updateTopicMapLocal(editingExam.id, updated);
+                                        applyTopicMapPatch(editingExam.id, (tm) => ({
+                                          ...tm,
+                                          [soruNo]: { ...tm[soruNo], kazanim: e.target.value }
+                                        }));
                                       }}
                                       style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: entry.ders ? '#fff' : '#f1f5f9' }}
                                     >
@@ -2798,9 +2836,11 @@ export default function App() {
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        const updated = { ...editingExam.topicMap };
-                                        delete updated[soruNo];
-                                        updateTopicMapInDb(editingExam.id, updated);
+                                        applyTopicMapPatch(editingExam.id, (tm) => {
+                                          const next = { ...tm };
+                                          delete next[soruNo];
+                                          return next;
+                                        }, { persist: true });
                                       }}
                                       style={{ border: 'none', background: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '0.95rem' }}
                                       title="Bu soruyu kazanım listesinden sil"
@@ -2829,8 +2869,10 @@ export default function App() {
                           const soruNo = Number(newKazanimSoruNo);
                           if (!soruNo || soruNo < 1) { alert("Geçerli bir soru numarası girin."); return; }
                           if (editingExam.topicMap[soruNo]) { alert("Bu soru numarası zaten listede var."); return; }
-                          const updated = { ...editingExam.topicMap, [soruNo]: { ders: '', kazanim: '' } };
-                          updateTopicMapInDb(editingExam.id, updated);
+                          applyTopicMapPatch(editingExam.id, (tm) => {
+                            if (tm[soruNo]) return tm;
+                            return { ...tm, [soruNo]: { ders: '', kazanim: '' } };
+                          }, { persist: true });
                           setNewKazanimSoruNo('');
                         }}
                         className="yt-btn"
