@@ -2337,7 +2337,18 @@ export default function App() {
                     pageNumber={1}
                   />
                 </div>
-                {editingExam && (
+                {editingExam && (() => {
+                  // ÖNEMLİ: Alt testlerde (Test 1, Test 2, Test 3...) kendi
+                  // categoryExamType alanı boştur -- bu bilgi sadece üst
+                  // pakette (ana sınavda) tutulur. Kazanım Haritası'ndaki
+                  // Ders Türü listesi bu yüzden editingExam bir alt testse
+                  // üst paketin Sınav Türü'nden (parentId üzerinden) miras
+                  // alıyor; aksi halde dropdown boş kalıyordu.
+                  const parentExam = editingExam.parentId
+                    ? exams.find((e) => e.id === editingExam.parentId)
+                    : null;
+                  const effectiveExamType = editingExam.categoryExamType || parentExam?.categoryExamType || '';
+                  return (
               <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px' }}>
                 <h3 style={{ margin: '0 0 12px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>📊 Kazanım Haritası</h3>
 
@@ -2369,7 +2380,7 @@ export default function App() {
                       <option value="">Ders Türü Seçin</option>
                       {lessonCategories
                         .filter((lc) => {
-                          const cat = examCategories.find((c) => c.name === editingExam.categoryExamType);
+                          const cat = examCategories.find((c) => c.name === effectiveExamType);
                           return cat && lc.exam_category_id === cat.id;
                         })
                         .map((lc) => (
@@ -2419,7 +2430,7 @@ export default function App() {
                       />
                       <button
                         type="button"
-                        onClick={() => addLessonCategoryForExamType(editingExam.categoryExamType, newDersForKazanimName, (created) => {
+                        onClick={() => addLessonCategoryForExamType(effectiveExamType, newDersForKazanimName, (created) => {
                           setQuickKazanimDers(created.name);
                           setQuickKazanimText('');
                         }).then(() => { setNewDersForKazanimName(''); setShowNewDersForKazanimInput(false); })}
@@ -2503,7 +2514,7 @@ export default function App() {
                                         if (e.target.value === '__new__') {
                                           const name = window.prompt('Yeni Ders Türü adı:');
                                           if (name && name.trim()) {
-                                            addLessonCategoryForExamType(editingExam.categoryExamType, name, (created) => {
+                                            addLessonCategoryForExamType(effectiveExamType, name, (created) => {
                                               const updated = { ...editingExam.topicMap, [soruNo]: { ders: created.name, kazanim: '' } };
                                               updateTopicMapLocal(editingExam.id, updated);
                                             });
@@ -2518,7 +2529,7 @@ export default function App() {
                                       <option value="">Ders Seçin</option>
                                       {lessonCategories
                                         .filter((lc) => {
-                                          const cat = examCategories.find((c) => c.name === editingExam.categoryExamType);
+                                          const cat = examCategories.find((c) => c.name === effectiveExamType);
                                           return cat && lc.exam_category_id === cat.id;
                                         })
                                         .map((lc) => (
@@ -2609,7 +2620,8 @@ export default function App() {
                   </div>
                 )}
               </div>
-            )}
+                  );
+                })()}
               </div>
             )}
 
