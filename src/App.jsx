@@ -4,6 +4,7 @@ import SecurePdfViewer from './SecurePdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
 import sualinkLogo from './sualinklogo.png';
+import Footer from './Footer';
 
 
 export default function App() {
@@ -2923,6 +2924,7 @@ export default function App() {
           </div>
         </div>
         {renderCartAndNotifOverlays()}
+        <Footer />
       </div>
     );
   }
@@ -3288,6 +3290,7 @@ export default function App() {
           </main>
           {renderCartAndNotifOverlays()}
           {renderAuthModal()}
+          <Footer />
         </div>
       );
     }
@@ -3595,6 +3598,7 @@ export default function App() {
           {renderCartAndNotifOverlays()}
 
           {renderAuthModal()}
+          <Footer />
         </div>
       );
     }
