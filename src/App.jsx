@@ -66,7 +66,12 @@ export default function App() {
   const [showNewDersForKazanimInput, setShowNewDersForKazanimInput] = useState(false);
   const [newDersForKazanimName, setNewDersForKazanimName] = useState('');
   const [showCategoryManager, setShowCategoryManager] = useState(false);
-  const [categoryManagerTab, setCategoryManagerTab] = useState('exam'); // 'exam' | 'lesson' | 'topic' | 'outcome'
+  // Kategori Yönetimi artık sekmeler yerine iç içe (Sınav Türü > Ders Türü >
+  // Konu > Kazanım) açılır/kapanır bir akordiyon ağacı olarak gösteriliyor.
+  // Her seviyenin kendi "hangi kayıtlar açık" haritası var (id -> boolean).
+  const [expandedExamIds, setExpandedExamIds] = useState({});
+  const [expandedLessonIds, setExpandedLessonIds] = useState({});
+  const [expandedTopicIds, setExpandedTopicIds] = useState({});
   const [newExamForm, setNewExamForm] = useState({
     name: '',
     duration: '',
@@ -694,6 +699,124 @@ export default function App() {
     setTopics((prev) => prev.filter((t) => !childLessonIds.includes(t.lesson_category_id)));
     setLessonCategories((prev) => prev.filter((lc) => lc.exam_category_id !== id));
     setExamCategories((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  // --- Kategori Yönetimi: ADI DÜZENLEME ---
+  // Sadece "ana liste"deki (dropdown'ları besleyen) kaydın adını değiştirir.
+  // Daha önce bu isimle bir soruya kaydedilmiş Kazanım Haritası girişleri
+  // (topicMap içindeki düz metin ders/konu/kazanım) OTOMATİK güncellenmez --
+  // tıpkı silmenin de eski kayıtları etkilememesi gibi. Kazanım özelinde,
+  // resolveLiveKonuForEntry sayesinde Konu adı yine de güncel gösterilir
+  // (çünkü o, kazanım adından canlı olarak topic.name'i okur); ama Ders/Konu/
+  // Kazanımın kendi adı değiştiğinde, o adı zaten kullanan sorularda YENİ adı
+  // görmek için o sorunun ilgili hücresini Kazanım Haritası'ndan yeniden
+  // seçmek gerekir.
+  const renameExamCategory = async (id, currentName) => {
+    const name = window.prompt('Sınav Türü adını düzenle:', currentName);
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === currentName) return;
+    const { error } = await supabase.from('exam_categories').update({ name: trimmed }).eq('id', id);
+    if (error) { alert('Güncellenemedi: ' + error.message); return; }
+    setExamCategories((prev) => prev.map((c) => c.id === id ? { ...c, name: trimmed } : c).sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+  };
+
+  const renameLessonCategory = async (id, currentName) => {
+    const name = window.prompt('Ders Türü adını düzenle:', currentName);
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === currentName) return;
+    const { error } = await supabase.from('lesson_categories').update({ name: trimmed }).eq('id', id);
+    if (error) { alert('Güncellenemedi: ' + error.message); return; }
+    setLessonCategories((prev) => prev.map((lc) => lc.id === id ? { ...lc, name: trimmed } : lc).sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+  };
+
+  const renameTopic = async (id, currentName) => {
+    const name = window.prompt('Konu adını düzenle:', currentName);
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === currentName) return;
+    const { error } = await supabase.from('topics').update({ name: trimmed }).eq('id', id);
+    if (error) { alert('Güncellenemedi: ' + error.message); return; }
+    setTopics((prev) => prev.map((t) => t.id === id ? { ...t, name: trimmed } : t).sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+  };
+
+  const renameLearningOutcome = async (id, currentName) => {
+    const name = window.prompt('Kazanım adını düzenle:', currentName);
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === currentName) return;
+    const { error } = await supabase.from('learning_outcomes').update({ name: trimmed }).eq('id', id);
+    if (error) { alert('Güncellenemedi: ' + error.message); return; }
+    setLearningOutcomes((prev) => prev.map((o) => o.id === id ? { ...o, name: trimmed } : o).sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+  };
+
+  // --- Kategori Yönetimi: SİLMEDEN ÖNCE "kullanımda mı" KONTROLÜ ---
+  // Bir Sınav Türü / Ders Türü / Konu / Kazanım, herhangi bir sınavın
+  // Kazanım Haritası'nda (topicMap) bir SORUYA atanmışsa -- ya da (sadece
+  // Sınav Türü için) doğrudan bir sınavın "Sınav Türü" alanına atanmışsa --
+  // silinmesine İZİN VERMİYORUZ. Aksi halde o soru dersiz/konusuz/kazanımsız
+  // kalırdı. "level" silinecek şeyin türünü belirtir; alt kademedeki (Ders
+  // silinirken ona bağlı Konu/Kazanım'lar da; Konu silinirken ona bağlı
+  // Kazanım'lar da) kullanım kontrolü otomatik olarak dahil edilir, çünkü bu
+  // kayıtlar zaten kademeli olarak birlikte silinecek.
+  const getCategoryUsageHits = (level, item) => {
+    let dersNames = [];
+    let konuNames = [];
+    let kazanimNames = [];
+
+    if (level === 'exam') {
+      const childLessons = lessonCategories.filter((lc) => lc.exam_category_id === item.id);
+      dersNames = childLessons.map((lc) => lc.name);
+      const childLessonIds = childLessons.map((lc) => lc.id);
+      konuNames = topics.filter((t) => childLessonIds.includes(t.lesson_category_id)).map((t) => t.name);
+      kazanimNames = learningOutcomes.filter((o) => childLessonIds.includes(o.lesson_category_id)).map((o) => o.name);
+    } else if (level === 'lesson') {
+      dersNames = [item.name];
+      konuNames = topics.filter((t) => t.lesson_category_id === item.id).map((t) => t.name);
+      kazanimNames = learningOutcomes.filter((o) => o.lesson_category_id === item.id).map((o) => o.name);
+    } else if (level === 'topic') {
+      konuNames = [item.name];
+      kazanimNames = learningOutcomes.filter((o) => o.topic_id === item.id).map((o) => o.name);
+    } else if (level === 'outcome') {
+      kazanimNames = [item.name];
+    }
+
+    const hits = [];
+    exams.forEach((ex) => {
+      if (ex.topicMap) {
+        Object.entries(ex.topicMap).forEach(([soruNo, entry]) => {
+          const usesDers = dersNames.length > 0 && dersNames.includes(entry.ders);
+          const usesKonu = konuNames.length > 0 && konuNames.includes(entry.konu);
+          const usesKazanim = kazanimNames.length > 0 && kazanimNames.includes(entry.kazanim);
+          if (usesDers || usesKonu || usesKazanim) {
+            hits.push({ examName: ex.name || 'İsimsiz test', soruNo, type: 'soru' });
+          }
+        });
+      }
+      if (level === 'exam' && !ex.parentId && ex.categoryExamType === item.name) {
+        hits.push({ examName: ex.name || 'İsimsiz içerik', soruNo: null, type: 'sinav' });
+      }
+    });
+    return hits;
+  };
+
+  // Kullanım varsa açıklayıcı bir uyarı gösterip true döner (silme işlemi bu
+  // durumda İPTAL edilmeli); kullanım yoksa false döner (silmeye devam
+  // edilebilir).
+  const blockDeleteIfInUse = (level, item, label) => {
+    const hits = getCategoryUsageHits(level, item);
+    if (hits.length === 0) return false;
+    const preview = hits.slice(0, 6).map((h) =>
+      h.type === 'sinav' ? `• ${h.examName} (sınav türü olarak atanmış)` : `• ${h.examName} — Soru ${h.soruNo}`
+    ).join('\n');
+    const more = hits.length > 6 ? `\n...ve ${hits.length - 6} kayıt daha` : '';
+    alert(
+      `"${label}" şu anda kullanımda olduğu için silinemez:\n\n${preview}${more}\n\n` +
+      `Önce Kazanım Haritası'ndan bu soru(ları) düzenleyip başka bir kazanıma taşıyın ` +
+      `(ya da soruyu haritadan kaldırın), sonra tekrar deneyin.`
+    );
+    return true;
   };
 
   const checkUserRoleAndSetMode = (currentUser) => {
@@ -1416,31 +1539,11 @@ export default function App() {
     return entry.konu || '';
   };
 
-  // Kategori Yönetimi -> Kazanımlar sekmesindeki "Konu Değiştir" için:
-  // bir kazanımın bağlı olduğu Konu'yu (topic_id) değiştirir. lesson_category_id
-  // de yeni konunun ders türüne göre otomatik güncellenir (handleAddLearningOutcome
-  // ile aynı mantık). Kazanımı silip yeniden eklemeye gerek kalmaz; bu kazanımı
-  // kullanan tüm sorularda Konu, resolveLiveKonuForEntry sayesinde otomatik yansır.
-  const changeLearningOutcomeTopic = async (outcomeId, newTopicId) => {
-    // ÖNEMLİ (bug fix): <select>'in e.target.value değeri DOM'da HER ZAMAN
-    // string gelir, ama topics.id veritabanından sayısal (ya da farklı tipte)
-    // olabilir. Katı eşitlik (===) bu yüzden hiç eşleşmeyip fonksiyonun
-    // sessizce hiçbir şey yapmadan çıkmasına, dolayısıyla dropdown'ın eski
-    // değere geri dönmesine sebep oluyordu. String'e çevirip karşılaştırıyoruz.
-    const newTopic = topics.find((t) => String(t.id) === String(newTopicId));
-    if (!newTopic) return;
-    const { error } = await supabase
-      .from('learning_outcomes')
-      .update({ topic_id: newTopic.id, lesson_category_id: newTopic.lesson_category_id })
-      .eq('id', outcomeId);
-    if (error) {
-      alert('Kazanımın konusu değiştirilemedi: ' + error.message);
-      return;
-    }
-    setLearningOutcomes((prev) =>
-      prev.map((o) => (o.id === outcomeId ? { ...o, topic_id: newTopic.id, lesson_category_id: newTopic.lesson_category_id } : o))
-    );
-  };
+  // NOT: Kategori Yönetimi'ndeki "Konu Değiştir" dropdown'u kaldırıldı --
+  // Konu artık sadece kazanım oluşturulurken seçiliyor, sonradan
+  // değiştirilmiyor (bkz. kullanıcı talebi). resolveLiveKonuForEntry hâlâ
+  // kullanışlı: bir Konu ya da Kazanım YENİDEN ADLANDIRILDIĞINDA, o adı
+  // kullanan sorularda güncel adı otomatik gösterir.
 
   const handleAddSubTest = async () => {
     const adminActiveExam = exams.find(e => e.id === activeAdminExamId);
@@ -2298,156 +2401,189 @@ export default function App() {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '520px', maxWidth: '100%', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
+              style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '600px', maxWidth: '100%', maxHeight: '84vh', display: 'flex', flexDirection: 'column' }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                 <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🗂 Kategori Yönetimi</h2>
                 <button onClick={() => setShowCategoryManager(false)} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
               </div>
 
-              <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', borderBottom: '1px solid #e2e8f0', paddingBottom: '10px' }}>
-                {[
-                  { key: 'exam', label: 'Sınav Türleri' },
-                  { key: 'lesson', label: 'Ders Türleri' },
-                  { key: 'topic', label: 'Konular' },
-                  { key: 'outcome', label: 'Kazanımlar' },
-                ].map((tab) => (
-                  <button
-                    key={tab.key}
-                    onClick={() => setCategoryManagerTab(tab.key)}
-                    style={{
-                      padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 'bold',
-                      backgroundColor: categoryManagerTab === tab.key ? '#0f172a' : '#fff',
-                      color: categoryManagerTab === tab.key ? '#fff' : '#0f172a',
-                    }}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-
               <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
-                Bir kaydı silmek, o adla daha önce kaydedilmiş sınav/kazanım bilgilerini etkilemez -- sadece bundan sonraki seçimler için listeden kalkar.
+                Sınav Türü → Ders Türü → Konu → Kazanım sırasıyla, ok işaretine tıklayarak
+                açıp kapatabilirsiniz. ✏️ ile adını düzeltebilir, 🗑 ile silebilirsiniz.
+                Şu an bir soruya (Kazanım Haritası'na) atanmış bir kayıt silinemez -- önce
+                o soru(lar)ın kazanımını değiştirmeniz gerekir.
               </div>
 
               <div style={{ overflowY: 'auto', flex: 1 }}>
-                {categoryManagerTab === 'exam' && (
-                  examCategories.length === 0 ? (
-                    <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz sınav türü eklenmedi.</p>
-                  ) : (
-                    examCategories.map((c) => (
-                      <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid #f1f5f9' }}>
-                        <span style={{ fontSize: '0.88rem' }}>{c.name}</span>
-                        <button
-                          onClick={() => {
-                            const childCount = lessonCategories.filter((lc) => lc.exam_category_id === c.id).length;
-                            const warn = childCount > 0 ? `\n\nBu sınav türüne bağlı ${childCount} ders türü de (ve onlara bağlı kazanımlar) birlikte silinecek.` : '';
-                            if (window.confirm(`"${c.name}" sınav türünü silmek istediğinize emin misiniz?${warn}`)) deleteExamCategory(c.id);
-                          }}
-                          style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}
-                        >
-                          🗑 Sil
-                        </button>
+                {examCategories.length === 0 ? (
+                  <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz sınav türü eklenmedi.</p>
+                ) : (
+                  examCategories.map((cat) => {
+                    const isExamOpen = !!expandedExamIds[cat.id];
+                    const childLessons = lessonCategories.filter((lc) => lc.exam_category_id === cat.id);
+                    return (
+                      <div key={cat.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 4px' }}>
+                          <button
+                            type="button"
+                            onClick={() => setExpandedExamIds((prev) => ({ ...prev, [cat.id]: !prev[cat.id] }))}
+                            style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.8rem', color: '#64748b', width: '18px', padding: 0 }}
+                          >
+                            {isExamOpen ? '▾' : '▸'}
+                          </button>
+                          <span style={{ fontSize: '0.9rem', fontWeight: 'bold', flex: 1, color: '#0f172a' }}>{cat.name}</span>
+                          <button
+                            type="button"
+                            onClick={() => renameExamCategory(cat.id, cat.name)}
+                            title="Adını düzenle"
+                            style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.9rem', padding: '2px 5px' }}
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (blockDeleteIfInUse('exam', cat, cat.name)) return;
+                              const childCount = childLessons.length;
+                              const warn = childCount > 0 ? `\n\nBu sınav türüne bağlı ${childCount} ders türü de (ve onlara bağlı konu/kazanımlar) birlikte silinecek.` : '';
+                              if (window.confirm(`"${cat.name}" sınav türünü silmek istediğinize emin misiniz?${warn}`)) deleteExamCategory(cat.id);
+                            }}
+                            style={{ padding: '4px 9px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}
+                          >
+                            🗑
+                          </button>
+                        </div>
+
+                        {isExamOpen && (
+                          <div style={{ paddingLeft: '24px', paddingBottom: '4px' }}>
+                            {childLessons.length === 0 ? (
+                              <p style={{ color: '#cbd5e1', fontSize: '0.78rem', padding: '4px 6px' }}>Bu sınav türüne bağlı ders türü yok.</p>
+                            ) : (
+                              childLessons.map((lc) => {
+                                const isLessonOpen = !!expandedLessonIds[lc.id];
+                                const childTopics = topics.filter((t) => t.lesson_category_id === lc.id);
+                                return (
+                                  <div key={lc.id} style={{ borderTop: '1px solid #f8fafc' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 4px' }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => setExpandedLessonIds((prev) => ({ ...prev, [lc.id]: !prev[lc.id] }))}
+                                        style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.78rem', color: '#64748b', width: '18px', padding: 0 }}
+                                      >
+                                        {isLessonOpen ? '▾' : '▸'}
+                                      </button>
+                                      <span style={{ fontSize: '0.85rem', flex: 1, color: '#1e293b' }}>{lc.name}</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => renameLessonCategory(lc.id, lc.name)}
+                                        title="Adını düzenle"
+                                        style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.85rem', padding: '2px 5px' }}
+                                      >
+                                        ✏️
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          if (blockDeleteIfInUse('lesson', lc, lc.name)) return;
+                                          const childCount = childTopics.length;
+                                          const warn = childCount > 0 ? `\n\nBu ders türüne bağlı ${childCount} konu da (ve onlara bağlı kazanımlar) birlikte silinecek.` : '';
+                                          if (window.confirm(`"${lc.name}" ders türünü silmek istediğinize emin misiniz?${warn}`)) deleteLessonCategory(lc.id);
+                                        }}
+                                        style={{ padding: '4px 8px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.74rem', fontWeight: 'bold' }}
+                                      >
+                                        🗑
+                                      </button>
+                                    </div>
+
+                                    {isLessonOpen && (
+                                      <div style={{ paddingLeft: '24px', paddingBottom: '4px' }}>
+                                        {childTopics.length === 0 ? (
+                                          <p style={{ color: '#cbd5e1', fontSize: '0.76rem', padding: '4px 6px' }}>Bu ders türüne bağlı konu yok.</p>
+                                        ) : (
+                                          childTopics.map((t) => {
+                                            const isTopicOpen = !!expandedTopicIds[t.id];
+                                            const childOutcomes = learningOutcomes.filter((o) => o.topic_id === t.id);
+                                            return (
+                                              <div key={t.id} style={{ borderTop: '1px solid #f8fafc' }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 4px' }}>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => setExpandedTopicIds((prev) => ({ ...prev, [t.id]: !prev[t.id] }))}
+                                                    style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.76rem', color: '#64748b', width: '18px', padding: 0 }}
+                                                  >
+                                                    {isTopicOpen ? '▾' : '▸'}
+                                                  </button>
+                                                  <span style={{ fontSize: '0.82rem', flex: 1, color: '#334155' }}>{t.name}</span>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => renameTopic(t.id, t.name)}
+                                                    title="Adını düzenle"
+                                                    style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.82rem', padding: '2px 5px' }}
+                                                  >
+                                                    ✏️
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                      if (blockDeleteIfInUse('topic', t, t.name)) return;
+                                                      const childCount = childOutcomes.length;
+                                                      const warn = childCount > 0 ? `\n\nBu konuya bağlı ${childCount} kazanım da birlikte silinecek.` : '';
+                                                      if (window.confirm(`"${t.name}" konusunu silmek istediğinize emin misiniz?${warn}`)) deleteTopic(t.id);
+                                                    }}
+                                                    style={{ padding: '4px 8px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 'bold' }}
+                                                  >
+                                                    🗑
+                                                  </button>
+                                                </div>
+
+                                                {isTopicOpen && (
+                                                  <div style={{ paddingLeft: '24px', paddingBottom: '6px' }}>
+                                                    {childOutcomes.length === 0 ? (
+                                                      <p style={{ color: '#cbd5e1', fontSize: '0.74rem', padding: '4px 6px' }}>Bu konuya bağlı kazanım yok.</p>
+                                                    ) : (
+                                                      childOutcomes.map((o) => (
+                                                        <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 4px', borderTop: '1px solid #f8fafc' }}>
+                                                          <span style={{ width: '18px', flexShrink: 0 }} />
+                                                          <span style={{ fontSize: '0.8rem', flex: 1, color: '#475569' }}>{o.name}</span>
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => renameLearningOutcome(o.id, o.name)}
+                                                            title="Adını düzenle"
+                                                            style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.8rem', padding: '2px 5px' }}
+                                                          >
+                                                            ✏️
+                                                          </button>
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => {
+                                                              if (blockDeleteIfInUse('outcome', o, o.name)) return;
+                                                              if (window.confirm(`"${o.name}" kazanımını silmek istediğinize emin misiniz?`)) deleteLearningOutcome(o.id);
+                                                            }}
+                                                            style={{ padding: '4px 8px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.7rem', fontWeight: 'bold' }}
+                                                          >
+                                                            🗑
+                                                          </button>
+                                                        </div>
+                                                      ))
+                                                    )}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            );
+                                          })
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        )}
                       </div>
-                    ))
-                  )
-                )}
-
-                {categoryManagerTab === 'lesson' && (
-                  lessonCategories.length === 0 ? (
-                    <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz ders türü eklenmedi.</p>
-                  ) : (
-                    lessonCategories.map((lc) => {
-                      const parentCat = examCategories.find((c) => c.id === lc.exam_category_id);
-                      return (
-                        <div key={lc.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid #f1f5f9' }}>
-                          <span style={{ fontSize: '0.88rem' }}>{lc.name} <span style={{ color: '#94a3b8', fontSize: '0.76rem' }}>({parentCat?.name || 'Sınav türü yok'})</span></span>
-                          <button
-                            onClick={() => {
-                              const childCount = learningOutcomes.filter((o) => o.lesson_category_id === lc.id).length;
-                              const warn = childCount > 0 ? `\n\nBu ders türüne bağlı ${childCount} kazanım da birlikte silinecek.` : '';
-                              if (window.confirm(`"${lc.name}" ders türünü silmek istediğinize emin misiniz?${warn}`)) deleteLessonCategory(lc.id);
-                            }}
-                            style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}
-                          >
-                            🗑 Sil
-                          </button>
-                        </div>
-                      );
-                    })
-                  )
-                )}
-
-                {categoryManagerTab === 'topic' && (
-                  topics.length === 0 ? (
-                    <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz konu eklenmedi.</p>
-                  ) : (
-                    topics.map((t) => {
-                      const parentLesson = lessonCategories.find((lc) => lc.id === t.lesson_category_id);
-                      return (
-                        <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid #f1f5f9' }}>
-                          <span style={{ fontSize: '0.88rem' }}>{t.name} <span style={{ color: '#94a3b8', fontSize: '0.76rem' }}>({parentLesson?.name || 'Ders türü yok'})</span></span>
-                          <button
-                            onClick={() => {
-                              const childCount = learningOutcomes.filter((o) => o.topic_id === t.id).length;
-                              const warn = childCount > 0 ? `\n\nBu konuya bağlı ${childCount} kazanım da birlikte silinecek.` : '';
-                              if (window.confirm(`"${t.name}" konusunu silmek istediğinize emin misiniz?${warn}`)) deleteTopic(t.id);
-                            }}
-                            style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}
-                          >
-                            🗑 Sil
-                          </button>
-                        </div>
-                      );
-                    })
-                  )
-                )}
-
-                {categoryManagerTab === 'outcome' && (
-                  learningOutcomes.length === 0 ? (
-                    <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz kazanım eklenmedi.</p>
-                  ) : (
-                    learningOutcomes.map((o) => {
-                      const parentTopic = topics.find((t) => t.id === o.topic_id);
-                      const parentLesson = parentTopic ? lessonCategories.find((lc) => lc.id === parentTopic.lesson_category_id) : lessonCategories.find((lc) => lc.id === o.lesson_category_id);
-                      const breadcrumb = parentTopic ? `${parentLesson?.name || 'Ders türü yok'} · ${parentTopic.name}` : (parentLesson?.name || 'Ders türü yok');
-                      return (
-                        <div key={o.id} style={{ padding: '8px 10px', borderBottom: '1px solid #f1f5f9' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ fontSize: '0.88rem' }}>{o.name} <span style={{ color: '#94a3b8', fontSize: '0.76rem' }}>({breadcrumb})</span></span>
-                            <button
-                              onClick={() => {
-                                if (window.confirm(`"${o.name}" kazanımını silmek istediğinize emin misiniz?`)) deleteLearningOutcome(o.id);
-                              }}
-                              style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}
-                            >
-                              🗑 Sil
-                            </button>
-                          </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
-                            <span style={{ fontSize: '0.72rem', color: '#64748b', whiteSpace: 'nowrap' }}>Konu Değiştir:</span>
-                            <select
-                              value={o.topic_id || ''}
-                              onChange={(e) => e.target.value && changeLearningOutcomeTopic(o.id, e.target.value)}
-                              style={{ flex: 1, fontSize: '0.78rem', padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: '#fff' }}
-                            >
-                              {topics
-                                .slice()
-                                .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-                                .map((t) => {
-                                  const tLesson = lessonCategories.find((lc) => lc.id === t.lesson_category_id);
-                                  return (
-                                    <option key={t.id} value={t.id}>
-                                      {tLesson?.name ? `${tLesson.name} · ${t.name}` : t.name}
-                                    </option>
-                                  );
-                                })}
-                            </select>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )
+                    );
+                  })
                 )}
               </div>
             </div>
