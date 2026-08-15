@@ -2653,6 +2653,87 @@ export default function App() {
     );
   };
 
+  // Sepet ve bildirim panelleri -- ÖNEMLİ: bunlar sadece ana sayfa (liste)
+  // JSX'i içinde tanımlıydı, ürün detay sayfası (inspectingExamId doluyken)
+  // ayrı/erken bir return kullandığı için bu paneller o ekranda hiç
+  // render edilmiyordu. Buton tıklanınca state (showCart/showStudentNotifs)
+  // doğru şekilde true oluyordu ama gösterecek panel yoktu; ana sayfaya
+  // dönülünce state hâlâ true olduğu için panel(ler) birden ortaya
+  // çıkıyordu. Bu fonksiyonu her sayfada (renderHeaderRight() çağrılan
+  // her yerde) ayrıca çağırarak sorunu kökten çözüyoruz.
+  const renderCartAndNotifOverlays = () => {
+    const cartExams = exams.filter(e => cartItems.includes(e.id));
+    const cartTotal = cartExams.reduce((sum, e) => sum + (e.price || 0), 0);
+
+    return (
+      <>
+        {showCart && (
+          <div className="yt-cart-overlay" onClick={() => setShowCart(false)}>
+            <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+                <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Sepetim</h3>
+                <button onClick={() => setShowCart(false)} className="yt-btn yt-btn-ghost">✕</button>
+              </div>
+
+              {cartExams.length === 0 ? (
+                <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Sepetiniz boş. Ücretli içeriklerin yanındaki "Sepete Ekle" butonuyla ekleyebilirsiniz.</p>
+              ) : (
+                <>
+                  {cartExams.map(ce => (
+                    <div key={ce.id} className="yt-cart-item">
+                      <span style={{ fontSize: '0.88rem', color: 'var(--yt-ink)', flex: 1 }}>{ce.name || 'İsimsiz İçerik'}</span>
+                      <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.85rem', color: 'var(--yt-ink)' }}>₺{ce.price}</span>
+                      <button onClick={() => toggleCartItem(ce.id)} className="yt-btn yt-btn-ghost" style={{ padding: '4px 8px' }}>✕</button>
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '18px 0' }}>
+                    <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.8rem', color: 'var(--yt-graphite)' }}>TOPLAM</span>
+                    <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '1.2rem', fontWeight: '600', color: 'var(--yt-ink)' }}>₺{cartTotal.toLocaleString('tr-TR')}</span>
+                  </div>
+                  <button onClick={handleCartCheckout} className="yt-btn yt-btn-buy" style={{ width: '100%' }}>Ödemeye Geç →</button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {showStudentNotifs && (
+          <div className="yt-cart-overlay" onClick={() => setShowStudentNotifs(false)}>
+            <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+                <h3 style={{ margin: 0, fontSize: '1.1rem' }}>🔔 Bildirimler</h3>
+                <button onClick={() => setShowStudentNotifs(false)} className="yt-btn yt-btn-ghost">✕</button>
+              </div>
+
+              {studentNotifLoading ? (
+                <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Yükleniyor...</p>
+              ) : studentNotifItems.length === 0 ? (
+                <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Henüz bir bildiriminiz yok.</p>
+              ) : (
+                <div style={{ display: 'grid', gap: '10px' }}>
+                  {studentNotifItems.map(item => (
+                    <div key={item.id} style={{ border: '1px solid var(--yt-line)', borderRadius: '8px', padding: '12px', backgroundColor: item.kind === 'reply' ? 'var(--yt-mustard-bg)' : 'var(--yt-paper-2)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 'bold', color: 'var(--yt-ink)' }}>
+                          {item.kind === 'reply' ? '↩ ' : '📢 '}{item.title}
+                        </span>
+                      </div>
+                      {item.kind === 'reply' && (
+                        <p style={{ margin: '0 0 6px 0', fontSize: '0.78rem', color: 'var(--yt-graphite)', fontStyle: 'italic' }}>"{item.originalMessage}"</p>
+                      )}
+                      <p style={{ margin: '0 0 6px 0', fontSize: '0.86rem', color: 'var(--yt-ink)', whiteSpace: 'pre-wrap' }}>{item.message}</p>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--yt-graphite-soft)' }}>{new Date(item.date).toLocaleString('tr-TR')}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
+
   // Tüm sayfalarda aynı şekilde görünen üst menü: Sınavlarım, Sepet, Bildirim, Hesap (e-posta) menüsü
   const renderHeaderRight = () => (
     <>
@@ -2841,6 +2922,7 @@ export default function App() {
             </div>
           </div>
         </div>
+        {renderCartAndNotifOverlays()}
       </div>
     );
   }
@@ -3204,6 +3286,7 @@ export default function App() {
               </div>
             )}
           </main>
+          {renderCartAndNotifOverlays()}
           {renderAuthModal()}
         </div>
       );
@@ -3240,9 +3323,6 @@ export default function App() {
       );
       
       const allCategories = ['Tümü', ...uniqueExamTypes];
-
-      const cartExams = exams.filter(e => cartItems.includes(e.id));
-      const cartTotal = cartExams.reduce((sum, e) => sum + (e.price || 0), 0);
 
       return (
         <div className="yt-shell">
@@ -3512,69 +3592,7 @@ export default function App() {
             )}
           </main>
 
-          {showCart && (
-            <div className="yt-cart-overlay" onClick={() => setShowCart(false)}>
-              <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Sepetim</h3>
-                  <button onClick={() => setShowCart(false)} className="yt-btn yt-btn-ghost">✕</button>
-                </div>
-
-                {cartExams.length === 0 ? (
-                  <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Sepetiniz boş. Ücretli içeriklerin yanındaki "Sepete Ekle" butonuyla ekleyebilirsiniz.</p>
-                ) : (
-                  <>
-                    {cartExams.map(ce => (
-                      <div key={ce.id} className="yt-cart-item">
-                        <span style={{ fontSize: '0.88rem', color: 'var(--yt-ink)', flex: 1 }}>{ce.name || 'İsimsiz İçerik'}</span>
-                        <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.85rem', color: 'var(--yt-ink)' }}>₺{ce.price}</span>
-                        <button onClick={() => toggleCartItem(ce.id)} className="yt-btn yt-btn-ghost" style={{ padding: '4px 8px' }}>✕</button>
-                      </div>
-                    ))}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '18px 0' }}>
-                      <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.8rem', color: 'var(--yt-graphite)' }}>TOPLAM</span>
-                      <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '1.2rem', fontWeight: '600', color: 'var(--yt-ink)' }}>₺{cartTotal.toLocaleString('tr-TR')}</span>
-                    </div>
-                    <button onClick={handleCartCheckout} className="yt-btn yt-btn-buy" style={{ width: '100%' }}>Ödemeye Geç →</button>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
-
-          {showStudentNotifs && (
-            <div className="yt-cart-overlay" onClick={() => setShowStudentNotifs(false)}>
-              <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>🔔 Bildirimler</h3>
-                  <button onClick={() => setShowStudentNotifs(false)} className="yt-btn yt-btn-ghost">✕</button>
-                </div>
-
-                {studentNotifLoading ? (
-                  <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Yükleniyor...</p>
-                ) : studentNotifItems.length === 0 ? (
-                  <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Henüz bir bildiriminiz yok.</p>
-                ) : (
-                  <div style={{ display: 'grid', gap: '10px' }}>
-                    {studentNotifItems.map(item => (
-                      <div key={item.id} style={{ border: '1px solid var(--yt-line)', borderRadius: '8px', padding: '12px', backgroundColor: item.kind === 'reply' ? 'var(--yt-mustard-bg)' : 'var(--yt-paper-2)' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '4px' }}>
-                          <span style={{ fontSize: '0.82rem', fontWeight: 'bold', color: 'var(--yt-ink)' }}>
-                            {item.kind === 'reply' ? '↩ ' : '📢 '}{item.title}
-                          </span>
-                        </div>
-                        {item.kind === 'reply' && (
-                          <p style={{ margin: '0 0 6px 0', fontSize: '0.78rem', color: 'var(--yt-graphite)', fontStyle: 'italic' }}>"{item.originalMessage}"</p>
-                        )}
-                        <p style={{ margin: '0 0 6px 0', fontSize: '0.86rem', color: 'var(--yt-ink)', whiteSpace: 'pre-wrap' }}>{item.message}</p>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--yt-graphite-soft)' }}>{new Date(item.date).toLocaleString('tr-TR')}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+          {renderCartAndNotifOverlays()}
 
           {renderAuthModal()}
         </div>
@@ -4008,6 +4026,7 @@ export default function App() {
             </div>
           </div>
         )}
+        {renderCartAndNotifOverlays()}
       </div>
     );
   }
