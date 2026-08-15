@@ -42,6 +42,7 @@ export default function App() {
   const [adminPreviewPage, setAdminPreviewPage] = useState({ examId: null, page: 1 });
   const [newKazanimSoruNo, setNewKazanimSoruNo] = useState('');
   const [quickKazanimDers, setQuickKazanimDers] = useState('');
+  const [quickKazanimKonu, setQuickKazanimKonu] = useState('');
   const [quickKazanimText, setQuickKazanimText] = useState('');
   const [isCreatingExam, setIsCreatingExam] = useState(false);
   // Sınav Türü / Ders Türü artık serbest metin değil, sabit bir listeden
@@ -52,17 +53,20 @@ export default function App() {
   // listeden seçilerek geliyor, elle yazılmıyor.
   const [examCategories, setExamCategories] = useState([]); // [{id, name}]
   const [lessonCategories, setLessonCategories] = useState([]); // [{id, name, exam_category_id}]
-  const [learningOutcomes, setLearningOutcomes] = useState([]); // [{id, name, lesson_category_id}]
+  const [topics, setTopics] = useState([]); // [{id, name, lesson_category_id}]
+  const [learningOutcomes, setLearningOutcomes] = useState([]); // [{id, name, lesson_category_id, topic_id}]
   const [showNewExamCategoryInput, setShowNewExamCategoryInput] = useState(false);
   const [newExamCategoryName, setNewExamCategoryName] = useState('');
   const [showNewLessonCategoryInput, setShowNewLessonCategoryInput] = useState(false);
   const [newLessonCategoryName, setNewLessonCategoryName] = useState('');
   const [showNewOutcomeInput, setShowNewOutcomeInput] = useState(false);
   const [newOutcomeName, setNewOutcomeName] = useState('');
+  const [showNewTopicInput, setShowNewTopicInput] = useState(false);
+  const [newTopicName, setNewTopicName] = useState('');
   const [showNewDersForKazanimInput, setShowNewDersForKazanimInput] = useState(false);
   const [newDersForKazanimName, setNewDersForKazanimName] = useState('');
   const [showCategoryManager, setShowCategoryManager] = useState(false);
-  const [categoryManagerTab, setCategoryManagerTab] = useState('exam'); // 'exam' | 'lesson' | 'outcome'
+  const [categoryManagerTab, setCategoryManagerTab] = useState('exam'); // 'exam' | 'lesson' | 'topic' | 'outcome'
   const [newExamForm, setNewExamForm] = useState({
     name: '',
     duration: '',
@@ -570,12 +574,17 @@ export default function App() {
   };
 
   // "+ Yeni Kazanım Ekle" -- seçili Ders Türü'ne bağlı yeni bir kazanım oluşturur.
-  const handleAddLearningOutcome = async (lessonCategoryId, name, onCreated) => {
+  // Bir kazanım artık doğrudan Ders Türü'ne değil, bir Konu'ya bağlanıyor.
+  // lesson_category_id kolonunu da (geriye dönük uyumluluk ve "ders türü
+  // sil" kademeli silme mantığı bozulmasın diye) topic üzerinden otomatik
+  // dolduruyoruz.
+  const handleAddLearningOutcome = async (topicId, name, onCreated) => {
     const trimmed = (name || '').trim();
-    if (!trimmed || !lessonCategoryId) return;
+    const topic = topics.find((t) => t.id === topicId);
+    if (!trimmed || !topic) return;
     const { data, error } = await supabase
       .from('learning_outcomes')
-      .insert([{ name: trimmed, lesson_category_id: lessonCategoryId }])
+      .insert([{ name: trimmed, topic_id: topicId, lesson_category_id: topic.lesson_category_id }])
       .select();
     if (error) {
       alert('Kazanım eklenemedi: ' + error.message);
@@ -583,6 +592,26 @@ export default function App() {
     }
     const created = data[0];
     setLearningOutcomes((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    if (onCreated) onCreated(created);
+  };
+
+  // "+ Yeni Konu Ekle" -- seçili Ders Türü'ne bağlı yeni bir konu oluşturur.
+  const addTopicForLessonCategoryId = async (lessonCategoryId, name, onCreated) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed || !lessonCategoryId) {
+      alert('Önce Ders Türü seçin.');
+      return;
+    }
+    const { data, error } = await supabase
+      .from('topics')
+      .insert([{ name: trimmed, lesson_category_id: lessonCategoryId }])
+      .select();
+    if (error) {
+      alert('Konu eklenemedi: ' + error.message);
+      return;
+    }
+    const created = data[0];
+    setTopics((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
     if (onCreated) onCreated(created);
   };
 
@@ -626,6 +655,18 @@ export default function App() {
     setLearningOutcomes((prev) => prev.filter((o) => o.id !== id));
   };
 
+  const deleteTopic = async (id) => {
+    const childOutcomeIds = learningOutcomes.filter((o) => o.topic_id === id).map((o) => o.id);
+    if (childOutcomeIds.length > 0) {
+      const { error: outcomeErr } = await supabase.from('learning_outcomes').delete().in('id', childOutcomeIds);
+      if (outcomeErr) { alert('Konu silinemedi: ' + outcomeErr.message); return; }
+    }
+    const { error } = await supabase.from('topics').delete().eq('id', id);
+    if (error) { alert('Konu silinemedi: ' + error.message); return; }
+    setLearningOutcomes((prev) => prev.filter((o) => o.topic_id !== id));
+    setTopics((prev) => prev.filter((t) => t.id !== id));
+  };
+
   const deleteLessonCategory = async (id) => {
     const childOutcomeIds = learningOutcomes.filter((o) => o.lesson_category_id === id).map((o) => o.id);
     if (childOutcomeIds.length > 0) {
@@ -635,6 +676,7 @@ export default function App() {
     const { error } = await supabase.from('lesson_categories').delete().eq('id', id);
     if (error) { alert('Ders türü silinemedi: ' + error.message); return; }
     setLearningOutcomes((prev) => prev.filter((o) => o.lesson_category_id !== id));
+    setTopics((prev) => prev.filter((t) => t.lesson_category_id !== id));
     setLessonCategories((prev) => prev.filter((lc) => lc.id !== id));
   };
 
@@ -649,6 +691,7 @@ export default function App() {
     const { error } = await supabase.from('exam_categories').delete().eq('id', id);
     if (error) { alert('Sınav türü silinemedi: ' + error.message); return; }
     setLearningOutcomes((prev) => prev.filter((o) => !childLessonIds.includes(o.lesson_category_id)));
+    setTopics((prev) => prev.filter((t) => !childLessonIds.includes(t.lesson_category_id)));
     setLessonCategories((prev) => prev.filter((lc) => lc.exam_category_id !== id));
     setExamCategories((prev) => prev.filter((c) => c.id !== id));
   };
@@ -681,9 +724,15 @@ export default function App() {
       .order('name');
     if (!lessonCatsError && lessonCats) setLessonCategories(lessonCats);
 
+    const { data: topicRows, error: topicRowsError } = await supabase
+      .from('topics')
+      .select('id, name, lesson_category_id')
+      .order('name');
+    if (!topicRowsError && topicRows) setTopics(topicRows);
+
     const { data: outcomes, error: outcomesError } = await supabase
       .from('learning_outcomes')
-      .select('id, name, lesson_category_id')
+      .select('id, name, lesson_category_id, topic_id')
       .order('name');
     if (!outcomesError && outcomes) setLearningOutcomes(outcomes);
   };
@@ -1278,11 +1327,12 @@ export default function App() {
   // (soru bankalarında konu konu bölünmüş testler gibi): Excel hazırlamadan,
   // tek bir Ders/Kazanım girip 1'den numPages'e kadar tüm soru numaralarına
   // aynı değeri uygular.
-  const handleApplySingleTopicToAll = (examId, numPages, ders, kazanim) => {
+  const handleApplySingleTopicToAll = (examId, numPages, ders, konu, kazanim) => {
     const cleanDers = (ders || '').trim();
+    const cleanKonu = (konu || '').trim();
     const cleanKazanim = (kazanim || '').trim();
-    if (!cleanDers || !cleanKazanim) {
-      alert("Ders ve Kazanım alanlarını doldurun.");
+    if (!cleanDers || !cleanKonu || !cleanKazanim) {
+      alert("Ders, Konu ve Kazanım alanlarını doldurun.");
       return;
     }
     const total = Number(numPages) || 0;
@@ -1292,10 +1342,10 @@ export default function App() {
     }
     const newTopicMap = {};
     for (let i = 1; i <= total; i++) {
-      newTopicMap[i] = { ders: cleanDers, kazanim: cleanKazanim };
+      newTopicMap[i] = { ders: cleanDers, konu: cleanKonu, kazanim: cleanKazanim };
     }
     updateTopicMapInDb(examId, newTopicMap);
-    alert(`✓ ${total} sorunun tamamına "${cleanDers} / ${cleanKazanim}" uygulandı.`);
+    alert(`✓ ${total} sorunun tamamına "${cleanDers} / ${cleanKonu} / ${cleanKazanim}" uygulandı.`);
   };
 
   const handleTopicMapUpload = (examId, e) => {
@@ -1316,17 +1366,18 @@ export default function App() {
         let count = 0;
         for (let i = 1; i < rows.length; i++) { // 0. satır başlık, 1'den başla
           const row = rows[i];
-          if (!row || row.length < 3) continue;
+          if (!row || row.length < 4) continue;
           const soruNo = Number(row[0]);
           const ders = String(row[1] || '').trim();
-          const kazanim = String(row[2] || '').trim();
-          if (!soruNo || !ders || !kazanim) continue;
-          newTopicMap[soruNo] = { ders, kazanim };
+          const konu = String(row[2] || '').trim();
+          const kazanim = String(row[3] || '').trim();
+          if (!soruNo || !ders || !konu || !kazanim) continue;
+          newTopicMap[soruNo] = { ders, konu, kazanim };
           count++;
         }
 
         if (count === 0) {
-          alert("Excel dosyasında geçerli satır bulunamadı. Sütun sırasının Soru No / Ders / Kazanım olduğundan emin olun.");
+          alert("Excel dosyasında geçerli satır bulunamadı. Sütun sırasının Soru No / Ders / Konu / Kazanım olduğundan emin olun.");
           return;
         }
 
@@ -2207,6 +2258,7 @@ export default function App() {
                 {[
                   { key: 'exam', label: 'Sınav Türleri' },
                   { key: 'lesson', label: 'Ders Türleri' },
+                  { key: 'topic', label: 'Konular' },
                   { key: 'outcome', label: 'Kazanımlar' },
                 ].map((tab) => (
                   <button
@@ -2275,15 +2327,42 @@ export default function App() {
                   )
                 )}
 
+                {categoryManagerTab === 'topic' && (
+                  topics.length === 0 ? (
+                    <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz konu eklenmedi.</p>
+                  ) : (
+                    topics.map((t) => {
+                      const parentLesson = lessonCategories.find((lc) => lc.id === t.lesson_category_id);
+                      return (
+                        <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                          <span style={{ fontSize: '0.88rem' }}>{t.name} <span style={{ color: '#94a3b8', fontSize: '0.76rem' }}>({parentLesson?.name || 'Ders türü yok'})</span></span>
+                          <button
+                            onClick={() => {
+                              const childCount = learningOutcomes.filter((o) => o.topic_id === t.id).length;
+                              const warn = childCount > 0 ? `\n\nBu konuya bağlı ${childCount} kazanım da birlikte silinecek.` : '';
+                              if (window.confirm(`"${t.name}" konusunu silmek istediğinize emin misiniz?${warn}`)) deleteTopic(t.id);
+                            }}
+                            style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}
+                          >
+                            🗑 Sil
+                          </button>
+                        </div>
+                      );
+                    })
+                  )
+                )}
+
                 {categoryManagerTab === 'outcome' && (
                   learningOutcomes.length === 0 ? (
                     <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz kazanım eklenmedi.</p>
                   ) : (
                     learningOutcomes.map((o) => {
-                      const parentLesson = lessonCategories.find((lc) => lc.id === o.lesson_category_id);
+                      const parentTopic = topics.find((t) => t.id === o.topic_id);
+                      const parentLesson = parentTopic ? lessonCategories.find((lc) => lc.id === parentTopic.lesson_category_id) : lessonCategories.find((lc) => lc.id === o.lesson_category_id);
+                      const breadcrumb = parentTopic ? `${parentLesson?.name || 'Ders türü yok'} · ${parentTopic.name}` : (parentLesson?.name || 'Ders türü yok');
                       return (
                         <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid #f1f5f9' }}>
-                          <span style={{ fontSize: '0.88rem' }}>{o.name} <span style={{ color: '#94a3b8', fontSize: '0.76rem' }}>({parentLesson?.name || 'Ders türü yok'})</span></span>
+                          <span style={{ fontSize: '0.88rem' }}>{o.name} <span style={{ color: '#94a3b8', fontSize: '0.76rem' }}>({breadcrumb})</span></span>
                           <button
                             onClick={() => {
                               if (window.confirm(`"${o.name}" kazanımını silmek istediğinize emin misiniz?`)) deleteLearningOutcome(o.id);
@@ -2632,7 +2711,7 @@ export default function App() {
                   style={{ fontSize: '0.8rem', width: '100%' }}
                 />
                 <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '4px' }}>
-                  Sütun sırası: 1. Soru No, 2. Ders, 3. Kazanım (ilk satır başlık kabul edilir). Yeniden yüklersen mevcut liste tamamen değişir.
+                  Sütun sırası: 1. Soru No, 2. Ders, 3. Konu, 4. Kazanım (ilk satır başlık kabul edilir). Yeniden yüklersen mevcut liste tamamen değişir.
                 </div>
 
                 <div style={{ marginTop: '14px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
@@ -2645,6 +2724,7 @@ export default function App() {
                       onChange={(e) => {
                         if (e.target.value === '__new__') { setShowNewDersForKazanimInput(true); return; }
                         setQuickKazanimDers(e.target.value);
+                        setQuickKazanimKonu('');
                         setQuickKazanimText('');
                       }}
                       style={{ flex: '1 1 160px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: '#fff' }}
@@ -2661,28 +2741,50 @@ export default function App() {
                       <option value="__new__">+ Yeni Ders Türü Ekle</option>
                     </select>
                     <select
-                      value={quickKazanimText}
+                      value={quickKazanimKonu}
                       disabled={!quickKazanimDers}
+                      onChange={(e) => {
+                        if (e.target.value === '__new__') { setShowNewTopicInput(true); return; }
+                        setQuickKazanimKonu(e.target.value);
+                        setQuickKazanimText('');
+                      }}
+                      style={{ flex: '1 1 160px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: quickKazanimDers ? '#fff' : '#f1f5f9' }}
+                    >
+                      <option value="">{quickKazanimDers ? 'Konu Seçin' : 'Önce Ders Türü seçin'}</option>
+                      {topics
+                        .filter((t) => {
+                          const ders = lessonCategories.find((lc) => lc.name === quickKazanimDers);
+                          return ders && t.lesson_category_id === ders.id;
+                        })
+                        .map((t) => (
+                          <option key={t.id} value={t.name}>{t.name}</option>
+                        ))}
+                      {quickKazanimDers && <option value="__new__">+ Yeni Konu Ekle</option>}
+                    </select>
+                    <select
+                      value={quickKazanimText}
+                      disabled={!quickKazanimKonu}
                       onChange={(e) => {
                         if (e.target.value === '__new__') { setShowNewOutcomeInput(true); return; }
                         setQuickKazanimText(e.target.value);
                       }}
-                      style={{ flex: '1 1 160px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: quickKazanimDers ? '#fff' : '#f1f5f9' }}
+                      style={{ flex: '1 1 160px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: quickKazanimKonu ? '#fff' : '#f1f5f9' }}
                     >
-                      <option value="">{quickKazanimDers ? 'Kazanım Seçin' : 'Önce Ders Türü seçin'}</option>
+                      <option value="">{quickKazanimKonu ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
                       {learningOutcomes
                         .filter((lo) => {
                           const ders = lessonCategories.find((lc) => lc.name === quickKazanimDers);
-                          return ders && lo.lesson_category_id === ders.id;
+                          const konu = ders && topics.find((t) => t.name === quickKazanimKonu && t.lesson_category_id === ders.id);
+                          return konu && lo.topic_id === konu.id;
                         })
                         .map((lo) => (
                           <option key={lo.id} value={lo.name}>{lo.name}</option>
                         ))}
-                      {quickKazanimDers && <option value="__new__">+ Yeni Kazanım Ekle</option>}
+                      {quickKazanimKonu && <option value="__new__">+ Yeni Kazanım Ekle</option>}
                     </select>
                     <button
                       type="button"
-                      onClick={() => handleApplySingleTopicToAll(editingExam.id, editingExam.numPages, quickKazanimDers, quickKazanimText)}
+                      onClick={() => handleApplySingleTopicToAll(editingExam.id, editingExam.numPages, quickKazanimDers, quickKazanimKonu, quickKazanimText)}
                       className="yt-btn"
                       style={{ fontSize: '0.8rem', padding: '6px 14px', whiteSpace: 'nowrap' }}
                     >
@@ -2704,12 +2806,42 @@ export default function App() {
                         type="button"
                         onClick={() => addLessonCategoryForExamType(effectiveExamType, newDersForKazanimName, (created) => {
                           setQuickKazanimDers(created.name);
+                          setQuickKazanimKonu('');
                           setQuickKazanimText('');
                         }).then(() => { setNewDersForKazanimName(''); setShowNewDersForKazanimInput(false); })}
                         className="yt-btn yt-btn-primary"
                         style={{ padding: '6px 14px', fontSize: '0.8rem' }}
                       >Ekle</button>
                       <button type="button" onClick={() => { setShowNewDersForKazanimInput(false); setNewDersForKazanimName(''); }} className="yt-btn" style={{ padding: '6px 14px', fontSize: '0.8rem' }}>Vazgeç</button>
+                    </div>
+                  )}
+
+                  {showNewTopicInput && (
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                      <input
+                        type="text"
+                        autoFocus
+                        placeholder="Örn: Temel Hak ve Ödevler"
+                        value={newTopicName}
+                        onChange={(e) => setNewTopicName(e.target.value)}
+                        style={{ flex: 1, fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const ders = lessonCategories.find((lc) => lc.name === quickKazanimDers);
+                          if (!ders) { alert('Önce Ders Türü seçin.'); return; }
+                          addTopicForLessonCategoryId(ders.id, newTopicName, (created) => {
+                            setQuickKazanimKonu(created.name);
+                            setQuickKazanimText('');
+                          });
+                          setNewTopicName('');
+                          setShowNewTopicInput(false);
+                        }}
+                        className="yt-btn yt-btn-primary"
+                        style={{ padding: '6px 14px', fontSize: '0.8rem' }}
+                      >Ekle</button>
+                      <button type="button" onClick={() => { setShowNewTopicInput(false); setNewTopicName(''); }} className="yt-btn" style={{ padding: '6px 14px', fontSize: '0.8rem' }}>Vazgeç</button>
                     </div>
                   )}
 
@@ -2727,8 +2859,9 @@ export default function App() {
                         type="button"
                         onClick={() => {
                           const ders = lessonCategories.find((lc) => lc.name === quickKazanimDers);
-                          if (!ders) { alert('Önce Ders Türü seçin.'); return; }
-                          handleAddLearningOutcome(ders.id, newOutcomeName, (created) => setQuickKazanimText(created.name));
+                          const konu = ders && topics.find((t) => t.name === quickKazanimKonu && t.lesson_category_id === ders.id);
+                          if (!konu) { alert('Önce Konu seçin.'); return; }
+                          handleAddLearningOutcome(konu.id, newOutcomeName, (created) => setQuickKazanimText(created.name));
                           setNewOutcomeName('');
                           setShowNewOutcomeInput(false);
                         }}
@@ -2765,7 +2898,8 @@ export default function App() {
                         <thead style={{ position: 'sticky', top: 0, backgroundColor: '#f8fafc' }}>
                           <tr>
                             <th style={{ padding: '6px 10px', textAlign: 'left', width: '60px' }}>Soru</th>
-                            <th style={{ padding: '6px 10px', textAlign: 'left', width: '35%' }}>Ders</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', width: '28%' }}>Ders</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', width: '28%' }}>Konu</th>
                             <th style={{ padding: '6px 10px', textAlign: 'left' }}>Kazanım</th>
                             <th style={{ width: '36px' }}></th>
                           </tr>
@@ -2789,7 +2923,7 @@ export default function App() {
                                             addLessonCategoryForExamType(effectiveExamType, name, (created) => {
                                               applyTopicMapPatch(editingExam.id, (tm) => ({
                                                 ...tm,
-                                                [soruNo]: { ders: created.name, kazanim: '' }
+                                                [soruNo]: { ders: created.name, konu: '', kazanim: '' }
                                               }));
                                             });
                                           }
@@ -2797,7 +2931,7 @@ export default function App() {
                                         }
                                         applyTopicMapPatch(editingExam.id, (tm) => ({
                                           ...tm,
-                                          [soruNo]: { ders: e.target.value, kazanim: '' }
+                                          [soruNo]: { ders: e.target.value, konu: '', kazanim: '' }
                                         }));
                                       }}
                                       style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: '#fff' }}
@@ -2816,15 +2950,54 @@ export default function App() {
                                   </td>
                                   <td style={{ padding: '5px 6px' }}>
                                     <select
-                                      value={entry.kazanim}
+                                      value={entry.konu || ''}
                                       disabled={!entry.ders}
                                       onChange={(e) => {
                                         if (e.target.value === '__new__') {
                                           const ders = lessonCategories.find((lc) => lc.name === entry.ders);
                                           if (!ders) { alert('Önce Ders seçin.'); return; }
+                                          const name = window.prompt('Yeni Konu adı:');
+                                          if (name && name.trim()) {
+                                            addTopicForLessonCategoryId(ders.id, name, (created) => {
+                                              applyTopicMapPatch(editingExam.id, (tm) => ({
+                                                ...tm,
+                                                [soruNo]: { ...tm[soruNo], konu: created.name, kazanim: '' }
+                                              }));
+                                            });
+                                          }
+                                          return;
+                                        }
+                                        applyTopicMapPatch(editingExam.id, (tm) => ({
+                                          ...tm,
+                                          [soruNo]: { ...tm[soruNo], konu: e.target.value, kazanim: '' }
+                                        }));
+                                      }}
+                                      style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: entry.ders ? '#fff' : '#f1f5f9' }}
+                                    >
+                                      <option value="">{entry.ders ? 'Konu Seçin' : 'Önce Ders seçin'}</option>
+                                      {topics
+                                        .filter((t) => {
+                                          const ders = lessonCategories.find((lc) => lc.name === entry.ders);
+                                          return ders && t.lesson_category_id === ders.id;
+                                        })
+                                        .map((t) => (
+                                          <option key={t.id} value={t.name}>{t.name}</option>
+                                        ))}
+                                      {entry.ders && <option value="__new__">+ Yeni Konu Ekle</option>}
+                                    </select>
+                                  </td>
+                                  <td style={{ padding: '5px 6px' }}>
+                                    <select
+                                      value={entry.kazanim}
+                                      disabled={!entry.konu}
+                                      onChange={(e) => {
+                                        if (e.target.value === '__new__') {
+                                          const ders = lessonCategories.find((lc) => lc.name === entry.ders);
+                                          const konu = ders && topics.find((t) => t.name === entry.konu && t.lesson_category_id === ders.id);
+                                          if (!konu) { alert('Önce Konu seçin.'); return; }
                                           const name = window.prompt('Yeni Kazanım adı:');
                                           if (name && name.trim()) {
-                                            handleAddLearningOutcome(ders.id, name, (created) => {
+                                            handleAddLearningOutcome(konu.id, name, (created) => {
                                               applyTopicMapPatch(editingExam.id, (tm) => ({
                                                 ...tm,
                                                 [soruNo]: { ...tm[soruNo], kazanim: created.name }
@@ -2838,18 +3011,19 @@ export default function App() {
                                           [soruNo]: { ...tm[soruNo], kazanim: e.target.value }
                                         }));
                                       }}
-                                      style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: entry.ders ? '#fff' : '#f1f5f9' }}
+                                      style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: entry.konu ? '#fff' : '#f1f5f9' }}
                                     >
-                                      <option value="">{entry.ders ? 'Kazanım Seçin' : 'Önce Ders seçin'}</option>
+                                      <option value="">{entry.konu ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
                                       {learningOutcomes
                                         .filter((lo) => {
                                           const ders = lessonCategories.find((lc) => lc.name === entry.ders);
-                                          return ders && lo.lesson_category_id === ders.id;
+                                          const konu = ders && topics.find((t) => t.name === entry.konu && t.lesson_category_id === ders.id);
+                                          return konu && lo.topic_id === konu.id;
                                         })
                                         .map((lo) => (
                                           <option key={lo.id} value={lo.name}>{lo.name}</option>
                                         ))}
-                                      {entry.ders && <option value="__new__">+ Yeni Kazanım Ekle</option>}
+                                      {entry.konu && <option value="__new__">+ Yeni Kazanım Ekle</option>}
                                     </select>
                                   </td>
                                   <td style={{ padding: '5px 10px', textAlign: 'center' }}>
@@ -2891,7 +3065,7 @@ export default function App() {
                           if (editingExam.topicMap[soruNo]) { alert("Bu soru numarası zaten listede var."); return; }
                           applyTopicMapPatch(editingExam.id, (tm) => {
                             if (tm[soruNo]) return tm;
-                            return { ...tm, [soruNo]: { ders: '', kazanim: '' } };
+                            return { ...tm, [soruNo]: { ders: '', konu: '', kazanim: '' } };
                           }, { persist: true });
                           setNewKazanimSoruNo('');
                         }}
