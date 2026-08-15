@@ -36,6 +36,10 @@ export default function App() {
   const [exams, setExams] = useState([]);
   const [activeAdminExamId, setActiveAdminExamId] = useState(null);
   const [activeSubExamId, setActiveSubExamId] = useState(null);
+  // Yönetici panelinde sınav PDF önizlemesinde ileri/geri gezinmek için.
+  // { examId, page } tutuyoruz; currentPreviewExam değiştiğinde (examId
+  // eşleşmezse) otomatik olarak 1'e döner, ayrı bir useEffect gerekmez.
+  const [adminPreviewPage, setAdminPreviewPage] = useState({ examId: null, page: 1 });
   const [newKazanimSoruNo, setNewKazanimSoruNo] = useState('');
   const [quickKazanimDers, setQuickKazanimDers] = useState('');
   const [quickKazanimText, setQuickKazanimText] = useState('');
@@ -2496,11 +2500,54 @@ export default function App() {
                   <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '12px' }}>
                     <strong>Toplam Soru Sayısı/Sayfa: {currentPreviewExam.numPages || '0'}</strong>
                   </div>
-                  <SecurePdfViewer
-                    examId={currentPreviewExam.id}
-                    type="exam"
-                    pageNumber={1}
-                  />
+                  {(() => {
+                    const previewPageNum = adminPreviewPage.examId === currentPreviewExam.id ? adminPreviewPage.page : 1;
+                    const totalPreviewPages = currentPreviewExam.numPages || 1;
+                    const goToPreviewPage = (p) => {
+                      const clamped = Math.min(Math.max(p, 1), totalPreviewPages);
+                      setAdminPreviewPage({ examId: currentPreviewExam.id, page: clamped });
+                    };
+                    return (
+                      <>
+                        <SecurePdfViewer
+                          examId={currentPreviewExam.id}
+                          type="exam"
+                          pageNumber={previewPageNum}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                          <button
+                            type="button"
+                            onClick={() => goToPreviewPage(previewPageNum - 1)}
+                            disabled={previewPageNum <= 1}
+                            className="yt-btn"
+                            style={{
+                              padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1',
+                              backgroundColor: '#fff', cursor: previewPageNum <= 1 ? 'not-allowed' : 'pointer',
+                              opacity: previewPageNum <= 1 ? 0.4 : 1, fontWeight: 'bold'
+                            }}
+                          >
+                            ◀ Önceki Soru
+                          </button>
+                          <span style={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#334155' }}>
+                            {previewPageNum} / {totalPreviewPages}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => goToPreviewPage(previewPageNum + 1)}
+                            disabled={previewPageNum >= totalPreviewPages}
+                            className="yt-btn"
+                            style={{
+                              padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1',
+                              backgroundColor: '#fff', cursor: previewPageNum >= totalPreviewPages ? 'not-allowed' : 'pointer',
+                              opacity: previewPageNum >= totalPreviewPages ? 0.4 : 1, fontWeight: 'bold'
+                            }}
+                          >
+                            Sonraki Soru ▶
+                          </button>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
                 {editingExam && (() => {
                   // ÖNEMLİ: Alt testlerde (Test 1, Test 2, Test 3...) kendi
