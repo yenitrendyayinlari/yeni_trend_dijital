@@ -1422,7 +1422,12 @@ export default function App() {
   // ile aynı mantık). Kazanımı silip yeniden eklemeye gerek kalmaz; bu kazanımı
   // kullanan tüm sorularda Konu, resolveLiveKonuForEntry sayesinde otomatik yansır.
   const changeLearningOutcomeTopic = async (outcomeId, newTopicId) => {
-    const newTopic = topics.find((t) => t.id === newTopicId);
+    // ÖNEMLİ (bug fix): <select>'in e.target.value değeri DOM'da HER ZAMAN
+    // string gelir, ama topics.id veritabanından sayısal (ya da farklı tipte)
+    // olabilir. Katı eşitlik (===) bu yüzden hiç eşleşmeyip fonksiyonun
+    // sessizce hiçbir şey yapmadan çıkmasına, dolayısıyla dropdown'ın eski
+    // değere geri dönmesine sebep oluyordu. String'e çevirip karşılaştırıyoruz.
+    const newTopic = topics.find((t) => String(t.id) === String(newTopicId));
     if (!newTopic) return;
     const { error } = await supabase
       .from('learning_outcomes')
