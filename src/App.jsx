@@ -1391,6 +1391,52 @@ export default function App() {
     reader.readAsArrayBuffer(file);
   };
 
+  // ÖNEMLİ: Bir sorunun kazanım haritası girişi (topicMap[soruNo]) kaydedildiği
+  // an "konu" metnini olduğu gibi kopyalar. Kategori Yönetimi'nden o kazanımın
+  // bağlı olduğu Konu daha sonra değiştirilirse, bu eski metin KENDİLİĞİNDEN
+  // güncellenmez. Bu fonksiyon, mevcut kazanım adını (entry.kazanim) master
+  // learningOutcomes listesinde arayıp, bulursa Konu'yu oradan (o kazanımın
+  // GÜNCEL topic_id'sinden) canlı olarak döndürür -- böylece Kategori
+  // Yönetimi'nde bir kazanımın konusunu değiştirmek, o kazanımı kullanan tüm
+  // sorularda otomatik yansır, tek tek soru düzenlemeye gerek kalmaz. Eşleşen
+  // bir kazanım bulunamazsa (silinmiş/yeniden adlandırılmışsa) eski kayıtlı
+  // metne geri döner.
+  const resolveLiveKonuForEntry = (entry) => {
+    if (!entry) return '';
+    if (entry.kazanim) {
+      const ders = lessonCategories.find((lc) => lc.name === entry.ders);
+      const matchingOutcome = learningOutcomes.find((lo) =>
+        lo.name === entry.kazanim && (!ders || lo.lesson_category_id === ders.id)
+      );
+      if (matchingOutcome) {
+        const liveTopic = topics.find((t) => t.id === matchingOutcome.topic_id);
+        if (liveTopic) return liveTopic.name;
+      }
+    }
+    return entry.konu || '';
+  };
+
+  // Kategori Yönetimi -> Kazanımlar sekmesindeki "Konu Değiştir" için:
+  // bir kazanımın bağlı olduğu Konu'yu (topic_id) değiştirir. lesson_category_id
+  // de yeni konunun ders türüne göre otomatik güncellenir (handleAddLearningOutcome
+  // ile aynı mantık). Kazanımı silip yeniden eklemeye gerek kalmaz; bu kazanımı
+  // kullanan tüm sorularda Konu, resolveLiveKonuForEntry sayesinde otomatik yansır.
+  const changeLearningOutcomeTopic = async (outcomeId, newTopicId) => {
+    const newTopic = topics.find((t) => t.id === newTopicId);
+    if (!newTopic) return;
+    const { error } = await supabase
+      .from('learning_outcomes')
+      .update({ topic_id: newTopic.id, lesson_category_id: newTopic.lesson_category_id })
+      .eq('id', outcomeId);
+    if (error) {
+      alert('Kazanımın konusu değiştirilemedi: ' + error.message);
+      return;
+    }
+    setLearningOutcomes((prev) =>
+      prev.map((o) => (o.id === outcomeId ? { ...o, topic_id: newTopic.id, lesson_category_id: newTopic.lesson_category_id } : o))
+    );
+  };
+
   const handleAddSubTest = async () => {
     const adminActiveExam = exams.find(e => e.id === activeAdminExamId);
     if (!adminActiveExam) return;
@@ -2361,16 +2407,38 @@ export default function App() {
                       const parentLesson = parentTopic ? lessonCategories.find((lc) => lc.id === parentTopic.lesson_category_id) : lessonCategories.find((lc) => lc.id === o.lesson_category_id);
                       const breadcrumb = parentTopic ? `${parentLesson?.name || 'Ders türü yok'} · ${parentTopic.name}` : (parentLesson?.name || 'Ders türü yok');
                       return (
-                        <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid #f1f5f9' }}>
-                          <span style={{ fontSize: '0.88rem' }}>{o.name} <span style={{ color: '#94a3b8', fontSize: '0.76rem' }}>({breadcrumb})</span></span>
-                          <button
-                            onClick={() => {
-                              if (window.confirm(`"${o.name}" kazanımını silmek istediğinize emin misiniz?`)) deleteLearningOutcome(o.id);
-                            }}
-                            style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}
-                          >
-                            🗑 Sil
-                          </button>
+                        <div key={o.id} style={{ padding: '8px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                            <span style={{ fontSize: '0.88rem' }}>{o.name} <span style={{ color: '#94a3b8', fontSize: '0.76rem' }}>({breadcrumb})</span></span>
+                            <button
+                              onClick={() => {
+                                if (window.confirm(`"${o.name}" kazanımını silmek istediğinize emin misiniz?`)) deleteLearningOutcome(o.id);
+                              }}
+                              style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold', whiteSpace: 'nowrap' }}
+                            >
+                              🗑 Sil
+                            </button>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
+                            <span style={{ fontSize: '0.72rem', color: '#64748b', whiteSpace: 'nowrap' }}>Konu Değiştir:</span>
+                            <select
+                              value={o.topic_id || ''}
+                              onChange={(e) => e.target.value && changeLearningOutcomeTopic(o.id, e.target.value)}
+                              style={{ flex: 1, fontSize: '0.78rem', padding: '4px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: '#fff' }}
+                            >
+                              {topics
+                                .slice()
+                                .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
+                                .map((t) => {
+                                  const tLesson = lessonCategories.find((lc) => lc.id === t.lesson_category_id);
+                                  return (
+                                    <option key={t.id} value={t.id}>
+                                      {tLesson?.name ? `${tLesson.name} · ${t.name}` : t.name}
+                                    </option>
+                                  );
+                                })}
+                            </select>
+                          </div>
                         </div>
                       );
                     })
@@ -2910,6 +2978,10 @@ export default function App() {
                             .sort((a, b) => a - b)
                             .map((soruNo) => {
                               const entry = editingExam.topicMap[soruNo];
+                              // Konu, kazanımın Kategori Yönetimi'ndeki GÜNCEL kaydından
+                              // canlı okunuyor -- entry.konu sadece eşleşme bulunamazsa
+                              // (kazanım silinmiş/adı değişmişse) yedek olarak kullanılır.
+                              const liveKonu = resolveLiveKonuForEntry(entry);
                               return (
                                 <tr key={soruNo} style={{ borderTop: '1px solid #f1f5f9' }}>
                                   <td style={{ padding: '5px 10px', fontWeight: 'bold' }}>{soruNo}</td>
@@ -2950,7 +3022,7 @@ export default function App() {
                                   </td>
                                   <td style={{ padding: '5px 6px' }}>
                                     <select
-                                      value={entry.konu || ''}
+                                      value={liveKonu}
                                       disabled={!entry.ders}
                                       onChange={(e) => {
                                         if (e.target.value === '__new__') {
@@ -2989,11 +3061,11 @@ export default function App() {
                                   <td style={{ padding: '5px 6px' }}>
                                     <select
                                       value={entry.kazanim}
-                                      disabled={!entry.konu}
+                                      disabled={!liveKonu}
                                       onChange={(e) => {
                                         if (e.target.value === '__new__') {
                                           const ders = lessonCategories.find((lc) => lc.name === entry.ders);
-                                          const konu = ders && topics.find((t) => t.name === entry.konu && t.lesson_category_id === ders.id);
+                                          const konu = ders && topics.find((t) => t.name === liveKonu && t.lesson_category_id === ders.id);
                                           if (!konu) { alert('Önce Konu seçin.'); return; }
                                           const name = window.prompt('Yeni Kazanım adı:');
                                           if (name && name.trim()) {
@@ -3011,19 +3083,19 @@ export default function App() {
                                           [soruNo]: { ...tm[soruNo], kazanim: e.target.value }
                                         }));
                                       }}
-                                      style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: entry.konu ? '#fff' : '#f1f5f9' }}
+                                      style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: liveKonu ? '#fff' : '#f1f5f9' }}
                                     >
-                                      <option value="">{entry.konu ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
+                                      <option value="">{liveKonu ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
                                       {learningOutcomes
                                         .filter((lo) => {
                                           const ders = lessonCategories.find((lc) => lc.name === entry.ders);
-                                          const konu = ders && topics.find((t) => t.name === entry.konu && t.lesson_category_id === ders.id);
+                                          const konu = ders && topics.find((t) => t.name === liveKonu && t.lesson_category_id === ders.id);
                                           return konu && lo.topic_id === konu.id;
                                         })
                                         .map((lo) => (
                                           <option key={lo.id} value={lo.name}>{lo.name}</option>
                                         ))}
-                                      {entry.konu && <option value="__new__">+ Yeni Kazanım Ekle</option>}
+                                      {liveKonu && <option value="__new__">+ Yeni Kazanım Ekle</option>}
                                     </select>
                                   </td>
                                   <td style={{ padding: '5px 10px', textAlign: 'center' }}>
