@@ -2512,7 +2512,17 @@ export default function App() {
                   const parentExam = editingExam.parentId
                     ? exams.find((e) => e.id === editingExam.parentId)
                     : null;
-                  const effectiveExamType = editingExam.categoryExamType || parentExam?.categoryExamType || '';
+                  // ÖNEMLİ: formatExamData, veritabanında category_exam_type
+                  // boş olan kayıtlara otomatik "Genel" varsayılan değeri
+                  // veriyor (bkz. satır ~728). Alt testlerde bu alan
+                  // veritabanında zaten hep boştur, yani editingExam.categoryExamType
+                  // burada "" değil, hep "Genel" olarak gelir -- bu yüzden
+                  // önceki "|| parentExam" mantığı hiç devreye girmiyordu.
+                  // Bu alt test ekranında editingExam HER ZAMAN bir üst
+                  // pakete bağlıdır, o yüzden üst paketin kategorisini
+                  // önceliklendiriyoruz; kendi değerine sadece üst paket
+                  // bulunamazsa (beklenmedik durum) geri dönüyoruz.
+                  const effectiveExamType = parentExam?.categoryExamType || editingExam.categoryExamType || '';
                   return (
               <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px' }}>
                 <h3 style={{ margin: '0 0 12px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>📊 Kazanım Haritası</h3>
