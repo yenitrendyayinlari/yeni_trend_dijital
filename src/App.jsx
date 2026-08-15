@@ -4,8 +4,25 @@ import SecurePdfViewer from './SecurePdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
 import sualinkLogo from './sualinklogo.png';
-import Footer from './Footer';
 
+// İyzico'nun checkoutFormContent alanı içindeki <script> etiketi,
+// innerHTML ile DOM'a eklendiğinde tarayıcı tarafından ÇALIŞTIRILMAZ
+// (bu bilinen bir DOM kısıtlamasıdır). Bu yüzden script'i manuel olarak
+// yeni bir <script> elementi olarak yeniden oluşturup DOM'a ekliyoruz,
+// böylece iyzico'nun ödeme formu gerçekten render edilip görünür hale gelir.
+function renderIyzicoCheckoutForm(container, htmlContent) {
+  if (!container) return;
+  container.innerHTML = htmlContent;
+  const oldScripts = container.querySelectorAll('script');
+  oldScripts.forEach((oldScript) => {
+    const newScript = document.createElement('script');
+    Array.from(oldScript.attributes).forEach((attr) => {
+      newScript.setAttribute(attr.name, attr.value);
+    });
+    newScript.textContent = oldScript.textContent;
+    oldScript.parentNode.replaceChild(newScript, oldScript);
+  });
+}
 
 export default function App() {
   const [appMode, setAppMode] = useState('student'); 
@@ -23,6 +40,18 @@ export default function App() {
   const [quickKazanimDers, setQuickKazanimDers] = useState('');
   const [quickKazanimText, setQuickKazanimText] = useState('');
   const [isCreatingExam, setIsCreatingExam] = useState(false);
+  // Sınav Türü / Ders Türü artık serbest metin değil, sabit bir listeden
+  // seçiliyor (bkz. Yeni İçerik Ayarları formu). Bu iki state, o listeleri
+  // Supabase'den çekip tutuyor; newExamForm.categoryExamType /
+  // categoryLesson yine düz metin olarak saklanıyor (exams tablosunda
+  // hiçbir şema değişikliği gerekmiyor), sadece artık bu metin SADECE bu
+  // listeden seçilerek geliyor, elle yazılmıyor.
+  const [examCategories, setExamCategories] = useState([]); // [{id, name}]
+  const [lessonCategories, setLessonCategories] = useState([]); // [{id, name, exam_category_id}]
+  const [showNewExamCategoryInput, setShowNewExamCategoryInput] = useState(false);
+  const [newExamCategoryName, setNewExamCategoryName] = useState('');
+  const [showNewLessonCategoryInput, setShowNewLessonCategoryInput] = useState(false);
+  const [newLessonCategoryName, setNewLessonCategoryName] = useState('');
   const [newExamForm, setNewExamForm] = useState({
     name: '',
     duration: '',
@@ -102,6 +131,15 @@ export default function App() {
     }
   });
   const [showCart, setShowCart] = useState(false);
+  // İyzico ödeme penceresinin açık olup olmadığını React'in kendi kontrolünde
+  // tutuyoruz -- bu sayede kapatma butonu, iyzico'nun kendi DOM içeriğinden
+  // tamamen bağımsız, her zaman en üstte ve tıklanabilir kalıyor.
+  const [showPaymentOverlay, setShowPaymentOverlay] = useState(false);
+  const closePaymentOverlay = () => {
+    const checkoutDiv = document.getElementById('iyzipay-checkout-form');
+    if (checkoutDiv) checkoutDiv.innerHTML = '';
+    setShowPaymentOverlay(false);
+  };
   const [productReviews, setProductReviews] = useState([]);
   const [reviewTextInput, setReviewTextInput] = useState('');
   const [previewTestIndex, setPreviewTestIndex] = useState(0);
@@ -503,11 +541,71 @@ export default function App() {
   const checkUserRoleAndSetMode = (currentUser) => {
     if (currentUser.email === 'admin@yayinevi.com') {
       setAppMode('admin');
+      fetchCategoryLists();
     } else {
       setAppMode('student');
     }
     fetchExams(currentUser);
     fetchUserPurchases(currentUser.email);
+  };
+
+  // Sınav Türü ve Ders Türü'nün sabit (master) listelerini çeker.
+  // Ders Türü, hangi Sınav Türü'ne ait olduğunu bilsin diye exam_categories
+  // ile join'lenerek çekiliyor -- böylece "KPSS · Tarih" ile "TYT · Tarih"
+  // ayrı, birbirinden bağımsız kayıtlar olarak kalıyor.
+  const fetchCategoryLists = async () => {
+    const { data: examCats, error: examCatsError } = await supabase
+      .from('exam_categories')
+      .select('id, name')
+      .order('name');
+    if (!examCatsError && examCats) setExamCategories(examCats);
+
+    const { data: lessonCats, error: lessonCatsError } = await supabase
+      .from('lesson_categories')
+      .select('id, name, exam_category_id')
+      .order('name');
+    if (!lessonCatsError && lessonCats) setLessonCategories(lessonCats);
+  };
+
+  // "+ Yeni Sınav Türü Ekle" -- yeni bir kayıt oluşturur, listeye ekler ve
+  // formda otomatik seçili hale getirir.
+  const handleAddExamCategory = async () => {
+    const trimmed = newExamCategoryName.trim();
+    if (!trimmed) return;
+    const { data, error } = await supabase
+      .from('exam_categories')
+      .insert([{ name: trimmed }])
+      .select();
+    if (error) {
+      alert('Sınav türü eklenemedi: ' + error.message);
+      return;
+    }
+    const created = data[0];
+    setExamCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    setNewExamForm((prev) => ({ ...prev, categoryExamType: created.name }));
+    setNewExamCategoryName('');
+    setShowNewExamCategoryInput(false);
+  };
+
+  // "+ Yeni Ders Türü Ekle" -- seçili Sınav Türü'ne bağlı yeni bir ders
+  // türü oluşturur.
+  const handleAddLessonCategory = async () => {
+    const trimmed = newLessonCategoryName.trim();
+    const selectedExamCategory = examCategories.find((c) => c.name === newExamForm.categoryExamType);
+    if (!trimmed || !selectedExamCategory) return;
+    const { data, error } = await supabase
+      .from('lesson_categories')
+      .insert([{ name: trimmed, exam_category_id: selectedExamCategory.id }])
+      .select();
+    if (error) {
+      alert('Ders türü eklenemedi: ' + error.message);
+      return;
+    }
+    const created = data[0];
+    setLessonCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    setNewExamForm((prev) => ({ ...prev, categoryLesson: created.name }));
+    setNewLessonCategoryName('');
+    setShowNewLessonCategoryInput(false);
   };
 
   const fetchUserPurchases = async (userEmail) => {
@@ -1226,14 +1324,16 @@ export default function App() {
         return;
       }
 
-      // Gömülü widget yerine iyzico'nun kendi barındırdığı ödeme sayfasına
-      // yönlendiriyoruz -- widget'ın kendi "küçültme/kapatma" davranışıyla
-      // ilgili sorunları tamamen ortadan kaldırıyor. Ödeme bitince iyzico
-      // callbackUrl üzerinden kullanıcıyı otomatik olarak siteye geri getirir.
-      if (result.status === 'success' && result.paymentPageUrl) {
-        window.location.href = result.paymentPageUrl;
+      if (result.status === 'success') {
+        const checkoutDiv = document.getElementById('iyzipay-checkout-form');
+        renderIyzicoCheckoutForm(checkoutDiv, result.checkoutFormContent);
+        setShowPaymentOverlay(true);
+
+        if (window.iyzipayCheckout && typeof window.iyzipayCheckout.show === 'function') {
+          window.iyzipayCheckout.show();
+        }
       } else {
-        alert("İşlem başarısız: " + (result.errorMessage || 'Ödeme sayfası oluşturulamadı.'));
+        alert("İşlem başarısız: " + result.errorMessage);
       }
     });
   };
@@ -1279,16 +1379,17 @@ export default function App() {
         return;
       }
 
-      // Gömülü widget yerine iyzico'nun kendi barındırdığı ödeme sayfasına
-      // yönlendiriyoruz -- widget'ın kendi "küçültme/kapatma" davranışıyla
-      // ilgili sorunları tamamen ortadan kaldırıyor. Ödeme bitince iyzico
-      // callbackUrl üzerinden kullanıcıyı otomatik olarak siteye geri getirir.
-      if (result.status === 'success' && result.paymentPageUrl) {
+      if (result.status === 'success') {
+        const checkoutDiv = document.getElementById('iyzipay-checkout-form');
+        renderIyzicoCheckoutForm(checkoutDiv, result.checkoutFormContent);
+        setShowPaymentOverlay(true);
+        if (window.iyzipayCheckout && typeof window.iyzipayCheckout.show === 'function') {
+          window.iyzipayCheckout.show();
+        }
         setCartItems([]);
         setShowCart(false);
-        window.location.href = result.paymentPageUrl;
       } else {
-        alert("İşlem başarısız: " + (result.errorMessage || 'Ödeme sayfası oluşturulamadı.'));
+        alert("İşlem başarısız: " + result.errorMessage);
       }
     });
   };
@@ -2048,24 +2149,80 @@ export default function App() {
 
             <div style={{ marginBottom: '16px' }}>
               <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
-              <input 
-                type="text" 
-                placeholder="Örn: KPSS, LGS, YKS"
-                value={newExamForm.categoryExamType} 
-                onChange={(e) => setNewExamForm({ ...newExamForm, categoryExamType: e.target.value })} 
-                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
-              />
+              <select
+                value={newExamForm.categoryExamType}
+                onChange={(e) => {
+                  if (e.target.value === '__new__') {
+                    setShowNewExamCategoryInput(true);
+                    return;
+                  }
+                  // Sınav türü değişince, önceki türe ait Ders Türü seçimi
+                  // artık geçersiz olabileceği için temizliyoruz.
+                  setNewExamForm({ ...newExamForm, categoryExamType: e.target.value, categoryLesson: '' });
+                }}
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', boxSizing: 'border-box' }}
+              >
+                <option value="">Sınav Türü Seçin</option>
+                {examCategories.map((cat) => (
+                  <option key={cat.id} value={cat.name}>{cat.name}</option>
+                ))}
+                <option value="__new__">+ Yeni Sınav Türü Ekle</option>
+              </select>
+              {showNewExamCategoryInput && (
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                  <input
+                    type="text"
+                    autoFocus
+                    placeholder="Örn: KPSS"
+                    value={newExamCategoryName}
+                    onChange={(e) => setNewExamCategoryName(e.target.value)}
+                    style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }}
+                  />
+                  <button type="button" onClick={handleAddExamCategory} className="yt-btn yt-btn-primary" style={{ padding: '8px 14px' }}>Ekle</button>
+                  <button type="button" onClick={() => { setShowNewExamCategoryInput(false); setNewExamCategoryName(''); }} className="yt-btn" style={{ padding: '8px 14px' }}>Vazgeç</button>
+                </div>
+              )}
             </div>
 
             <div style={{ marginBottom: '16px' }}>
               <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
-              <input 
-                type="text" 
-                placeholder="Örn: Genel Yetenek - Genel Kültür"
-                value={newExamForm.categoryLesson} 
-                onChange={(e) => setNewExamForm({ ...newExamForm, categoryLesson: e.target.value })} 
-                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
-              />
+              <select
+                value={newExamForm.categoryLesson}
+                disabled={!newExamForm.categoryExamType}
+                onChange={(e) => {
+                  if (e.target.value === '__new__') {
+                    setShowNewLessonCategoryInput(true);
+                    return;
+                  }
+                  setNewExamForm({ ...newExamForm, categoryLesson: e.target.value });
+                }}
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: newExamForm.categoryExamType ? '#fff' : '#f1f5f9', boxSizing: 'border-box' }}
+              >
+                <option value="">{newExamForm.categoryExamType ? 'Ders Türü Seçin' : 'Önce Sınav Türü seçin'}</option>
+                {lessonCategories
+                  .filter((lc) => {
+                    const selectedCat = examCategories.find((c) => c.name === newExamForm.categoryExamType);
+                    return selectedCat && lc.exam_category_id === selectedCat.id;
+                  })
+                  .map((lc) => (
+                    <option key={lc.id} value={lc.name}>{lc.name}</option>
+                  ))}
+                {newExamForm.categoryExamType && <option value="__new__">+ Yeni Ders Türü Ekle</option>}
+              </select>
+              {showNewLessonCategoryInput && (
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                  <input
+                    type="text"
+                    autoFocus
+                    placeholder="Örn: Tarih"
+                    value={newLessonCategoryName}
+                    onChange={(e) => setNewLessonCategoryName(e.target.value)}
+                    style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }}
+                  />
+                  <button type="button" onClick={handleAddLessonCategory} className="yt-btn yt-btn-primary" style={{ padding: '8px 14px' }}>Ekle</button>
+                  <button type="button" onClick={() => { setShowNewLessonCategoryInput(false); setNewLessonCategoryName(''); }} className="yt-btn" style={{ padding: '8px 14px' }}>Vazgeç</button>
+                </div>
+              )}
             </div>
 
             <div style={{ marginBottom: '16px' }}>
@@ -2654,87 +2811,6 @@ export default function App() {
     );
   };
 
-  // Sepet ve bildirim panelleri -- ÖNEMLİ: bunlar sadece ana sayfa (liste)
-  // JSX'i içinde tanımlıydı, ürün detay sayfası (inspectingExamId doluyken)
-  // ayrı/erken bir return kullandığı için bu paneller o ekranda hiç
-  // render edilmiyordu. Buton tıklanınca state (showCart/showStudentNotifs)
-  // doğru şekilde true oluyordu ama gösterecek panel yoktu; ana sayfaya
-  // dönülünce state hâlâ true olduğu için panel(ler) birden ortaya
-  // çıkıyordu. Bu fonksiyonu her sayfada (renderHeaderRight() çağrılan
-  // her yerde) ayrıca çağırarak sorunu kökten çözüyoruz.
-  const renderCartAndNotifOverlays = () => {
-    const cartExams = exams.filter(e => cartItems.includes(e.id));
-    const cartTotal = cartExams.reduce((sum, e) => sum + (e.price || 0), 0);
-
-    return (
-      <>
-        {showCart && (
-          <div className="yt-cart-overlay" onClick={() => setShowCart(false)}>
-            <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-                <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Sepetim</h3>
-                <button onClick={() => setShowCart(false)} className="yt-btn yt-btn-ghost">✕</button>
-              </div>
-
-              {cartExams.length === 0 ? (
-                <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Sepetiniz boş. Ücretli içeriklerin yanındaki "Sepete Ekle" butonuyla ekleyebilirsiniz.</p>
-              ) : (
-                <>
-                  {cartExams.map(ce => (
-                    <div key={ce.id} className="yt-cart-item">
-                      <span style={{ fontSize: '0.88rem', color: 'var(--yt-ink)', flex: 1 }}>{ce.name || 'İsimsiz İçerik'}</span>
-                      <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.85rem', color: 'var(--yt-ink)' }}>₺{ce.price}</span>
-                      <button onClick={() => toggleCartItem(ce.id)} className="yt-btn yt-btn-ghost" style={{ padding: '4px 8px' }}>✕</button>
-                    </div>
-                  ))}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '18px 0' }}>
-                    <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.8rem', color: 'var(--yt-graphite)' }}>TOPLAM</span>
-                    <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '1.2rem', fontWeight: '600', color: 'var(--yt-ink)' }}>₺{cartTotal.toLocaleString('tr-TR')}</span>
-                  </div>
-                  <button onClick={handleCartCheckout} className="yt-btn yt-btn-buy" style={{ width: '100%' }}>Ödemeye Geç →</button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
-        {showStudentNotifs && (
-          <div className="yt-cart-overlay" onClick={() => setShowStudentNotifs(false)}>
-            <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-                <h3 style={{ margin: 0, fontSize: '1.1rem' }}>🔔 Bildirimler</h3>
-                <button onClick={() => setShowStudentNotifs(false)} className="yt-btn yt-btn-ghost">✕</button>
-              </div>
-
-              {studentNotifLoading ? (
-                <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Yükleniyor...</p>
-              ) : studentNotifItems.length === 0 ? (
-                <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Henüz bir bildiriminiz yok.</p>
-              ) : (
-                <div style={{ display: 'grid', gap: '10px' }}>
-                  {studentNotifItems.map(item => (
-                    <div key={item.id} style={{ border: '1px solid var(--yt-line)', borderRadius: '8px', padding: '12px', backgroundColor: item.kind === 'reply' ? 'var(--yt-mustard-bg)' : 'var(--yt-paper-2)' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '4px' }}>
-                        <span style={{ fontSize: '0.82rem', fontWeight: 'bold', color: 'var(--yt-ink)' }}>
-                          {item.kind === 'reply' ? '↩ ' : '📢 '}{item.title}
-                        </span>
-                      </div>
-                      {item.kind === 'reply' && (
-                        <p style={{ margin: '0 0 6px 0', fontSize: '0.78rem', color: 'var(--yt-graphite)', fontStyle: 'italic' }}>"{item.originalMessage}"</p>
-                      )}
-                      <p style={{ margin: '0 0 6px 0', fontSize: '0.86rem', color: 'var(--yt-ink)', whiteSpace: 'pre-wrap' }}>{item.message}</p>
-                      <span style={{ fontSize: '0.72rem', color: 'var(--yt-graphite-soft)' }}>{new Date(item.date).toLocaleString('tr-TR')}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </>
-    );
-  };
-
   // Tüm sayfalarda aynı şekilde görünen üst menü: Sınavlarım, Sepet, Bildirim, Hesap (e-posta) menüsü
   const renderHeaderRight = () => (
     <>
@@ -2923,8 +2999,6 @@ export default function App() {
             </div>
           </div>
         </div>
-        {renderCartAndNotifOverlays()}
-        <Footer />
       </div>
     );
   }
@@ -3288,9 +3362,7 @@ export default function App() {
               </div>
             )}
           </main>
-          {renderCartAndNotifOverlays()}
           {renderAuthModal()}
-          <Footer />
         </div>
       );
     }
@@ -3326,6 +3398,9 @@ export default function App() {
       );
       
       const allCategories = ['Tümü', ...uniqueExamTypes];
+
+      const cartExams = exams.filter(e => cartItems.includes(e.id));
+      const cartTotal = cartExams.reduce((sum, e) => sum + (e.price || 0), 0);
 
       return (
         <div className="yt-shell">
@@ -3595,10 +3670,71 @@ export default function App() {
             )}
           </main>
 
-          {renderCartAndNotifOverlays()}
+          {showCart && (
+            <div className="yt-cart-overlay" onClick={() => setShowCart(false)}>
+              <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Sepetim</h3>
+                  <button onClick={() => setShowCart(false)} className="yt-btn yt-btn-ghost">✕</button>
+                </div>
+
+                {cartExams.length === 0 ? (
+                  <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Sepetiniz boş. Ücretli içeriklerin yanındaki "Sepete Ekle" butonuyla ekleyebilirsiniz.</p>
+                ) : (
+                  <>
+                    {cartExams.map(ce => (
+                      <div key={ce.id} className="yt-cart-item">
+                        <span style={{ fontSize: '0.88rem', color: 'var(--yt-ink)', flex: 1 }}>{ce.name || 'İsimsiz İçerik'}</span>
+                        <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.85rem', color: 'var(--yt-ink)' }}>₺{ce.price}</span>
+                        <button onClick={() => toggleCartItem(ce.id)} className="yt-btn yt-btn-ghost" style={{ padding: '4px 8px' }}>✕</button>
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '18px 0' }}>
+                      <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.8rem', color: 'var(--yt-graphite)' }}>TOPLAM</span>
+                      <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '1.2rem', fontWeight: '600', color: 'var(--yt-ink)' }}>₺{cartTotal.toLocaleString('tr-TR')}</span>
+                    </div>
+                    <button onClick={handleCartCheckout} className="yt-btn yt-btn-buy" style={{ width: '100%' }}>Ödemeye Geç →</button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {showStudentNotifs && (
+            <div className="yt-cart-overlay" onClick={() => setShowStudentNotifs(false)}>
+              <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>🔔 Bildirimler</h3>
+                  <button onClick={() => setShowStudentNotifs(false)} className="yt-btn yt-btn-ghost">✕</button>
+                </div>
+
+                {studentNotifLoading ? (
+                  <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Yükleniyor...</p>
+                ) : studentNotifItems.length === 0 ? (
+                  <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Henüz bir bildiriminiz yok.</p>
+                ) : (
+                  <div style={{ display: 'grid', gap: '10px' }}>
+                    {studentNotifItems.map(item => (
+                      <div key={item.id} style={{ border: '1px solid var(--yt-line)', borderRadius: '8px', padding: '12px', backgroundColor: item.kind === 'reply' ? 'var(--yt-mustard-bg)' : 'var(--yt-paper-2)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '4px' }}>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 'bold', color: 'var(--yt-ink)' }}>
+                            {item.kind === 'reply' ? '↩ ' : '📢 '}{item.title}
+                          </span>
+                        </div>
+                        {item.kind === 'reply' && (
+                          <p style={{ margin: '0 0 6px 0', fontSize: '0.78rem', color: 'var(--yt-graphite)', fontStyle: 'italic' }}>"{item.originalMessage}"</p>
+                        )}
+                        <p style={{ margin: '0 0 6px 0', fontSize: '0.86rem', color: 'var(--yt-ink)', whiteSpace: 'pre-wrap' }}>{item.message}</p>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--yt-graphite-soft)' }}>{new Date(item.date).toLocaleString('tr-TR')}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {renderAuthModal()}
-          <Footer />
         </div>
       );
     }
@@ -4030,7 +4166,6 @@ export default function App() {
             </div>
           </div>
         )}
-        {renderCartAndNotifOverlays()}
       </div>
     );
   }
