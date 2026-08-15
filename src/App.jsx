@@ -87,6 +87,14 @@ export default function App() {
     typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('exam') : null
   );
 
+  // ÖNEMLİ (bug fix): Supabase istemcisi, sekme arka plandan öne alındığında
+  // (visibilitychange) oturumu kontrol etmek için onAuthStateChange olayını
+  // YENİDEN tetikleyebiliyor -- aynı kullanıcı için bile. Bu ref, o an için
+  // "exams" listesinin hangi kullanıcı için zaten yüklendiğini tutar; aynı
+  // kullanıcı için tekrar gelen olaylarda gereksiz/zararlı yeniden yüklemeyi
+  // atlamak için kullanılır (bkz. aşağıdaki onAuthStateChange).
+  const loadedUserIdRef = useRef(null);
+
   const [studentCurrentPage, setStudentCurrentPage] = useState(1);
   const [studentAnswers, setStudentAnswers] = useState({});
   const [timeLeft, setTimeLeft] = useState(0); 
@@ -189,6 +197,7 @@ export default function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (session?.user) {
+        loadedUserIdRef.current = session.user.id;
         checkUserRoleAndSetMode(session.user);
       } else {
         fetchPublicExams();
@@ -197,9 +206,20 @@ export default function App() {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
+
       if (session?.user) {
+        // Aynı kullanıcı için tekrar gelen olayda (ör. sekmeye geri dönüldüğünde
+        // Supabase'in tetiklediği oturum kontrolü) exams listesini yeniden
+        // ÇEKMİYORUZ -- aksi halde veritabanındaki eski (henüz "Kaydet"
+        // butonuna basılmamış) sürüm, o an ekranda doldurulmakta olan
+        // kazanım/cevap gibi kaydedilmemiş yerel değişikliklerin üzerine
+        // yazardı. Gerçek bir giriş (farklı kullanıcı ya da ilk yükleme)
+        // olduğunda id değişeceği için normal şekilde yeniden yüklenir.
+        if (loadedUserIdRef.current === session.user.id) return;
+        loadedUserIdRef.current = session.user.id;
         checkUserRoleAndSetMode(session.user);
       } else {
+        loadedUserIdRef.current = null;
         setAppMode('student');
         fetchPublicExams();
       }
