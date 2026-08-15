@@ -57,6 +57,8 @@ export default function App() {
   const [newOutcomeName, setNewOutcomeName] = useState('');
   const [showNewDersForKazanimInput, setShowNewDersForKazanimInput] = useState(false);
   const [newDersForKazanimName, setNewDersForKazanimName] = useState('');
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [categoryManagerTab, setCategoryManagerTab] = useState('exam'); // 'exam' | 'lesson' | 'outcome'
   const [newExamForm, setNewExamForm] = useState({
     name: '',
     duration: '',
@@ -582,6 +584,49 @@ export default function App() {
     const created = data[0];
     setLessonCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
     if (onCreated) onCreated(created);
+  };
+
+  // --- Kategori/Ders Türü/Kazanım listelerinden SİLME ---
+  // ÖNEMLİ: Bu üç tablo (exam_categories, lesson_categories,
+  // learning_outcomes) sadece dropdown'ları besleyen "ana liste"lerdir.
+  // Sınavlarda (exams.category_exam_type / category_lesson) ve kazanım
+  // haritasında (topicMap içindeki ders/kazanim) bu bilgi DÜZ METİN olarak
+  // saklanıyor, foreign key ile bağlı değil. Yani buradan bir kayıt silmek,
+  // daha önce o adla kaydedilmiş sınavları/kazanımları BOZMAZ -- sadece o
+  // seçenek yeni seçimler için dropdown'dan kalkar. Alt kayıtları da (ders
+  // türlerini ve kazanımları) elle sırayla siliyoruz ki veritabanındaki
+  // foreign key kısıtı hataya sebep olmasın.
+  const deleteLearningOutcome = async (id) => {
+    const { error } = await supabase.from('learning_outcomes').delete().eq('id', id);
+    if (error) { alert('Kazanım silinemedi: ' + error.message); return; }
+    setLearningOutcomes((prev) => prev.filter((o) => o.id !== id));
+  };
+
+  const deleteLessonCategory = async (id) => {
+    const childOutcomeIds = learningOutcomes.filter((o) => o.lesson_category_id === id).map((o) => o.id);
+    if (childOutcomeIds.length > 0) {
+      const { error: outcomeErr } = await supabase.from('learning_outcomes').delete().in('id', childOutcomeIds);
+      if (outcomeErr) { alert('Ders türü silinemedi: ' + outcomeErr.message); return; }
+    }
+    const { error } = await supabase.from('lesson_categories').delete().eq('id', id);
+    if (error) { alert('Ders türü silinemedi: ' + error.message); return; }
+    setLearningOutcomes((prev) => prev.filter((o) => o.lesson_category_id !== id));
+    setLessonCategories((prev) => prev.filter((lc) => lc.id !== id));
+  };
+
+  const deleteExamCategory = async (id) => {
+    const childLessonIds = lessonCategories.filter((lc) => lc.exam_category_id === id).map((lc) => lc.id);
+    if (childLessonIds.length > 0) {
+      const { error: outcomeErr } = await supabase.from('learning_outcomes').delete().in('lesson_category_id', childLessonIds);
+      if (outcomeErr) { alert('Sınav türü silinemedi: ' + outcomeErr.message); return; }
+      const { error: lessonErr } = await supabase.from('lesson_categories').delete().in('id', childLessonIds);
+      if (lessonErr) { alert('Sınav türü silinemedi: ' + lessonErr.message); return; }
+    }
+    const { error } = await supabase.from('exam_categories').delete().eq('id', id);
+    if (error) { alert('Sınav türü silinemedi: ' + error.message); return; }
+    setLearningOutcomes((prev) => prev.filter((o) => !childLessonIds.includes(o.lesson_category_id)));
+    setLessonCategories((prev) => prev.filter((lc) => lc.exam_category_id !== id));
+    setExamCategories((prev) => prev.filter((c) => c.id !== id));
   };
 
   const checkUserRoleAndSetMode = (currentUser) => {
@@ -1889,6 +1934,12 @@ export default function App() {
               📢 Duyuru Gönder
             </button>
             <button
+              onClick={() => setShowCategoryManager(true)}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              🗂 Kategoriler
+            </button>
+            <button
               onClick={() => { setShowReportsAdmin(true); fetchAdminReports(adminReportsFilter); }}
               style={{ position: 'relative', padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
             >
@@ -2080,6 +2131,120 @@ export default function App() {
                 })}
               </div>
             )}
+          </div>
+        )}
+
+
+        {showCategoryManager && (
+          <div
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+            onClick={() => setShowCategoryManager(false)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '520px', maxWidth: '100%', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🗂 Kategori Yönetimi</h2>
+                <button onClick={() => setShowCategoryManager(false)} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+              </div>
+
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', borderBottom: '1px solid #e2e8f0', paddingBottom: '10px' }}>
+                {[
+                  { key: 'exam', label: 'Sınav Türleri' },
+                  { key: 'lesson', label: 'Ders Türleri' },
+                  { key: 'outcome', label: 'Kazanımlar' },
+                ].map((tab) => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setCategoryManagerTab(tab.key)}
+                    style={{
+                      padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 'bold',
+                      backgroundColor: categoryManagerTab === tab.key ? '#0f172a' : '#fff',
+                      color: categoryManagerTab === tab.key ? '#fff' : '#0f172a',
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
+                Bir kaydı silmek, o adla daha önce kaydedilmiş sınav/kazanım bilgilerini etkilemez -- sadece bundan sonraki seçimler için listeden kalkar.
+              </div>
+
+              <div style={{ overflowY: 'auto', flex: 1 }}>
+                {categoryManagerTab === 'exam' && (
+                  examCategories.length === 0 ? (
+                    <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz sınav türü eklenmedi.</p>
+                  ) : (
+                    examCategories.map((c) => (
+                      <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                        <span style={{ fontSize: '0.88rem' }}>{c.name}</span>
+                        <button
+                          onClick={() => {
+                            const childCount = lessonCategories.filter((lc) => lc.exam_category_id === c.id).length;
+                            const warn = childCount > 0 ? `\n\nBu sınav türüne bağlı ${childCount} ders türü de (ve onlara bağlı kazanımlar) birlikte silinecek.` : '';
+                            if (window.confirm(`"${c.name}" sınav türünü silmek istediğinize emin misiniz?${warn}`)) deleteExamCategory(c.id);
+                          }}
+                          style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}
+                        >
+                          🗑 Sil
+                        </button>
+                      </div>
+                    ))
+                  )
+                )}
+
+                {categoryManagerTab === 'lesson' && (
+                  lessonCategories.length === 0 ? (
+                    <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz ders türü eklenmedi.</p>
+                  ) : (
+                    lessonCategories.map((lc) => {
+                      const parentCat = examCategories.find((c) => c.id === lc.exam_category_id);
+                      return (
+                        <div key={lc.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                          <span style={{ fontSize: '0.88rem' }}>{lc.name} <span style={{ color: '#94a3b8', fontSize: '0.76rem' }}>({parentCat?.name || 'Sınav türü yok'})</span></span>
+                          <button
+                            onClick={() => {
+                              const childCount = learningOutcomes.filter((o) => o.lesson_category_id === lc.id).length;
+                              const warn = childCount > 0 ? `\n\nBu ders türüne bağlı ${childCount} kazanım da birlikte silinecek.` : '';
+                              if (window.confirm(`"${lc.name}" ders türünü silmek istediğinize emin misiniz?${warn}`)) deleteLessonCategory(lc.id);
+                            }}
+                            style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}
+                          >
+                            🗑 Sil
+                          </button>
+                        </div>
+                      );
+                    })
+                  )
+                )}
+
+                {categoryManagerTab === 'outcome' && (
+                  learningOutcomes.length === 0 ? (
+                    <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz kazanım eklenmedi.</p>
+                  ) : (
+                    learningOutcomes.map((o) => {
+                      const parentLesson = lessonCategories.find((lc) => lc.id === o.lesson_category_id);
+                      return (
+                        <div key={o.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid #f1f5f9' }}>
+                          <span style={{ fontSize: '0.88rem' }}>{o.name} <span style={{ color: '#94a3b8', fontSize: '0.76rem' }}>({parentLesson?.name || 'Ders türü yok'})</span></span>
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`"${o.name}" kazanımını silmek istediğinize emin misiniz?`)) deleteLearningOutcome(o.id);
+                            }}
+                            style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}
+                          >
+                            🗑 Sil
+                          </button>
+                        </div>
+                      );
+                    })
+                  )
+                )}
+              </div>
+            </div>
           </div>
         )}
 
