@@ -702,15 +702,44 @@ export default function App() {
   };
 
   // --- Kategori Yönetimi: ADI DÜZENLEME ---
-  // Sadece "ana liste"deki (dropdown'ları besleyen) kaydın adını değiştirir.
-  // Daha önce bu isimle bir soruya kaydedilmiş Kazanım Haritası girişleri
-  // (topicMap içindeki düz metin ders/konu/kazanım) OTOMATİK güncellenmez --
-  // tıpkı silmenin de eski kayıtları etkilememesi gibi. Kazanım özelinde,
-  // resolveLiveKonuForEntry sayesinde Konu adı yine de güncel gösterilir
-  // (çünkü o, kazanım adından canlı olarak topic.name'i okur); ama Ders/Konu/
-  // Kazanımın kendi adı değiştiğinde, o adı zaten kullanan sorularda YENİ adı
-  // görmek için o sorunun ilgili hücresini Kazanım Haritası'ndan yeniden
-  // seçmek gerekir.
+  // ÖNEMLİ (bug fix): Bir Ders/Konu/Kazanım adı değiştirildiğinde, o adı
+  // daha önce kullanan sorulardaki (topicMap içindeki düz metin) kayıt
+  // GÜNCELLENMEZSE, o sorunun ilgili dropdown'ı artık hiçbir seçenekle
+  // eşleşmediği için BOŞ görünür -- yani kazanım seçimi "kaybolmuş" gibi
+  // olur (ve "Kaydet"e basılırsa gerçekten kaybolur). Bu yüzden bir isim
+  // değiştirildiğinde, o ismi kullanan TÜM sınavlardaki TÜM sorularda
+  // ilgili alanı da otomatik olarak yeni isme güncelliyoruz.
+  const propagateCategoryRename = (field, oldName, newName) => {
+    if (!oldName || oldName === newName) return;
+    exams.forEach((ex) => {
+      if (!ex.topicMap) return;
+      const hasMatch = Object.values(ex.topicMap).some((entry) => entry[field] === oldName);
+      if (!hasMatch) return;
+      const newTopicMap = {};
+      Object.entries(ex.topicMap).forEach(([soruNo, entry]) => {
+        newTopicMap[soruNo] = entry[field] === oldName ? { ...entry, [field]: newName } : entry;
+      });
+      setExams((prev) => prev.map((e) => e.id === ex.id ? { ...e, topicMap: newTopicMap } : e));
+      supabase.from('exams').update({ topic_map: newTopicMap }).eq('id', ex.id).then(({ error }) => {
+        if (error) console.error(`"${ex.name}" sınavının kazanım haritası güncellenemedi:`, error);
+      });
+    });
+  };
+
+  // Sınav Türü adı, soru bazlı topicMap'te değil, doğrudan sınav paketinin
+  // kendi "category_exam_type" alanında tutuluyor -- bu yüzden ayrı ele
+  // alınıyor (üst düzey/parent sınavlar).
+  const propagateExamTypeRename = (oldName, newName) => {
+    if (!oldName || oldName === newName) return;
+    exams.forEach((ex) => {
+      if (ex.parentId || ex.categoryExamType !== oldName) return;
+      setExams((prev) => prev.map((e) => e.id === ex.id ? { ...e, categoryExamType: newName } : e));
+      supabase.from('exams').update({ category_exam_type: newName }).eq('id', ex.id).then(({ error }) => {
+        if (error) console.error(`"${ex.name}" sınavının sınav türü güncellenemedi:`, error);
+      });
+    });
+  };
+
   const renameExamCategory = async (id, currentName) => {
     const name = window.prompt('Sınav Türü adını düzenle:', currentName);
     if (name === null) return;
@@ -719,6 +748,7 @@ export default function App() {
     const { error } = await supabase.from('exam_categories').update({ name: trimmed }).eq('id', id);
     if (error) { alert('Güncellenemedi: ' + error.message); return; }
     setExamCategories((prev) => prev.map((c) => c.id === id ? { ...c, name: trimmed } : c).sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    propagateExamTypeRename(currentName, trimmed);
   };
 
   const renameLessonCategory = async (id, currentName) => {
@@ -729,6 +759,7 @@ export default function App() {
     const { error } = await supabase.from('lesson_categories').update({ name: trimmed }).eq('id', id);
     if (error) { alert('Güncellenemedi: ' + error.message); return; }
     setLessonCategories((prev) => prev.map((lc) => lc.id === id ? { ...lc, name: trimmed } : lc).sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    propagateCategoryRename('ders', currentName, trimmed);
   };
 
   const renameTopic = async (id, currentName) => {
@@ -739,6 +770,7 @@ export default function App() {
     const { error } = await supabase.from('topics').update({ name: trimmed }).eq('id', id);
     if (error) { alert('Güncellenemedi: ' + error.message); return; }
     setTopics((prev) => prev.map((t) => t.id === id ? { ...t, name: trimmed } : t).sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    propagateCategoryRename('konu', currentName, trimmed);
   };
 
   const renameLearningOutcome = async (id, currentName) => {
@@ -749,6 +781,7 @@ export default function App() {
     const { error } = await supabase.from('learning_outcomes').update({ name: trimmed }).eq('id', id);
     if (error) { alert('Güncellenemedi: ' + error.message); return; }
     setLearningOutcomes((prev) => prev.map((o) => o.id === id ? { ...o, name: trimmed } : o).sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    propagateCategoryRename('kazanim', currentName, trimmed);
   };
 
   // --- Kategori Yönetimi: SİLMEDEN ÖNCE "kullanımda mı" KONTROLÜ ---
