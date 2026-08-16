@@ -109,6 +109,12 @@ export default function App() {
   const [timeLeft, setTimeLeft] = useState(0); 
   const [isPaused, setIsPaused] = useState(false);
   const [examStarted, setExamStarted] = useState(false); // Öğrenci "Başla"ya basana kadar süre işlemeye başlamaz
+  // Odak Modu: soru çözüm ekranında site header'ını (logo/menü) gizleyip
+  // soru alanına daha fazla yer açar. Native Fullscreen API'yi de (destekleyen
+  // cihazlarda, ör. Android/masaüstü) ek olarak tetikler; iOS Safari'de bu
+  // API çalışmadığı için asıl işi header gizleme yapar.
+  const [focusMode, setFocusMode] = useState(false);
+  const examShellRef = useRef(null);
   const [isExamFinished, setIsExamFinished] = useState(false);
   const [showResults, setShowResults] = useState(false);
   
@@ -1283,6 +1289,19 @@ export default function App() {
       return () => clearInterval(timer);
     }
   }, [user, appMode, activeStudentExam, isExamFinished, showResults, isPaused]);
+
+  // Kullanıcı native tam ekrandan Esc/geri tuşuyla çıkarsa (Odak Modu
+  // açıkken tetiklenmiş olabilir), Odak Modu state'ini de kapatıp
+  // header'ın tekrar görünmesini sağlıyoruz.
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement) {
+        setFocusMode(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -4648,6 +4667,28 @@ export default function App() {
       );
     }
 
+    // Odak Modu aç/kapa: site header'ını her zaman gizler/gösterir; ayrıca
+    // destekleyen cihazlarda (iOS Safari HARİÇ) native tam ekranı da dener.
+    // Native API başarısız olsa/olmasa da Odak Modu'nun kendisi çalışmaya
+    // devam eder çünkü asıl iş CSS/state ile yapılıyor.
+    const toggleFocusMode = () => {
+      const next = !focusMode;
+      setFocusMode(next);
+      try {
+        if (next) {
+          const el = examShellRef.current;
+          if (el && el.requestFullscreen) {
+            el.requestFullscreen().catch(() => {});
+          }
+        } else if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
+      } catch (e) {
+        // Fullscreen API desteklenmiyor (ör. iOS Safari) -- sorun değil,
+        // Odak Modu zaten header gizleme ile çalışıyor.
+      }
+    };
+
     // Sınav / Test Çözüm Ekranı
     if (!activeStudentExam) return null;
 
@@ -4659,37 +4700,39 @@ export default function App() {
     const myActiveRating = studentResultsMap[activeStudentExamId]?.rating || 0;
 
     return (
-      <div className="yt-shell" style={{ maxWidth: '1300px', margin: '0 auto', padding: '24px' }}>
-        <header className="yt-header" style={{ marginBottom: '20px' }}>
-          <div className="yt-header-inner">
-            <div
-              className="yt-brand"
-              style={{ cursor: 'pointer' }}
-              onClick={() => {
-                const targetId = activeStudentExam.parentId || activeStudentExam.id;
-                setActiveStudentExamId(null);
-                setInspectingExamId(targetId);
-              }}
-            >
-              <img src={sualinkLogo} alt="Sualink" className="yt-brand-logo" />
+      <div ref={examShellRef} className="yt-shell" style={{ maxWidth: '1300px', margin: '0 auto', padding: focusMode ? '12px' : '24px' }}>
+        {!focusMode && (
+          <header className="yt-header" style={{ marginBottom: '20px' }}>
+            <div className="yt-header-inner">
+              <div
+                className="yt-brand"
+                style={{ cursor: 'pointer' }}
+                onClick={() => {
+                  const targetId = activeStudentExam.parentId || activeStudentExam.id;
+                  setActiveStudentExamId(null);
+                  setInspectingExamId(targetId);
+                }}
+              >
+                <img src={sualinkLogo} alt="Sualink" className="yt-brand-logo" />
+              </div>
+              {!showResults && (
+                <h1 style={{ margin: 0, fontSize: '1.1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
+              )}
+              <div style={{ flex: 1 }}></div>
+              <button
+                onClick={() => {
+                  const targetId = activeStudentExam.parentId || activeStudentExam.id;
+                  setActiveStudentExamId(null);
+                  setInspectingExamId(targetId);
+                }}
+                className="yt-btn yt-btn-ghost"
+              >
+                İçerik Listesine Dön
+              </button>
+              {renderHeaderRight()}
             </div>
-            {!showResults && (
-              <h1 style={{ margin: 0, fontSize: '1.1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
-            )}
-            <div style={{ flex: 1 }}></div>
-            <button
-              onClick={() => {
-                const targetId = activeStudentExam.parentId || activeStudentExam.id;
-                setActiveStudentExamId(null);
-                setInspectingExamId(targetId);
-              }}
-              className="yt-btn yt-btn-ghost"
-            >
-              İçerik Listesine Dön
-            </button>
-            {renderHeaderRight()}
-          </div>
-        </header>
+          </header>
+        )}
 
         {showResults && results ? (
           <div className="yt-session-card" style={{ maxWidth: '700px', margin: '0 auto 24px auto' }}>
@@ -4826,6 +4869,39 @@ export default function App() {
               grid-template-columns: 1fr !important;
             }
           }
+
+          /* Önceki/Sonraki Soru butonları: masaüstünde şıklarla (A-E) aynı
+             satırda, dar ekranlarda (telefon) şıkların altında ayrı satırda. */
+          .yt-nav-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+          }
+          .yt-nav-row .yt-nav-middle {
+            flex: 1 1 auto;
+            display: flex;
+            justify-content: center;
+            min-width: 0;
+          }
+          .yt-nav-row .yt-nav-btn {
+            flex-shrink: 0;
+            white-space: nowrap;
+          }
+          @media (max-width: 640px) {
+            .yt-nav-row .yt-nav-middle {
+              order: 1;
+              flex-basis: 100%;
+            }
+            .yt-nav-row .yt-nav-btn-prev {
+              order: 2;
+            }
+            .yt-nav-row .yt-nav-btn-next {
+              order: 3;
+            }
+          }
         `}</style>
 
         <div className="exam-layout">
@@ -4894,7 +4970,30 @@ export default function App() {
                     </div>
                   </div>
                 )}
-                <span>İŞARETLENEN: <b style={{ color: studentAnswers[studentCurrentPage] ? 'var(--yt-mustard)' : 'rgba(251,249,243,0.5)' }}>{studentAnswers[studentCurrentPage] || 'BOŞ'}</b></span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span>İŞARETLENEN: <b style={{ color: studentAnswers[studentCurrentPage] ? 'var(--yt-mustard)' : 'rgba(251,249,243,0.5)' }}>{studentAnswers[studentCurrentPage] || 'BOŞ'}</b></span>
+                  <button
+                    onClick={toggleFocusMode}
+                    title={focusMode ? 'Odak Modundan Çık' : 'Odak Modu (Tam Ekran)'}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: '26px',
+                      height: '26px',
+                      padding: 0,
+                      borderRadius: '6px',
+                      border: '1px solid rgba(251,249,243,0.45)',
+                      backgroundColor: focusMode ? 'var(--yt-mustard)' : 'transparent',
+                      color: focusMode ? '#1a1a2e' : '#FBF9F3',
+                      fontSize: '0.9rem',
+                      cursor: 'pointer',
+                      lineHeight: 1
+                    }}
+                  >
+                    {focusMode ? '⤡' : '⤢'}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -4904,28 +5003,45 @@ export default function App() {
               pageNumber={studentCurrentPage}
             />
 
-            {!isExamFinished && examStarted && (
-              isPaused ? (
-                <div style={{ textAlign: 'center', margin: '20px 0', padding: '14px', borderRadius: '8px', backgroundColor: 'var(--yt-mustard-bg)', color: 'var(--yt-mustard-deep)', fontWeight: 'bold' }}>
-                  Moladasın, cevap işaretleyemezsin. Devam etmek için "Devam Et"e bas.
-                </div>
-              ) : (
-                <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', margin: '20px 0' }}>
-                  {['A', 'B', 'C', 'D', 'E'].map(option => {
-                    const isSelected = studentAnswers[studentCurrentPage] === option;
-                    return (
-                      <button key={option} onClick={() => handleAnswerSelect(option)} className={`yt-abub${isSelected ? ' picked' : ''}`}>
-                        {option}
-                      </button>
-                    );
-                  })}
-                </div>
-              )
-            )}
+            <div className="yt-nav-row">
+              <button
+                disabled={studentCurrentPage <= 1}
+                onClick={() => { setStudentCurrentPage(p => p - 1); setViewingSolutionQ(false); }}
+                className="yt-btn yt-btn-outline yt-nav-btn yt-nav-btn-prev"
+                style={studentCurrentPage <= 1 ? { opacity: 0.4, cursor: 'not-allowed' } : {}}
+              >
+                ◀ Önceki Soru
+              </button>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '16px', gap: '10px' }}>
-              <button disabled={studentCurrentPage <= 1} onClick={() => { setStudentCurrentPage(p => p - 1); setViewingSolutionQ(false); }} className="yt-btn yt-btn-outline" style={studentCurrentPage <= 1 ? { opacity: 0.4, cursor: 'not-allowed' } : {}}>◀ Önceki Soru</button>
-              <button disabled={studentCurrentPage >= activeStudentExam.numPages} onClick={() => { setStudentCurrentPage(p => p + 1); setViewingSolutionQ(false); }} className="yt-btn yt-btn-primary" style={studentCurrentPage >= activeStudentExam.numPages ? { opacity: 0.4, cursor: 'not-allowed' } : {}}>Sonraki Soru ▶</button>
+              <div className="yt-nav-middle">
+                {!isExamFinished && examStarted && (
+                  isPaused ? (
+                    <div style={{ textAlign: 'center', padding: '10px 14px', borderRadius: '8px', backgroundColor: 'var(--yt-mustard-bg)', color: 'var(--yt-mustard-deep)', fontWeight: 'bold', fontSize: '0.85rem' }}>
+                      Moladasın, cevap işaretleyemezsin. Devam etmek için "Devam Et"e bas.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                      {['A', 'B', 'C', 'D', 'E'].map(option => {
+                        const isSelected = studentAnswers[studentCurrentPage] === option;
+                        return (
+                          <button key={option} onClick={() => handleAnswerSelect(option)} className={`yt-abub${isSelected ? ' picked' : ''}`}>
+                            {option}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )
+                )}
+              </div>
+
+              <button
+                disabled={studentCurrentPage >= activeStudentExam.numPages}
+                onClick={() => { setStudentCurrentPage(p => p + 1); setViewingSolutionQ(false); }}
+                className="yt-btn yt-btn-primary yt-nav-btn yt-nav-btn-next"
+                style={studentCurrentPage >= activeStudentExam.numPages ? { opacity: 0.4, cursor: 'not-allowed' } : {}}
+              >
+                Sonraki Soru ▶
+              </button>
             </div>
           </div>
 
