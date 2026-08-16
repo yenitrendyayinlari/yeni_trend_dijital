@@ -2123,16 +2123,28 @@ export default function App() {
     }) || null;
   };
 
-  // Bir öğrenci iyi/harika durumdaysa, aynı sınav türünden (ör. "deneme"),
-  // henüz çözmediği başka bir sınav önererek onu bir üst seviyeye iteriz.
-  const findOnerilenDeneme = (excludeExamId, examType) => {
-    return exams.find((e) => (
-      e.isPublished &&
-      !e.parentId &&
-      e.id !== excludeExamId &&
-      e.examType === (examType || 'deneme') &&
-      !(studentResultsMap[e.id] && studentResultsMap[e.id].is_finished)
-    )) || null;
+  // Bir öğrenci iyi/harika durumdaysa, aynı sınav türünden (ör. "deneme") VE
+  // AYNI DERSTEN, henüz çözmediği başka bir sınav önererek onu bir üst
+  // seviyeye iteriz.
+  // ÖNEMLİ (bug fix): Bu fonksiyon eskiden derse hiç bakmıyordu -- sadece
+  // examType (deneme/test) ve bitirilmemiş olma şartına bakıyordu. Sonuç:
+  // Türkçe'de "harika" çıkan bir öğrenciye, yayınlanmış ilk "deneme" sınavı
+  // ne olursa olsun (ör. bir Tarih denemesi) öneriliyordu. findKonuTesti'deki
+  // gibi, adayın topicMap'inin en az %80'inin AYNI ders adını taşıması
+  // şartını da ekliyoruz -- ders bilgisi verilmezse (çağıran taraf henüz
+  // güncellenmemişse) eski davranışa (sadece examType) düşer.
+  const findOnerilenDeneme = (excludeExamId, examType, ders) => {
+    return exams.find((e) => {
+      if (!e.isPublished || e.parentId || e.id === excludeExamId) return false;
+      if (e.examType !== (examType || 'deneme')) return false;
+      if (studentResultsMap[e.id] && studentResultsMap[e.id].is_finished) return false;
+      if (!ders) return true;
+      if (!e.topicMap) return false;
+      const entries = Object.values(e.topicMap).filter((t) => t && t.ders);
+      if (entries.length === 0) return false;
+      const matchCount = entries.filter((t) => t.ders === ders).length;
+      return (matchCount / entries.length) >= 0.8;
+    }) || null;
   };
 
   // Tier'a göre kısa, doğal dilde bir öneri cümlesi + aksiyon etiketi.
@@ -5199,7 +5211,7 @@ export default function App() {
                             if (tavsiye.aksiyon === 'konuTesti') {
                               ctaExam = findKonuTesti(konuName, activeStudentExam.id);
                             } else if (tavsiye.aksiyon === 'deneme') {
-                              ctaExam = findOnerilenDeneme(activeStudentExam.id, activeStudentExam.examType);
+                              ctaExam = findOnerilenDeneme(activeStudentExam.id, activeStudentExam.examType, ders);
                             }
 
                             return (
