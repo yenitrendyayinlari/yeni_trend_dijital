@@ -4,6 +4,7 @@ import SecurePdfViewer from './SecurePdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
 import sualinkLogo from './sualinklogo.png';
+import TopBanner from './TopBanner';
 
 // İyzico'nun checkoutFormContent alanı içindeki <script> etiketi,
 // innerHTML ile DOM'a eklendiğinde tarayıcı tarafından ÇALIŞTIRILMAZ
@@ -2227,6 +2228,7 @@ export default function App() {
 
     return (
       <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', maxWidth: '1200px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
+        <TopBanner isAdmin={true} />
         <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px' }}>
           <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>⚙️ Yönetici Paneli ({user.email})</h1>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -3882,6 +3884,7 @@ export default function App() {
 
     return (
       <div className="yt-shell">
+        <TopBanner isAdmin={false} />
         <header className="yt-header">
           <div className="yt-header-inner">
             <div className="yt-brand" style={{ cursor: 'pointer' }} onClick={() => setShowAccountPage(false)}>
@@ -3998,6 +4001,7 @@ export default function App() {
 
       return (
         <div className="yt-shell">
+          <TopBanner isAdmin={false} />
           <header className="yt-header">
             <div className="yt-header-inner">
               <div className="yt-brand" style={{ cursor: 'pointer' }} onClick={() => setInspectingExamId(null)}>
@@ -4380,6 +4384,7 @@ export default function App() {
 
       return (
         <div className="yt-shell">
+          <TopBanner isAdmin={false} />
 
           <style>{`
             .yt-header-modern {
