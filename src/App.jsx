@@ -1987,13 +1987,16 @@ export default function App() {
   // toplamaya gerek yok, sadece raporlama katmanını Konu seviyesinde
   // gruplayacak şekilde genişletiyoruz.
   //
-  // Ayrıca her Konu için iki ek sinyal hesaplıyoruz:
-  // 1) "hedefDisi": öğrenci o konuyu BİLEREK atlamış olabilir (konudaki boş
-  //    oranı sınav geneline göre çok yüksek, VE bu süre yetişmemesiyle
-  //    açıklanamıyor -- yani boş sorular sınavın sonuna kümelenmiş değil).
-  //    Bu konular "riskli" diye kırmızı gösterilmez, nötr bir notla geçilir.
-  // 2) "yetersizVeri": konudan çok az soru varsa (< 3) güvenilir bir seviye
-  //    etiketi verilemez, bunu da ayrıca işaretliyoruz.
+  // Ayrıca her Konu için bir ek sinyal hesaplıyoruz:
+  // "hedefDisi": öğrenci o konuyu BİLEREK atlamış olabilir (konudaki boş
+  // oranı sınav geneline göre çok yüksek, VE bu süre yetişmemesiyle
+  // açıklanamıyor -- yani boş sorular sınavın sonuna kümelenmiş değil).
+  // Bu konular "riskli" diye kırmızı gösterilmez, nötr bir notla geçilir.
+  //
+  // NOT: Bilerek bir "yetersiz veri / az soru var" eşiği YOK -- konuda tek
+  // soru bile olsa, elimizdeki veriyle gerçek bir tier (Riskli/Gelişmekte/
+  // İyi/Harika) veriyoruz. Hiçbir şey söylememek, öğrenciye yanlış bir şey
+  // söylemekten daha kötü bir tercih değil.
   const getKazanimReport = () => {
     if (!activeStudentExam || !activeStudentExam.topicMap || Object.keys(activeStudentExam.topicMap).length === 0) {
       return null;
@@ -2015,7 +2018,12 @@ export default function App() {
       const correctAns = activeStudentExam.answerKey[i];
       const isEmpty = !studentAns;
       const isCorrect = !!(studentAns && correctAns && studentAns === correctAns);
-      const konuName = topic.konu || topic.kazanim; // konu boşsa (eski kayıt) kazanımı konu gibi kullan
+      // ÖNEMLİ: topic.konu, sınavın topicMap'inde DONMUŞ (Excel yüklendiği/
+      // elle girildiği andaki) bir metin -- Kategori Yönetimi'nde bir kazanımın
+      // konusu sonradan değiştirilirse burada otomatik güncellenmez. Bu yüzden
+      // aynı admin panelde zaten var olan resolveLiveKonuForEntry ile GÜNCEL
+      // konu adını çözüyoruz (kazanım adı üzerinden canlı topic_id eşlemesi).
+      const konuName = resolveLiveKonuForEntry(topic) || topic.kazanim; // hiçbiri çözülemezse (silinmiş kazanım) kazanımı konu gibi kullan
 
       examTotal++;
       if (isEmpty) examEmpty++;
@@ -2051,7 +2059,7 @@ export default function App() {
     // göre belirgin şekilde daha boş kalmışsa.
     const sureSorunuGlobal = tailEmptyRatio >= 0.5 && (tailEmptyRatio - examEmptyRatio) >= 0.25;
 
-    // İkinci geçiş: her konu için tier + hedefDisi/yetersizVeri hesapla.
+    // İkinci geçiş: her konu için tier + hedefDisi hesapla.
     Object.values(byDers).forEach((dersEntry) => {
       Object.entries(dersEntry.konular).forEach(([konuName, konuEntry]) => {
         const oran = konuEntry.total > 0 ? konuEntry.correct / konuEntry.total : 0;
@@ -2060,9 +2068,7 @@ export default function App() {
           ? konuEntry.emptyPages.filter((p) => p >= tailStart).length / konuEntry.emptyPages.length
           : 0;
 
-        if (konuEntry.total < 3) {
-          konuEntry.tier = 'yetersizVeri';
-        } else if (
+        if (
           konuEmptyRatio >= 0.6 &&
           examEmptyRatio < 0.35 &&
           !(sureSorunuGlobal && konuTailShare >= 0.6)
@@ -2142,9 +2148,11 @@ export default function App() {
           aksiyon: 'hedefDisi',
         };
       default:
+        // Normal şartlarda buraya hiç düşülmez (tier her zaman yukarıdakilerden
+        // biri olarak atanıyor) -- sadece beklenmedik bir durum için güvenlik ağı.
         return {
-          mesaj: `${konuName} konusundan sağlıklı bir değerlendirme için yeterli soru çözülmemiş.`,
-          aksiyon: 'yetersizVeri',
+          mesaj: `${konuName} konusu için bir değerlendirme oluşturulamadı.`,
+          aksiyon: null,
         };
     }
   };
@@ -2156,7 +2164,6 @@ export default function App() {
     iyi: { label: 'İyi', color: '#2F7A3D', bg: '#E3F3E6' },
     harika: { label: 'Harika', color: '#1F6634', bg: '#D9F0DD' },
     hedefDisi: { label: 'Hedefte Değil', color: '#64748B', bg: '#F1F5F9' },
-    yetersizVeri: { label: 'Yetersiz Veri', color: '#94A3B8', bg: '#F8FAFC' },
   };
 
   // Çubuk her zaman kırmızı zemin üzerine, doğru oranı kadar yeşil dolgu (soldan sağa) şeklinde bölünür.
@@ -5141,7 +5148,7 @@ export default function App() {
                           {Object.entries(dersData.konular).map(([konuName, konuEntry]) => {
                             const konuKey = `${ders}::${konuName}`;
                             const isOpen = !!expandedKonular[konuKey];
-                            const meta = KONU_TIER_META[konuEntry.tier] || KONU_TIER_META.yetersizVeri;
+                            const meta = KONU_TIER_META[konuEntry.tier] || { label: konuEntry.tier || '-', color: '#64748B', bg: '#F1F5F9' };
                             const kGreenWidth = getBaremGreenWidth(konuEntry.correct, konuEntry.total);
                             const tavsiye = getKonuTavsiyesi(konuName, konuEntry);
 
