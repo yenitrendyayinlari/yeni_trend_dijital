@@ -2048,11 +2048,11 @@ export default function App() {
         if (isEmpty) tailEmpty++;
       }
 
-      if (!byDers[topic.ders]) byDers[topic.ders] = { correct: 0, total: 0, empty: 0, konular: {} };
+      if (!byDers[topic.ders]) byDers[topic.ders] = { correct: 0, total: 0, empty: 0, emptyPages: [], konular: {} };
       const dersEntry = byDers[topic.ders];
       dersEntry.total++;
       if (isCorrect) dersEntry.correct++;
-      if (isEmpty) dersEntry.empty++;
+      if (isEmpty) { dersEntry.empty++; dersEntry.emptyPages.push(i); }
 
       if (!dersEntry.konular[konuName]) {
         dersEntry.konular[konuName] = { correct: 0, total: 0, empty: 0, emptyPages: [], kazanimlar: {} };
@@ -2075,31 +2075,49 @@ export default function App() {
     // göre belirgin şekilde daha boş kalmışsa.
     const sureSorunuGlobal = tailEmptyRatio >= 0.5 && (tailEmptyRatio - examEmptyRatio) >= 0.25;
 
-    // İkinci geçiş: her konu için tier + hedefDisi hesapla.
-    Object.values(byDers).forEach((dersEntry) => {
-      Object.entries(dersEntry.konular).forEach(([konuName, konuEntry]) => {
-        const oran = konuEntry.total > 0 ? konuEntry.correct / konuEntry.total : 0;
-        const konuEmptyRatio = konuEntry.total > 0 ? konuEntry.empty / konuEntry.total : 0;
-        const konuTailShare = konuEntry.emptyPages.length > 0
-          ? konuEntry.emptyPages.filter((p) => p >= tailStart).length / konuEntry.emptyPages.length
-          : 0;
+    // Konu VE Ders seviyesinde AYNI barem kullanılıyor -- tek bir yerden
+    // hesaplanıyor ki ikisi arasında tutarsızlık olmasın.
+    // Barem: Riskli <%30, Gelişmekte %30-50, İyi %50-70, Harika >=%70.
+    // "Hedefte Değil" ayrı bir kural: boş oranı çok yüksekse (>=%60) VE
+    // sınav geneli boş oranı düşükse (<%35) VE bu "süre yetişmedi" ile
+    // açıklanamıyorsa (boşluklar sona kümelenmiş değilse), öğrencinin o
+    // ders/konuyu BİLEREK atlamış olabileceğini varsayıp nötr gösteriyoruz.
+    const computeTier = (entry) => {
+      const oran = entry.total > 0 ? entry.correct / entry.total : 0;
+      const emptyRatio = entry.total > 0 ? entry.empty / entry.total : 0;
+      const tailShare = entry.emptyPages.length > 0
+        ? entry.emptyPages.filter((p) => p >= tailStart).length / entry.emptyPages.length
+        : 0;
 
-        if (
-          konuEmptyRatio >= 0.6 &&
-          examEmptyRatio < 0.35 &&
-          !(sureSorunuGlobal && konuTailShare >= 0.6)
-        ) {
-          konuEntry.tier = 'hedefDisi';
-        } else if (oran < 0.4) {
-          konuEntry.tier = 'riskli';
-        } else if (oran < 0.7) {
-          konuEntry.tier = 'gelismekte';
-        } else if (oran < 0.9) {
-          konuEntry.tier = 'iyi';
-        } else {
-          konuEntry.tier = 'harika';
-        }
-        konuEntry.oran = oran;
+      let tier;
+      if (
+        emptyRatio >= 0.6 &&
+        examEmptyRatio < 0.35 &&
+        !(sureSorunuGlobal && tailShare >= 0.6)
+      ) {
+        tier = 'hedefDisi';
+      } else if (oran < 0.3) {
+        tier = 'riskli';
+      } else if (oran < 0.5) {
+        tier = 'gelismekte';
+      } else if (oran < 0.7) {
+        tier = 'iyi';
+      } else {
+        tier = 'harika';
+      }
+      return { tier, oran };
+    };
+
+    // İkinci geçiş: her Ders VE her Konu için tier hesapla.
+    Object.values(byDers).forEach((dersEntry) => {
+      const dersTierResult = computeTier(dersEntry);
+      dersEntry.tier = dersTierResult.tier;
+      dersEntry.oran = dersTierResult.oran;
+
+      Object.entries(dersEntry.konular).forEach(([konuName, konuEntry]) => {
+        const konuTierResult = computeTier(konuEntry);
+        konuEntry.tier = konuTierResult.tier;
+        konuEntry.oran = konuTierResult.oran;
       });
     });
 
@@ -2185,7 +2203,46 @@ export default function App() {
     }
   };
 
-  // Konu kartlarındaki tier rozeti için renk/etiket eşlemesi.
+  // Ders (Türkçe/Matematik/Tarih...) seviyesindeki tier'a göre kısa bir
+  // değerlendirme + (varsa) aksiyon. Konu seviyesinden farklı olarak:
+  // - riskli: doğrudan bir kaynak önermek yerine SORUYORUZ (bilinçli mi
+  //   çalışmıyor, yoksa zorlanıyor mu belli değil) -- aksiyon yok, sadece mesaj.
+  // - gelismekte: aşağıdaki konu kırılımına bakmasını öneriyoruz -- aksiyon yok,
+  //   zaten konu listesi hemen altında duruyor.
+  // - iyi / harika: aynı dersten yeni bir deneme öneriyoruz (findOnerilenDeneme).
+  const getDersTavsiyesi = (dersName, dersEntry) => {
+    switch (dersEntry.tier) {
+      case 'riskli':
+        return {
+          mesaj: `${dersName} dersinde genel olarak zorlanıyor gibisin. Bu, konuya hiç çalışmamış olmandan mı, yoksa çalışıp da zorlanmandan mı kaynaklanıyor? Aşağıdaki konulara bakarak nereden başlayacağını görebilirsin.`,
+          aksiyon: null,
+        };
+      case 'gelismekte':
+        return {
+          mesaj: `${dersName} dersinde orta seviyedesin. Aşağıdaki konu kırılımına bakarak hangi konuların seni geride bıraktığını görebilir, oradan bir konu testiyle pekiştirebilirsin.`,
+          aksiyon: null,
+        };
+      case 'iyi':
+        return {
+          mesaj: `${dersName} dersine genel olarak hakimsin. Aynı dersten yeni bir deneme çözerek sağlama alabilirsin.`,
+          aksiyon: 'deneme',
+        };
+      case 'harika':
+        return {
+          mesaj: `${dersName} dersinde harikasın! Aynı dersten yeni bir denemeyle kendini bir üst seviyede zorlayabilirsin.`,
+          aksiyon: 'deneme',
+        };
+      case 'hedefDisi':
+        return {
+          mesaj: `${dersName} dersindeki soruların büyük kısmını boş bırakmışsın. Bu ders hedefinde değilse sorun değil.`,
+          aksiyon: null,
+        };
+      default:
+        return { mesaj: `${dersName} dersi için bir değerlendirme oluşturulamadı.`, aksiyon: null };
+    }
+  };
+
+
   const KONU_TIER_META = {
     riskli: { label: 'Riskli', color: '#E24B4A', bg: '#FBE4E2' },
     gelismekte: { label: 'Gelişmekte', color: '#B8860B', bg: '#FBF0D9' },
@@ -5185,10 +5242,19 @@ export default function App() {
                   {Object.entries(kazanimReport.byDers).map(([ders, dersData]) => {
                     const dersGreenWidth = getBaremGreenWidth(dersData.correct, dersData.total);
                     const dersTextColor = getBaremTextColor(dersData.correct, dersData.total);
+                    const dersMeta = KONU_TIER_META[dersData.tier] || { label: dersData.tier || '-', color: '#64748B', bg: '#F1F5F9' };
+                    const dersTavsiye = getDersTavsiyesi(ders, dersData);
+                    let dersCtaExam = null;
+                    if (dersTavsiye.aksiyon === 'deneme') {
+                      dersCtaExam = findOnerilenDeneme(activeStudentExam.id, activeStudentExam.examType, ders);
+                    }
                     return (
                       <div key={ders} className="yt-kazanim-box">
-                        <div className="head" style={{ display: 'grid', gridTemplateColumns: '1fr 150px', alignItems: 'center', gap: '12px' }}>
+                        <div className="head" style={{ display: 'grid', gridTemplateColumns: '1fr auto 150px', alignItems: 'center', gap: '12px' }}>
                           <span>{ders}</span>
+                          <span style={{ fontSize: '0.7rem', fontWeight: 'bold', padding: '3px 8px', borderRadius: '999px', color: dersMeta.color, backgroundColor: dersMeta.bg, whiteSpace: 'nowrap' }}>
+                            {dersMeta.label}
+                          </span>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <div style={{ flex: 1, height: '16px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: '#E24B4A' }}>
                               <div style={{ height: '100%', width: `${dersGreenWidth}%`, backgroundColor: '#639922' }}></div>
@@ -5198,6 +5264,17 @@ export default function App() {
                             </span>
                           </div>
                         </div>
+
+                        <p style={{ margin: '8px 0 0 0', fontSize: '0.8rem', color: 'var(--yt-ink)' }}>{dersTavsiye.mesaj}</p>
+                        {dersTavsiye.aksiyon === 'deneme' && dersCtaExam && (
+                          <button
+                            onClick={() => { setActiveStudentExamId(null); setInspectingExamId(dersCtaExam.id); }}
+                            className="yt-btn yt-btn-primary"
+                            style={{ fontSize: '0.78rem', padding: '6px 12px', marginTop: '8px' }}
+                          >
+                            🚀 {dersCtaExam.name || 'Yeni Deneme'}'yi Çöz
+                          </button>
+                        )}
 
                         <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                           {Object.entries(dersData.konular).map(([konuName, konuEntry]) => {
