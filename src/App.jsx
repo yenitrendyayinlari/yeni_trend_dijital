@@ -3912,6 +3912,13 @@ export default function App() {
                   )}
                   {childExams.map((subExam, index) => {
                     const answeredCount = Object.keys(subExam.answerKey || {}).length;
+                    // Bir sorunun kazanımı "tam" sayılması için Ders/Konu/Kazanım
+                    // üçünün de dolu olması gerekir -- sadece konu seçilip kazanım
+                    // boş bırakılmışsa (ya da hiç satırı yoksa) eksik sayılır.
+                    const kazanimCompleteCount = Object.values(subExam.topicMap || {})
+                      .filter((e) => e && e.ders && e.konu && e.kazanim).length;
+                    const kazanimTotal = subExam.numPages || 0;
+                    const kazanimOk = kazanimTotal > 0 && kazanimCompleteCount === kazanimTotal;
                     return (
                       <div
                         key={subExam.id}
@@ -3953,6 +3960,10 @@ export default function App() {
                           <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '2px' }}>
                             {subExam.pdfFile ? '✓ PDF' : '✗ PDF yok'} · Cevap {answeredCount}/{subExam.numPages || 0}
                             {subExam.solutionPdfFile ? ' · ✓ Çözüm' : ''}
+                            {' · '}
+                            <span style={{ color: kazanimOk ? '#16a34a' : '#dc2626', fontWeight: kazanimOk ? 'normal' : 'bold' }}>
+                              {kazanimOk ? '✓ Kazanım' : `✗ Kazanım ${kazanimCompleteCount}/${kazanimTotal}`}
+                            </span>
                           </div>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
