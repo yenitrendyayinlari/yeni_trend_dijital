@@ -69,7 +69,7 @@ const bannerStyles = `
     margin-left: -50vw;
     margin-right: -50vw;
     box-sizing: border-box;
-    background: #17213a;
+    background: #3a1359;
     color: #fff;
     display: flex;
     align-items: center;
