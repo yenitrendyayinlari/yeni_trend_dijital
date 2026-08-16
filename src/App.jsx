@@ -46,6 +46,7 @@ export default function App() {
   const [quickKazanimDers, setQuickKazanimDers] = useState('');
   const [quickKazanimKonu, setQuickKazanimKonu] = useState('');
   const [quickKazanimText, setQuickKazanimText] = useState('');
+  const [copyKazanimSourceId, setCopyKazanimSourceId] = useState('');
   const [isCreatingExam, setIsCreatingExam] = useState(false);
   // Sınav Türü / Ders Türü artık serbest metin değil, sabit bir listeden
   // seçiliyor (bkz. Yeni İçerik Ayarları formu). Bu iki state, o listeleri
@@ -1523,6 +1524,66 @@ export default function App() {
     alert(`✓ ${total} sorunun tamamına "${cleanDers} / ${cleanKonu} / ${cleanKazanim}" uygulandı.`);
   };
 
+  // Aynı ürün altındaki (ör. "KPSS Tarih Son Tekrar" paketindeki 7 deneme
+  // gibi) testlerin genelde SORU SIRASI ve KONU DAĞILIMI birebir aynı olur.
+  // Bu yüzden bir testin kazanım haritasını, zaten kazanımı girilmiş başka
+  // bir testten olduğu gibi kopyalayabilmek için: kaynak testin topicMap'ini
+  // (derin kopya alarak) hedef teste yazıyoruz, mevcut haritanın üzerine.
+  const handleCopyKazanimFromExam = (targetExamId, sourceExamId) => {
+    const sourceExam = exams.find((e) => e.id === sourceExamId);
+    if (!sourceExam || !sourceExam.topicMap || Object.keys(sourceExam.topicMap).length === 0) {
+      alert('Seçilen testte henüz kazanım haritası yok.');
+      return;
+    }
+    const targetExam = exams.find((e) => e.id === targetExamId);
+    const targetCount = targetExam?.numPages || 0;
+    const sourceCount = Object.keys(sourceExam.topicMap).length;
+    const mismatchWarning = targetCount && sourceCount !== targetCount
+      ? `\n\nUyarı: Kaynak testte ${sourceCount} soru için kazanım var, bu testte ise ${targetCount} soru var. Soru sayıları farklı olduğu için sondaki/eksik sorularda kazanım eşleşmesi yanlış olabilir, kopyaladıktan sonra listeyi gözden geçirin.`
+      : '';
+    if (!window.confirm(`"${sourceExam.name || 'İsimsiz Sınav'}" testinin kazanım haritası (${sourceCount} soru) bu teste kopyalanacak ve mevcut kazanım haritasının üzerine yazılacak. Devam edilsin mi?${mismatchWarning}`)) {
+      return;
+    }
+    const copiedTopicMap = JSON.parse(JSON.stringify(sourceExam.topicMap));
+    updateTopicMapInDb(targetExamId, copiedTopicMap);
+    alert(`✓ ${Object.keys(copiedTopicMap).length} sorunun kazanımı kopyalandı.`);
+  };
+
+  // Bir kazanım adının Kategori Yönetimi'ndeki master listeyle birebir
+  // eşleşmediği durumlarda, admin'e "bunu mu demek istediniz?" ipucu vermek
+  // için büyük/küçük harf ve fazla boşluk farkını göz ardı ederek arar.
+  // NOT: Bu sadece bir ÖNERİDİR, otomatik uygulanmaz -- eşleştirme yine katı.
+  const normalizeForSuggestion = (s) => (s || '').trim().toLocaleLowerCase('tr').replace(/\s+/g, ' ');
+  const suggestClosestName = (list, raw) => {
+    const norm = normalizeForSuggestion(raw);
+    const hit = list.find((x) => normalizeForSuggestion(x.name) === norm);
+    return hit ? ` (Bunu mu demek istediniz: "${hit.name}"?)` : '';
+  };
+
+  // Kazanım Referans Listesi: Kategori Yönetimi'ndeki tüm Ders/Konu/Kazanım
+  // adlarını, Excel yüklemesinde beklenen sütun sırasıyla (Ders, Konu,
+  // Kazanım) bir .xlsx dosyasına döker. Admin buradan kopyala-yapıştır
+  // yaparak Excel'e yazım hatasız isim girebilir -- yükleme artık BİREBİR
+  // eşleşme istediği için bu liste pratikte zorunlu bir yardımcı oldu.
+  const downloadKazanimReferenceList = () => {
+    const rows = [['Ders', 'Konu', 'Kazanım']];
+    learningOutcomes
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
+      .forEach((o) => {
+        const topic = topics.find((t) => t.id === o.topic_id);
+        const lesson = topic
+          ? lessonCategories.find((lc) => lc.id === topic.lesson_category_id)
+          : lessonCategories.find((lc) => lc.id === o.lesson_category_id);
+        if (!topic) return; // konusuz kazanımlar Excel akışında kullanılamıyor, listeye eklemiyoruz
+        rows.push([lesson?.name || '', topic.name, o.name]);
+      });
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Kazanımlar');
+    XLSX.writeFile(wb, 'kazanim-referans-listesi.xlsx');
+  };
+
   const handleTopicMapUpload = (examId, e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1538,17 +1599,58 @@ export default function App() {
         const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
         const newTopicMap = {};
+        const problems = [];
         let count = 0;
+
         for (let i = 1; i < rows.length; i++) { // 0. satır başlık, 1'den başla
           const row = rows[i];
           if (!row || row.length < 4) continue;
           const soruNo = Number(row[0]);
-          const ders = String(row[1] || '').trim();
-          const konu = String(row[2] || '').trim();
-          const kazanim = String(row[3] || '').trim();
-          if (!soruNo || !ders || !konu || !kazanim) continue;
-          newTopicMap[soruNo] = { ders, konu, kazanim };
+          const dersRaw = String(row[1] || '').trim();
+          const konuRaw = String(row[2] || '').trim();
+          const kazanimRaw = String(row[3] || '').trim();
+          if (!soruNo || !dersRaw || !konuRaw || !kazanimRaw) continue;
+
+          // ÖNEMLİ: Kazanım sistemi artık dropdown/master listeye dayanıyor
+          // (bkz. resolveLiveKonuForEntry, Kazanım Referans Listesi). Excel'deki
+          // Ders/Konu/Kazanım metinlerinin Kategori Yönetimi'ndeki kayıtlarla
+          // BİREBİR eşleşmesi gerekir -- aksi halde o soru dropdown'larda
+          // "seçili" görünmez, isim değişikliklerini otomatik yakalayamaz ve
+          // ileride konu/kazanım id'sine dayalı test tavsiyesinde bu soru
+          // SİSTEM TARAFINDAN GÖRÜLEMEZ. Bu yüzden eşleşmeyen satırları
+          // sessizce kaydetmek yerine, TÜM yüklemeyi durdurup admin'e tam
+          // olarak hangi satırda ne yazması gerektiğini gösteriyoruz.
+          const lesson = lessonCategories.find((lc) => lc.name === dersRaw);
+          const topic = lesson ? topics.find((t) => t.name === konuRaw && t.lesson_category_id === lesson.id) : null;
+          const outcome = topic ? learningOutcomes.find((o) => o.name === kazanimRaw && o.topic_id === topic.id) : null;
+
+          if (!lesson || !topic || !outcome) {
+            let reason;
+            if (!lesson) {
+              reason = `Ders Türü "${dersRaw}" bulunamadı.${suggestClosestName(lessonCategories, dersRaw)}`;
+            } else if (!topic) {
+              reason = `"${lesson.name}" ders türünde "${konuRaw}" adında bir Konu bulunamadı.${suggestClosestName(topics.filter((t) => t.lesson_category_id === lesson.id), konuRaw)}`;
+            } else {
+              reason = `"${topic.name}" konusunda "${kazanimRaw}" adında bir Kazanım bulunamadı.${suggestClosestName(learningOutcomes.filter((o) => o.topic_id === topic.id), kazanimRaw)}`;
+            }
+            problems.push(`Soru ${soruNo}: ${reason}`);
+            continue;
+          }
+
+          // Bulunan master kaydın ADINI (kendi yazdıkları değil) yazıyoruz --
+          // böylece küçük bir boşluk farkı bile olsa kayıtta tam master metin durur.
+          newTopicMap[soruNo] = { ders: lesson.name, konu: topic.name, kazanim: outcome.name };
           count++;
+        }
+
+        if (problems.length > 0) {
+          alert(
+            `Yükleme durduruldu -- ${problems.length} satırda Ders/Konu/Kazanım adı Kategori Yönetimi'ndeki kayıtlarla birebir eşleşmiyor:\n\n` +
+            problems.slice(0, 15).join('\n') +
+            (problems.length > 15 ? `\n...ve ${problems.length - 15} satır daha` : '') +
+            `\n\nDoğru adları "Kazanım Referans Listesi İndir" ile alıp Excel'e kopyalayıp tekrar yükleyin.`
+          );
+          return;
         }
 
         if (count === 0) {
@@ -2960,6 +3062,13 @@ export default function App() {
                 <h3 style={{ margin: '0 0 12px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>📊 Kazanım Haritası</h3>
 
                 <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Excel ile Yükle:</label>
+                <button
+                  type="button"
+                  onClick={downloadKazanimReferenceList}
+                  style={{ marginBottom: '6px', padding: '5px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', color: '#0f172a', cursor: 'pointer', fontSize: '0.76rem', fontWeight: 'bold' }}
+                >
+                  📥 Kazanım Referans Listesi İndir
+                </button>
                 <input
                   type="file"
                   accept=".xlsx,.xls"
@@ -2967,7 +3076,7 @@ export default function App() {
                   style={{ fontSize: '0.8rem', width: '100%' }}
                 />
                 <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '4px' }}>
-                  Sütun sırası: 1. Soru No, 2. Ders, 3. Konu, 4. Kazanım (ilk satır başlık kabul edilir). Yeniden yüklersen mevcut liste tamamen değişir.
+                  Sütun sırası: 1. Soru No, 2. Ders, 3. Konu, 4. Kazanım (ilk satır başlık kabul edilir). Ders/Konu/Kazanım adları Kategori Yönetimi'ndeki kayıtlarla BİREBİR aynı olmalı -- farklı yazılmış bir satır varsa yükleme durdurulup hangi satırda ne yazmanız gerektiği gösterilir. Önce yukarıdaki referans listesini indirip oradan kopyalamanız önerilir. Yeniden yüklersen mevcut liste tamamen değişir.
                 </div>
 
                 <div style={{ marginTop: '14px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
@@ -3132,6 +3241,61 @@ export default function App() {
                     1'den {editingExam.numPages || 0}'e kadar tüm sorulara aynı Ders/Kazanım atanır ve mevcut kazanım haritasının üzerine yazılır.
                   </div>
                 </div>
+
+                {(() => {
+                  // Kopyalama kaynağı olarak önce AYNI ürün altındaki kardeş
+                  // testleri (parentId aynı), sonra kazanımı dolu diğer tüm
+                  // testleri listeliyoruz -- en olası kullanım "aynı paketteki
+                  // 7 deneme" senaryosu olduğu için kardeşler üstte çıkıyor.
+                  const copyCandidates = exams
+                    .filter((e) => e.id !== editingExam.id && e.topicMap && Object.keys(e.topicMap).length > 0)
+                    .sort((a, b) => {
+                      const aSibling = a.parentId && a.parentId === editingExam.parentId;
+                      const bSibling = b.parentId && b.parentId === editingExam.parentId;
+                      if (aSibling !== bSibling) return aSibling ? -1 : 1;
+                      return (a.name || '').localeCompare(b.name || '', 'tr');
+                    });
+                  return (
+                    <div style={{ marginTop: '12px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
+                      <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>
+                        📋 Başka Testten Kazanım Kopyala (soru sayısı/sırası aynıysa)
+                      </label>
+                      {copyCandidates.length === 0 ? (
+                        <div style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Kazanım haritası dolu başka bir test bulunamadı.</div>
+                      ) : (
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          <select
+                            value={copyKazanimSourceId}
+                            onChange={(e) => setCopyKazanimSourceId(e.target.value)}
+                            style={{ flex: '1 1 260px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: '#fff' }}
+                          >
+                            <option value="">Kaynak Test Seçin</option>
+                            {copyCandidates.map((e) => {
+                              const isSibling = e.parentId && e.parentId === editingExam.parentId;
+                              const parentName = !isSibling && e.parentId ? exams.find((p) => p.id === e.parentId)?.name : null;
+                              const label = `${parentName ? parentName + ' · ' : ''}${e.name || 'İsimsiz Test'} (${Object.keys(e.topicMap).length} soru)`;
+                              return <option key={e.id} value={e.id}>{label}</option>;
+                            })}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!copyKazanimSourceId) { alert('Önce kaynak test seçin.'); return; }
+                              handleCopyKazanimFromExam(editingExam.id, copyKazanimSourceId);
+                            }}
+                            className="yt-btn"
+                            style={{ fontSize: '0.8rem', padding: '6px 14px', whiteSpace: 'nowrap' }}
+                          >
+                            Kopyala
+                          </button>
+                        </div>
+                      )}
+                      <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '6px' }}>
+                        Seçilen testin kazanım haritası olduğu gibi bu teste kopyalanır ve mevcut kazanım haritasının üzerine yazılır.
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {editingExam.topicMap && Object.keys(editingExam.topicMap).length > 0 && (
                   <div style={{ marginTop: '14px' }}>
