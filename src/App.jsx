@@ -47,6 +47,10 @@ export default function App() {
   const [quickKazanimKonu, setQuickKazanimKonu] = useState('');
   const [quickKazanimText, setQuickKazanimText] = useState('');
   const [copyKazanimSourceId, setCopyKazanimSourceId] = useState('');
+  // Kazanım Haritası panelindeki üç araç kutusu (Excel/Tek Kazanım/Kopyala)
+  // varsayılan KAPALI başlar -- böylece soru görüntüleyiciye bakarken kazanım
+  // listesi ekrana daha yakın durur, araçlara ihtiyaç oldukça açılır.
+  const [kazanimToolsOpen, setKazanimToolsOpen] = useState({ excel: false, quick: false, copy: false });
   const [isCreatingExam, setIsCreatingExam] = useState(false);
   // Sınav Türü / Ders Türü artık serbest metin değil, sabit bir listeden
   // seçiliyor (bkz. Yeni İçerik Ayarları formu). Bu iki state, o listeleri
@@ -3224,28 +3228,43 @@ export default function App() {
               <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px' }}>
                 <h3 style={{ margin: '0 0 12px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>📊 Kazanım Haritası</h3>
 
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Excel ile Yükle:</label>
                 <button
                   type="button"
-                  onClick={downloadKazanimReferenceList}
-                  style={{ marginBottom: '6px', padding: '5px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', color: '#0f172a', cursor: 'pointer', fontSize: '0.76rem', fontWeight: 'bold' }}
+                  onClick={() => setKazanimToolsOpen((prev) => ({ ...prev, excel: !prev.excel }))}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '100%', textAlign: 'left', padding: '8px 10px', marginBottom: kazanimToolsOpen.excel ? '0' : '4px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.82rem', color: '#0f172a' }}
                 >
-                  📥 Kazanım Referans Listesi İndir
+                  <span>{kazanimToolsOpen.excel ? '▾' : '▸'}</span> Excel ile Yükle
                 </button>
-                <input
-                  type="file"
-                  accept=".xlsx,.xls"
-                  onChange={(e) => handleTopicMapUpload(editingExam.id, e)}
-                  style={{ fontSize: '0.8rem', width: '100%' }}
-                />
-                <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '4px' }}>
-                  Sütun sırası: 1. Soru No, 2. Ders, 3. Konu, 4. Kazanım (ilk satır başlık kabul edilir). Ders/Konu/Kazanım adları Kategori Yönetimi'ndeki kayıtlarla BİREBİR aynı olmalı -- farklı yazılmış bir satır varsa yükleme durdurulup hangi satırda ne yazmanız gerektiği gösterilir. Önce yukarıdaki referans listesini indirip oradan kopyalamanız önerilir. Yeniden yüklersen mevcut liste tamamen değişir.
-                </div>
+                {kazanimToolsOpen.excel && (
+                  <div style={{ padding: '10px', border: '1px solid #e2e8f0', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', marginBottom: '8px' }}>
+                    <button
+                      type="button"
+                      onClick={downloadKazanimReferenceList}
+                      style={{ marginBottom: '6px', padding: '5px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', color: '#0f172a', cursor: 'pointer', fontSize: '0.76rem', fontWeight: 'bold' }}
+                    >
+                      📥 Kazanım Referans Listesi İndir
+                    </button>
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls"
+                      onChange={(e) => handleTopicMapUpload(editingExam.id, e)}
+                      style={{ fontSize: '0.8rem', width: '100%' }}
+                    />
+                    <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '4px' }}>
+                      Sütun sırası: 1. Soru No, 2. Ders, 3. Konu, 4. Kazanım (ilk satır başlık kabul edilir). Ders/Konu/Kazanım adları Kategori Yönetimi'ndeki kayıtlarla BİREBİR aynı olmalı -- farklı yazılmış bir satır varsa yükleme durdurulup hangi satırda ne yazmanız gerektiği gösterilir. Önce yukarıdaki referans listesini indirip oradan kopyalamanız önerilir. Yeniden yüklersen mevcut liste tamamen değişir.
+                    </div>
+                  </div>
+                )}
 
-                <div style={{ marginTop: '14px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
-                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>
-                    ⚡ Tek Kazanım Uygula (bu testin tüm soruları aynı konuysa)
-                  </label>
+                <button
+                  type="button"
+                  onClick={() => setKazanimToolsOpen((prev) => ({ ...prev, quick: !prev.quick }))}
+                  style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '100%', textAlign: 'left', padding: '8px 10px', marginBottom: kazanimToolsOpen.quick ? '0' : '4px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.82rem', color: '#0f172a' }}
+                >
+                  <span>{kazanimToolsOpen.quick ? '▾' : '▸'}</span> ⚡ Tek Kazanım Uygula (bu testin tüm soruları aynı konuysa)
+                </button>
+                {kazanimToolsOpen.quick && (
+                <div style={{ padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', borderTop: 'none', marginBottom: '8px' }}>
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     <select
                       value={quickKazanimDers}
@@ -3404,6 +3423,7 @@ export default function App() {
                     1'den {editingExam.numPages || 0}'e kadar tüm sorulara aynı Ders/Kazanım atanır ve mevcut kazanım haritasının üzerine yazılır.
                   </div>
                 </div>
+                )}
 
                 {(() => {
                   // Kopyalama kaynağı olarak önce AYNI ürün altındaki kardeş
@@ -3419,10 +3439,16 @@ export default function App() {
                       return (a.name || '').localeCompare(b.name || '', 'tr');
                     });
                   return (
-                    <div style={{ marginTop: '12px', padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px dashed #cbd5e1' }}>
-                      <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>
-                        📋 Başka Testten Kazanım Kopyala (soru sayısı/sırası aynıysa)
-                      </label>
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setKazanimToolsOpen((prev) => ({ ...prev, copy: !prev.copy }))}
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '100%', textAlign: 'left', padding: '8px 10px', marginBottom: kazanimToolsOpen.copy ? '0' : '4px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.82rem', color: '#0f172a' }}
+                      >
+                        <span>{kazanimToolsOpen.copy ? '▾' : '▸'}</span> 📋 Başka Testten Kazanım Kopyala (soru sayısı/sırası aynıysa)
+                      </button>
+                      {kazanimToolsOpen.copy && (
+                    <div style={{ padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', borderTop: 'none', marginBottom: '8px' }}>
                       {copyCandidates.length === 0 ? (
                         <div style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Kazanım haritası dolu başka bir test bulunamadı.</div>
                       ) : (
@@ -3457,23 +3483,17 @@ export default function App() {
                         Seçilen testin kazanım haritası olduğu gibi bu teste kopyalanır ve mevcut kazanım haritasının üzerine yazılır.
                       </div>
                     </div>
+                      )}
+                    </>
                   );
                 })()}
 
                 {editingExam.topicMap && Object.keys(editingExam.topicMap).length > 0 && (
                   <div style={{ marginTop: '14px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <div style={{ marginBottom: '8px' }}>
                       <span style={{ fontSize: '0.8rem', color: '#16a34a', fontWeight: 'bold' }}>
                         ✓ {Object.keys(editingExam.topicMap).length} soru için kazanım eklendi.
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => { updateTopicMapInDb(editingExam.id, editingExam.topicMap); alert('Kazanım haritası kaydedildi.'); }}
-                        className="yt-btn"
-                        style={{ fontSize: '0.8rem', padding: '6px 14px' }}
-                      >
-                        💾 Kaydet
-                      </button>
                     </div>
 
                     <div style={{ maxHeight: '420px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
@@ -3511,7 +3531,7 @@ export default function App() {
                                               applyTopicMapPatch(editingExam.id, (tm) => ({
                                                 ...tm,
                                                 [soruNo]: { ders: created.name, konu: '', kazanim: '' }
-                                              }));
+                                              }), { persist: true });
                                             });
                                           }
                                           return;
@@ -3519,7 +3539,7 @@ export default function App() {
                                         applyTopicMapPatch(editingExam.id, (tm) => ({
                                           ...tm,
                                           [soruNo]: { ders: e.target.value, konu: '', kazanim: '' }
-                                        }));
+                                        }), { persist: true });
                                       }}
                                       style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: '#fff' }}
                                     >
@@ -3549,7 +3569,7 @@ export default function App() {
                                               applyTopicMapPatch(editingExam.id, (tm) => ({
                                                 ...tm,
                                                 [soruNo]: { ...tm[soruNo], konu: created.name, kazanim: '' }
-                                              }));
+                                              }), { persist: true });
                                             });
                                           }
                                           return;
@@ -3557,7 +3577,7 @@ export default function App() {
                                         applyTopicMapPatch(editingExam.id, (tm) => ({
                                           ...tm,
                                           [soruNo]: { ...tm[soruNo], konu: e.target.value, kazanim: '' }
-                                        }));
+                                        }), { persist: true });
                                       }}
                                       style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: entry.ders ? '#fff' : '#f1f5f9' }}
                                     >
@@ -3588,7 +3608,7 @@ export default function App() {
                                               applyTopicMapPatch(editingExam.id, (tm) => ({
                                                 ...tm,
                                                 [soruNo]: { ...tm[soruNo], kazanim: created.name }
-                                              }));
+                                              }), { persist: true });
                                             });
                                           }
                                           return;
@@ -3596,7 +3616,7 @@ export default function App() {
                                         applyTopicMapPatch(editingExam.id, (tm) => ({
                                           ...tm,
                                           [soruNo]: { ...tm[soruNo], kazanim: e.target.value }
-                                        }));
+                                        }), { persist: true });
                                       }}
                                       style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: liveKonu ? '#fff' : '#f1f5f9' }}
                                     >
