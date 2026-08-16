@@ -1530,7 +1530,13 @@ export default function App() {
   // bir testten olduğu gibi kopyalayabilmek için: kaynak testin topicMap'ini
   // (derin kopya alarak) hedef teste yazıyoruz, mevcut haritanın üzerine.
   const handleCopyKazanimFromExam = (targetExamId, sourceExamId) => {
-    const sourceExam = exams.find((e) => e.id === sourceExamId);
+    // ÖNEMLİ (bug fix -- aynı sınıf hata Kategori Yönetimi'nde de vardı):
+    // <select>'in e.target.value değeri DOM'da HER ZAMAN string gelir, ama
+    // exams.id veritabanından sayısal olabilir. Katı eşitlik (===) bu yüzden
+    // eşleşmeyip "kazanım haritası yok" hatasına sebep oluyordu -- oysa
+    // dropdown'da (Object.keys(e.topicMap).length) doğru gösteriliyordu,
+    // yani veri zaten oradaydı, sadece id karşılaştırması başarısız oluyordu.
+    const sourceExam = exams.find((e) => String(e.id) === String(sourceExamId));
     if (!sourceExam || !sourceExam.topicMap || Object.keys(sourceExam.topicMap).length === 0) {
       alert('Seçilen testte henüz kazanım haritası yok.');
       return;
