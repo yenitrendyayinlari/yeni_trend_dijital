@@ -110,11 +110,10 @@ export default function App() {
   const [isPaused, setIsPaused] = useState(false);
   const [examStarted, setExamStarted] = useState(false); // Öğrenci "Başla"ya basana kadar süre işlemeye başlamaz
   // Odak Modu: soru çözüm ekranında site header'ını (logo/menü) gizleyip
-  // soru alanına daha fazla yer açar. Native Fullscreen API'yi de (destekleyen
-  // cihazlarda, ör. Android/masaüstü) ek olarak tetikler; iOS Safari'de bu
-  // API çalışmadığı için asıl işi header gizleme yapar.
+  // soru alanına daha fazla yer açar. Sadece CSS/state ile çalışır --
+  // native tarayıcı Fullscreen API'si kasıtlı olarak kullanılmıyor (bkz.
+  // toggleFocusMode tanımındaki not).
   const [focusMode, setFocusMode] = useState(false);
-  const examShellRef = useRef(null);
   const [isExamFinished, setIsExamFinished] = useState(false);
   const [showResults, setShowResults] = useState(false);
   
@@ -1289,19 +1288,6 @@ export default function App() {
       return () => clearInterval(timer);
     }
   }, [user, appMode, activeStudentExam, isExamFinished, showResults, isPaused]);
-
-  // Kullanıcı native tam ekrandan Esc/geri tuşuyla çıkarsa (Odak Modu
-  // açıkken tetiklenmiş olabilir), Odak Modu state'ini de kapatıp
-  // header'ın tekrar görünmesini sağlıyoruz.
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      if (!document.fullscreenElement) {
-        setFocusMode(false);
-      }
-    };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -4667,27 +4653,14 @@ export default function App() {
       );
     }
 
-    // Odak Modu aç/kapa: site header'ını her zaman gizler/gösterir; ayrıca
-    // destekleyen cihazlarda (iOS Safari HARİÇ) native tam ekranı da dener.
-    // Native API başarısız olsa/olmasa da Odak Modu'nun kendisi çalışmaya
-    // devam eder çünkü asıl iş CSS/state ile yapılıyor.
-    const toggleFocusMode = () => {
-      const next = !focusMode;
-      setFocusMode(next);
-      try {
-        if (next) {
-          const el = examShellRef.current;
-          if (el && el.requestFullscreen) {
-            el.requestFullscreen().catch(() => {});
-          }
-        } else if (document.fullscreenElement) {
-          document.exitFullscreen().catch(() => {});
-        }
-      } catch (e) {
-        // Fullscreen API desteklenmiyor (ör. iOS Safari) -- sorun değil,
-        // Odak Modu zaten header gizleme ile çalışıyor.
-      }
-    };
+    // Odak Modu aç/kapa: soru çözüm ekranında site header'ını (logo, menü,
+    // sepet vb.) gizleyip soru alanına daha fazla dikey yer açar. Bilerek
+    // native tarayıcı Fullscreen API'sini KULLANMIYORUZ -- o API elementi
+    // gerçekten tam ekran genişlik/yükseklikte büyütmediği durumlarda
+    // (ör. max-width sınırlı container'larda) geri kalan alanı siyah
+    // bırakıyor ve tarayıcıdan tarayıcıya tutarsız davranıyor. Bu CSS
+    // tabanlı yöntem her cihazda (iOS dahil) aynı ve öngörülebilir çalışır.
+    const toggleFocusMode = () => setFocusMode((f) => !f);
 
     // Sınav / Test Çözüm Ekranı
     if (!activeStudentExam) return null;
@@ -4700,7 +4673,7 @@ export default function App() {
     const myActiveRating = studentResultsMap[activeStudentExamId]?.rating || 0;
 
     return (
-      <div ref={examShellRef} className="yt-shell" style={{ maxWidth: '1300px', margin: '0 auto', padding: focusMode ? '12px' : '24px' }}>
+      <div className="yt-shell" style={{ maxWidth: '1300px', margin: '0 auto', padding: focusMode ? '12px' : '24px' }}>
         {!focusMode && (
           <header className="yt-header" style={{ marginBottom: '20px' }}>
             <div className="yt-header-inner">
