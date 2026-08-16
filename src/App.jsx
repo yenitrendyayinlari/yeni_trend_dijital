@@ -119,6 +119,9 @@ export default function App() {
   const [focusMode, setFocusMode] = useState(false);
   const [isExamFinished, setIsExamFinished] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  // Sonuç ekranındaki Kazanım Analizi'nde hangi Konu kartlarının açık
+  // (kazanım detayı görünür) olduğunu tutar. Anahtar: "ders::konu".
+  const [expandedKonular, setExpandedKonular] = useState({});
   
   const [viewingSolutionQ, setViewingSolutionQ] = useState(false);
   const solutionRef = useRef(null);
@@ -1979,12 +1982,30 @@ export default function App() {
     return { correct, wrong, empty, net };
   };
 
+  // Kazanım Analizi -- Ders > Konu > Kazanım hiyerarşisiyle çalışır.
+  // topicMap zaten { ders, konu, kazanim } üçlüsünü tuttuğu için ek bir veri
+  // toplamaya gerek yok, sadece raporlama katmanını Konu seviyesinde
+  // gruplayacak şekilde genişletiyoruz.
+  //
+  // Ayrıca her Konu için iki ek sinyal hesaplıyoruz:
+  // 1) "hedefDisi": öğrenci o konuyu BİLEREK atlamış olabilir (konudaki boş
+  //    oranı sınav geneline göre çok yüksek, VE bu süre yetişmemesiyle
+  //    açıklanamıyor -- yani boş sorular sınavın sonuna kümelenmiş değil).
+  //    Bu konular "riskli" diye kırmızı gösterilmez, nötr bir notla geçilir.
+  // 2) "yetersizVeri": konudan çok az soru varsa (< 3) güvenilir bir seviye
+  //    etiketi verilemez, bunu da ayrıca işaretliyoruz.
   const getKazanimReport = () => {
     if (!activeStudentExam || !activeStudentExam.topicMap || Object.keys(activeStudentExam.topicMap).length === 0) {
       return null;
     }
     const numP = activeStudentExam.numPages;
-    const byDers = {}; // { ders: { correct, total, kazanimlar: { kazanim: { correct, total } } } }
+    const byDers = {}; // { ders: { correct, total, empty, konular: { konu: { correct, total, empty, emptyPages: [], kazanimlar: {...} } } } }
+
+    let examTotal = 0;
+    let examEmpty = 0;
+    const tailStart = Math.max(1, numP - Math.ceil(numP * 0.2) + 1);
+    let tailTotal = 0;
+    let tailEmpty = 0;
 
     for (let i = 1; i <= numP; i++) {
       const topic = activeStudentExam.topicMap[i];
@@ -1992,21 +2013,150 @@ export default function App() {
 
       const studentAns = studentAnswers[i];
       const correctAns = activeStudentExam.answerKey[i];
+      const isEmpty = !studentAns;
       const isCorrect = !!(studentAns && correctAns && studentAns === correctAns);
+      const konuName = topic.konu || topic.kazanim; // konu boşsa (eski kayıt) kazanımı konu gibi kullan
 
-      if (!byDers[topic.ders]) byDers[topic.ders] = { correct: 0, total: 0, kazanimlar: {} };
-      byDers[topic.ders].total++;
-      if (isCorrect) byDers[topic.ders].correct++;
-
-      if (!byDers[topic.ders].kazanimlar[topic.kazanim]) {
-        byDers[topic.ders].kazanimlar[topic.kazanim] = { correct: 0, total: 0 };
+      examTotal++;
+      if (isEmpty) examEmpty++;
+      if (i >= tailStart) {
+        tailTotal++;
+        if (isEmpty) tailEmpty++;
       }
-      byDers[topic.ders].kazanimlar[topic.kazanim].total++;
-      if (isCorrect) byDers[topic.ders].kazanimlar[topic.kazanim].correct++;
+
+      if (!byDers[topic.ders]) byDers[topic.ders] = { correct: 0, total: 0, empty: 0, konular: {} };
+      const dersEntry = byDers[topic.ders];
+      dersEntry.total++;
+      if (isCorrect) dersEntry.correct++;
+      if (isEmpty) dersEntry.empty++;
+
+      if (!dersEntry.konular[konuName]) {
+        dersEntry.konular[konuName] = { correct: 0, total: 0, empty: 0, emptyPages: [], kazanimlar: {} };
+      }
+      const konuEntry = dersEntry.konular[konuName];
+      konuEntry.total++;
+      if (isCorrect) konuEntry.correct++;
+      if (isEmpty) { konuEntry.empty++; konuEntry.emptyPages.push(i); }
+
+      if (!konuEntry.kazanimlar[topic.kazanim]) {
+        konuEntry.kazanimlar[topic.kazanim] = { correct: 0, total: 0 };
+      }
+      konuEntry.kazanimlar[topic.kazanim].total++;
+      if (isCorrect) konuEntry.kazanimlar[topic.kazanim].correct++;
     }
 
+    const examEmptyRatio = examTotal > 0 ? examEmpty / examTotal : 0;
+    const tailEmptyRatio = tailTotal > 0 ? tailEmpty / tailTotal : 0;
+    // "Süre yetişmedi" sinyali: sınavın son ~%20'lik kısmı, sınav geneline
+    // göre belirgin şekilde daha boş kalmışsa.
+    const sureSorunuGlobal = tailEmptyRatio >= 0.5 && (tailEmptyRatio - examEmptyRatio) >= 0.25;
+
+    // İkinci geçiş: her konu için tier + hedefDisi/yetersizVeri hesapla.
+    Object.values(byDers).forEach((dersEntry) => {
+      Object.entries(dersEntry.konular).forEach(([konuName, konuEntry]) => {
+        const oran = konuEntry.total > 0 ? konuEntry.correct / konuEntry.total : 0;
+        const konuEmptyRatio = konuEntry.total > 0 ? konuEntry.empty / konuEntry.total : 0;
+        const konuTailShare = konuEntry.emptyPages.length > 0
+          ? konuEntry.emptyPages.filter((p) => p >= tailStart).length / konuEntry.emptyPages.length
+          : 0;
+
+        if (konuEntry.total < 3) {
+          konuEntry.tier = 'yetersizVeri';
+        } else if (
+          konuEmptyRatio >= 0.6 &&
+          examEmptyRatio < 0.35 &&
+          !(sureSorunuGlobal && konuTailShare >= 0.6)
+        ) {
+          konuEntry.tier = 'hedefDisi';
+        } else if (oran < 0.4) {
+          konuEntry.tier = 'riskli';
+        } else if (oran < 0.7) {
+          konuEntry.tier = 'gelismekte';
+        } else if (oran < 0.9) {
+          konuEntry.tier = 'iyi';
+        } else {
+          konuEntry.tier = 'harika';
+        }
+        konuEntry.oran = oran;
+      });
+    });
+
     const hasData = Object.keys(byDers).length > 0;
-    return { byDers, hasData };
+    return { byDers, hasData, sureSorunuGlobal };
+  };
+
+  // Bir konuda öğrenci zayıfsa/orta seviyedeyse, o konuya özel bir "konu
+  // testi" önerebilmek için: yayınlanmış sınavlar arasında, topicMap'inin
+  // en az %80'i aynı konu adını taşıyan (yani neredeyse tamamen o konudan
+  // oluşan) bir sınav arıyoruz. Adminin ayrıca bir eşleştirme yapmasına
+  // gerek kalmadan, mevcut Konu adlandırmasından otomatik çıkarım yapıyor.
+  const findKonuTesti = (konuName, excludeExamId) => {
+    if (!konuName) return null;
+    return exams.find((e) => {
+      if (!e.isPublished || e.id === excludeExamId || !e.topicMap) return false;
+      const entries = Object.values(e.topicMap).filter((t) => t && t.konu);
+      if (entries.length === 0) return false;
+      const matchCount = entries.filter((t) => t.konu === konuName).length;
+      return (matchCount / entries.length) >= 0.8;
+    }) || null;
+  };
+
+  // Bir öğrenci iyi/harika durumdaysa, aynı sınav türünden (ör. "deneme"),
+  // henüz çözmediği başka bir sınav önererek onu bir üst seviyeye iteriz.
+  const findOnerilenDeneme = (excludeExamId, examType) => {
+    return exams.find((e) => (
+      e.isPublished &&
+      !e.parentId &&
+      e.id !== excludeExamId &&
+      e.examType === (examType || 'deneme') &&
+      !(studentResultsMap[e.id] && studentResultsMap[e.id].is_finished)
+    )) || null;
+  };
+
+  // Tier'a göre kısa, doğal dilde bir öneri cümlesi + aksiyon etiketi.
+  const getKonuTavsiyesi = (konuName, konuEntry) => {
+    switch (konuEntry.tier) {
+      case 'riskli':
+        return {
+          mesaj: `${konuName} konusunda ciddi bir eksiğin var. Önce temelden tekrar etmeni öneririz.`,
+          aksiyon: 'video',
+        };
+      case 'gelismekte':
+        return {
+          mesaj: `${konuName} konusunda orta seviyedesin, birkaç noktada tıkanıyorsun. Bir konu testiyle pekiştirebilirsin.`,
+          aksiyon: 'konuTesti',
+        };
+      case 'iyi':
+        return {
+          mesaj: `${konuName} konusuna hakimsin. Bir test daha çözerek iyice sağlama alabilirsin.`,
+          aksiyon: 'konuTesti',
+        };
+      case 'harika':
+        return {
+          mesaj: `${konuName} konusunda harikasın! Yeni bir denemeyle kendini bir üst seviyede zorlayabilirsin.`,
+          aksiyon: 'deneme',
+        };
+      case 'hedefDisi':
+        return {
+          mesaj: `${konuName} konusundan soruları büyük ölçüde boş bırakmışsın. Bu konu hedefinde değilse sorun değil.`,
+          aksiyon: 'hedefDisi',
+        };
+      default:
+        return {
+          mesaj: `${konuName} konusundan sağlıklı bir değerlendirme için yeterli soru çözülmemiş.`,
+          aksiyon: 'yetersizVeri',
+        };
+    }
+  };
+
+  // Konu kartlarındaki tier rozeti için renk/etiket eşlemesi.
+  const KONU_TIER_META = {
+    riskli: { label: 'Riskli', color: '#E24B4A', bg: '#FBE4E2' },
+    gelismekte: { label: 'Gelişmekte', color: '#B8860B', bg: '#FBF0D9' },
+    iyi: { label: 'İyi', color: '#2F7A3D', bg: '#E3F3E6' },
+    harika: { label: 'Harika', color: '#1F6634', bg: '#D9F0DD' },
+    hedefDisi: { label: 'Hedefte Değil', color: '#64748B', bg: '#F1F5F9' },
+    yetersizVeri: { label: 'Yetersiz Veri', color: '#94A3B8', bg: '#F8FAFC' },
   };
 
   // Çubuk her zaman kırmızı zemin üzerine, doğru oranı kadar yeşil dolgu (soldan sağa) şeklinde bölünür.
@@ -4965,7 +5115,10 @@ export default function App() {
 
             {kazanimReport && kazanimReport.hasData && (
               <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--yt-line)' }}>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '1rem' }}>Kazanım Analizi</h3>
+                <h3 style={{ margin: '0 0 4px 0', fontSize: '1rem' }}>Kazanım Analizi</h3>
+                <p style={{ margin: '0 0 16px 0', fontSize: '0.85rem', color: 'var(--yt-graphite)' }}>
+                  Önce derse, sonra içindeki bir konuya tıkla -- kazanım bazlı ayrıntıyı ve sana özel önerimizi orada görürsün.
+                </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {Object.entries(kazanimReport.byDers).map(([ders, dersData]) => {
                     const dersGreenWidth = getBaremGreenWidth(dersData.correct, dersData.total);
@@ -4983,25 +5136,104 @@ export default function App() {
                             </span>
                           </div>
                         </div>
-                        <ul style={{ margin: '10px 0 0 0', paddingLeft: 0, listStyle: 'none' }}>
-                          {Object.entries(dersData.kazanimlar).map(([kazanim, k]) => {
-                            const kGreenWidth = getBaremGreenWidth(k.correct, k.total);
-                            const kTextColor = getBaremTextColor(k.correct, k.total);
+
+                        <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {Object.entries(dersData.konular).map(([konuName, konuEntry]) => {
+                            const konuKey = `${ders}::${konuName}`;
+                            const isOpen = !!expandedKonular[konuKey];
+                            const meta = KONU_TIER_META[konuEntry.tier] || KONU_TIER_META.yetersizVeri;
+                            const kGreenWidth = getBaremGreenWidth(konuEntry.correct, konuEntry.total);
+                            const tavsiye = getKonuTavsiyesi(konuName, konuEntry);
+
+                            let ctaExam = null;
+                            if (tavsiye.aksiyon === 'konuTesti') {
+                              ctaExam = findKonuTesti(konuName, activeStudentExam.id);
+                            } else if (tavsiye.aksiyon === 'deneme') {
+                              ctaExam = findOnerilenDeneme(activeStudentExam.id, activeStudentExam.examType);
+                            }
+
                             return (
-                              <li key={kazanim} style={{ display: 'grid', gridTemplateColumns: '1fr 150px', alignItems: 'center', gap: '12px', padding: '5px 0' }}>
-                                <span>{kazanim}</span>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                  <div style={{ flex: 1, height: '13px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: '#E24B4A' }}>
-                                    <div style={{ height: '100%', width: `${kGreenWidth}%`, backgroundColor: '#639922' }}></div>
-                                  </div>
-                                  <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', fontWeight: 'bold', width: '38px', textAlign: 'right', color: kTextColor }}>
-                                    {k.correct}/{k.total}
+                              <div key={konuKey} style={{ border: '1px solid var(--yt-line)', borderRadius: '8px', overflow: 'hidden' }}>
+                                <button
+                                  onClick={() => setExpandedKonular((prev) => ({ ...prev, [konuKey]: !prev[konuKey] }))}
+                                  style={{
+                                    width: '100%',
+                                    display: 'grid',
+                                    gridTemplateColumns: '18px 1fr auto 110px',
+                                    alignItems: 'center',
+                                    gap: '10px',
+                                    padding: '9px 12px',
+                                    backgroundColor: '#fff',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    textAlign: 'left',
+                                    fontFamily: 'inherit',
+                                    fontSize: '0.85rem'
+                                  }}
+                                >
+                                  <span style={{ display: 'inline-block', transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', fontSize: '0.7rem', color: 'var(--yt-graphite)' }}>▶</span>
+                                  <span>{konuName}</span>
+                                  <span style={{ fontSize: '0.7rem', fontWeight: 'bold', padding: '3px 8px', borderRadius: '999px', color: meta.color, backgroundColor: meta.bg, whiteSpace: 'nowrap' }}>
+                                    {meta.label}
                                   </span>
-                                </div>
-                              </li>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div style={{ flex: 1, height: '10px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: '#E24B4A' }}>
+                                      <div style={{ height: '100%', width: `${kGreenWidth}%`, backgroundColor: '#639922' }}></div>
+                                    </div>
+                                    <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.72rem', fontWeight: 'bold', width: '32px', textAlign: 'right' }}>
+                                      {konuEntry.correct}/{konuEntry.total}
+                                    </span>
+                                  </div>
+                                </button>
+
+                                {isOpen && (
+                                  <div style={{ padding: '12px 14px', backgroundColor: '#FAFAF7', borderTop: '1px solid var(--yt-line)' }}>
+                                    <p style={{ margin: '0 0 10px 0', fontSize: '0.82rem', color: 'var(--yt-ink)' }}>{tavsiye.mesaj}</p>
+
+                                    {tavsiye.aksiyon === 'konuTesti' && ctaExam && (
+                                      <button
+                                        onClick={() => { setActiveStudentExamId(null); setInspectingExamId(ctaExam.id); }}
+                                        className="yt-btn yt-btn-primary"
+                                        style={{ fontSize: '0.8rem', padding: '7px 14px', marginBottom: '10px' }}
+                                      >
+                                        📘 {ctaExam.name || 'Konu Testi'}'ni Çöz
+                                      </button>
+                                    )}
+                                    {tavsiye.aksiyon === 'deneme' && ctaExam && (
+                                      <button
+                                        onClick={() => { setActiveStudentExamId(null); setInspectingExamId(ctaExam.id); }}
+                                        className="yt-btn yt-btn-primary"
+                                        style={{ fontSize: '0.8rem', padding: '7px 14px', marginBottom: '10px' }}
+                                      >
+                                        🚀 {ctaExam.name || 'Yeni Deneme'}'yi Çöz
+                                      </button>
+                                    )}
+
+                                    <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none' }}>
+                                      {Object.entries(konuEntry.kazanimlar).map(([kazanim, k]) => {
+                                        const kzGreenWidth = getBaremGreenWidth(k.correct, k.total);
+                                        const kzTextColor = getBaremTextColor(k.correct, k.total);
+                                        return (
+                                          <li key={kazanim} style={{ display: 'grid', gridTemplateColumns: '1fr 130px', alignItems: 'center', gap: '10px', padding: '4px 0' }}>
+                                            <span style={{ fontSize: '0.78rem' }}>{kazanim}</span>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                              <div style={{ flex: 1, height: '11px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: '#E24B4A' }}>
+                                                <div style={{ height: '100%', width: `${kzGreenWidth}%`, backgroundColor: '#639922' }}></div>
+                                              </div>
+                                              <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.7rem', fontWeight: 'bold', width: '32px', textAlign: 'right', color: kzTextColor }}>
+                                                {k.correct}/{k.total}
+                                              </span>
+                                            </div>
+                                          </li>
+                                        );
+                                      })}
+                                    </ul>
+                                  </div>
+                                )}
+                              </div>
                             );
                           })}
-                        </ul>
+                        </div>
                       </div>
                     );
                   })}
