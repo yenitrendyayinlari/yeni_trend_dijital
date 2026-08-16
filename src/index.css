@@ -108,6 +108,7 @@ p {
   font-size: 1.15rem;
   color: var(--yt-ink);
   flex-shrink: 0;
+  margin-left: 8px;
 }
 .yt-brand-mark {
   width: 30px;
@@ -368,6 +369,10 @@ p {
   position: relative; display: flex; align-items: center; justify-content: center;
   width: 38px; height: 38px; border-radius: 8px; border: 1.5px solid var(--yt-line);
   background: var(--yt-paper-2); cursor: pointer; color: var(--yt-ink); font-size: 1rem; flex-shrink: 0;
+}
+.yt-cart-btn-wide {
+  width: auto; height: 44px; padding: 0 16px; gap: 8px;
+  font-family: var(--yt-font-body); font-weight: 600; font-size: 0.9rem;
 }
 .yt-cart-badge {
   position: absolute; top: -6px; right: -6px; background: var(--yt-mustard); color: var(--yt-ink);

@@ -5,6 +5,7 @@ import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
 import sualinkLogo from './sualinklogo.png';
 import TopBanner, { TopBannerManageButton } from './TopBanner';
+import Footer from './Footer';
 
 // İyzico'nun checkoutFormContent alanı içindeki <script> etiketi,
 // innerHTML ile DOM'a eklendiğinde tarayıcı tarafından ÇALIŞTIRILMAZ
@@ -3795,9 +3796,9 @@ export default function App() {
           Sınavlarım
         </button>
       )}
-      <button onClick={() => setShowCart(true)} className="yt-cart-btn" title="Sepet">
-        🛒
-        {cartItems.length > 0 && <span className="yt-cart-badge">{cartItems.length}</span>}
+      <button onClick={() => setShowCart(true)} className="yt-cart-btn yt-cart-btn-wide" title="Sepet">
+        <span style={{ fontSize: '1.15rem' }}>🛒</span>
+        <span>Sepet{cartItems.length > 0 ? ` (${cartItems.length})` : ''}</span>
       </button>
       {user && (
         <button onClick={openStudentNotifs} className="yt-cart-btn" title="Bildirimler">
@@ -3866,14 +3867,9 @@ export default function App() {
           )}
         </div>
       ) : (
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="yt-btn yt-btn-outline">
-            Giriş Yap
-          </button>
-          <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} className="yt-btn yt-btn-primary">
-            Kayıt Ol
-          </button>
-        </div>
+        <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="yt-btn yt-btn-outline">
+          Giriş Yap
+        </button>
       )}
     </>
   );
@@ -3973,6 +3969,7 @@ export default function App() {
             </div>
           </div>
         </div>
+      <Footer />
       {renderCartDrawer()}
       {renderNotifDrawer()}
       {renderAuthModal()}
@@ -4340,6 +4337,7 @@ export default function App() {
               </div>
             )}
           </main>
+          <Footer />
           {renderCartDrawer()}
           {renderNotifDrawer()}
           {renderAuthModal()}
@@ -4397,15 +4395,22 @@ export default function App() {
                 <img src={sualinkLogo} alt="Sualink" className="yt-brand-logo" />
               </div>
 
-              <div style={{ flex: '1 1 300px', maxWidth: '450px', position: 'relative', minWidth: '200px' }}>
-                <span style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', color: 'var(--yt-graphite-soft)', fontSize: '0.9rem' }}>○</span>
+              <div style={{ flex: '1 1 300px', maxWidth: '450px', display: 'flex', minWidth: '200px', border: '1.5px solid var(--yt-line)', borderRadius: '8px', overflow: 'hidden', backgroundColor: 'var(--yt-paper-2)' }}>
                 <input
                   type="text"
                   placeholder="Ne çözmek istiyorsunuz?"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  style={{ width: '100%', padding: '10px 14px 10px 36px', borderRadius: '8px', border: '1.5px solid var(--yt-line)', backgroundColor: 'var(--yt-paper-2)', outline: 'none', fontSize: '0.9rem', fontFamily: 'var(--yt-font-body)', color: 'var(--yt-ink)', boxSizing: 'border-box' }}
+                  style={{ flex: 1, minWidth: 0, padding: '10px 14px', border: 'none', backgroundColor: 'transparent', outline: 'none', fontSize: '0.9rem', fontFamily: 'var(--yt-font-body)', color: 'var(--yt-ink)', boxSizing: 'border-box' }}
                 />
+                <button
+                  type="button"
+                  onClick={() => {}}
+                  aria-label="Ara"
+                  style={{ flexShrink: 0, width: '42px', border: 'none', backgroundColor: 'var(--yt-ink)', color: '#fff', cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  🔍
+                </button>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, marginLeft: 'auto' }}>
@@ -4651,6 +4656,7 @@ export default function App() {
             )}
           </main>
 
+          <Footer />
           {renderCartDrawer()}
           {renderNotifDrawer()}
           {renderAuthModal()}
