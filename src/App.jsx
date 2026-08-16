@@ -880,10 +880,18 @@ export default function App() {
   const checkUserRoleAndSetMode = (currentUser) => {
     if (currentUser.email === 'admin@yayinevi.com') {
       setAppMode('admin');
-      fetchCategoryLists();
     } else {
       setAppMode('student');
     }
+    // ÖNEMLİ: Bu listeler (Ders/Konu/Kazanım adları) sadece admin panelinde
+    // DEĞİL, öğrenci sonuç ekranındaki Kazanım Analizi'nde de kullanılıyor
+    // (bkz. resolveLiveKonuForEntry / getKazanimReport) -- bir kazanımın
+    // Konu'su Kategori Yönetimi'nden değiştirildiğinde bunun öğrenci
+    // tarafında da güncel görünmesi için bu listelerin öğrenci girişinde de
+    // yüklenmesi şart. Eskiden sadece admin girişinde çağrılıyordu, bu
+    // yüzden öğrenci tarafında hep boş kalıp donmuş/eski metne (ör. "Genel")
+    // düşülüyordu.
+    fetchCategoryLists();
     fetchExams(currentUser);
     fetchUserPurchases(currentUser.email);
   };
@@ -898,24 +906,28 @@ export default function App() {
       .select('id, name')
       .order('name');
     if (!examCatsError && examCats) setExamCategories(examCats);
+    else if (examCatsError) console.error('exam_categories okunamadı:', examCatsError);
 
     const { data: lessonCats, error: lessonCatsError } = await supabase
       .from('lesson_categories')
       .select('id, name, exam_category_id')
       .order('name');
     if (!lessonCatsError && lessonCats) setLessonCategories(lessonCats);
+    else if (lessonCatsError) console.error('lesson_categories okunamadı:', lessonCatsError);
 
     const { data: topicRows, error: topicRowsError } = await supabase
       .from('topics')
       .select('id, name, lesson_category_id')
       .order('name');
     if (!topicRowsError && topicRows) setTopics(topicRows);
+    else if (topicRowsError) console.error('topics okunamadı:', topicRowsError);
 
     const { data: outcomes, error: outcomesError } = await supabase
       .from('learning_outcomes')
       .select('id, name, lesson_category_id, topic_id')
       .order('name');
     if (!outcomesError && outcomes) setLearningOutcomes(outcomes);
+    else if (outcomesError) console.error('learning_outcomes okunamadı:', outcomesError);
   };
 
   // "+ Yeni Sınav Türü Ekle" -- yeni bir kayıt oluşturur, listeye ekler ve
