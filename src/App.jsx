@@ -62,6 +62,15 @@ export default function App() {
   const [lessonCategories, setLessonCategories] = useState([]); // [{id, name, exam_category_id}]
   const [topics, setTopics] = useState([]); // [{id, name, lesson_category_id}]
   const [learningOutcomes, setLearningOutcomes] = useState([]); // [{id, name, lesson_category_id, topic_id}]
+  // Kazanım bazlı ders notu (PDF) / video kaynakları. Anahtar: learning_outcome_id.
+  const [learningOutcomeResources, setLearningOutcomeResources] = useState({});
+  // Admin "Kaynaklar" ekranı: hangi Ders Türü seçili, ve hangi kazanımın
+  // video linki şu an düzenleniyor (kaydetmeden önce serbestçe yazabilsin diye).
+  const [showResourceManager, setShowResourceManager] = useState(false);
+  const [resourceManagerDersId, setResourceManagerDersId] = useState(null);
+  const [resourceVideoDrafts, setResourceVideoDrafts] = useState({}); // { [learning_outcome_id]: taslak metin }
+  // Öğrenci sonuç ekranında hangi kazanımın video oynatıcısı açık (anahtar: learning_outcome_id ya da kazanım adı).
+  const [expandedVideoKazanim, setExpandedVideoKazanim] = useState({});
   const [showNewExamCategoryInput, setShowNewExamCategoryInput] = useState(false);
   const [newExamCategoryName, setNewExamCategoryName] = useState('');
   const [showNewLessonCategoryInput, setShowNewLessonCategoryInput] = useState(false);
@@ -603,6 +612,94 @@ export default function App() {
     }
   };
 
+  // --- Kazanım Kaynakları (Ders Notu PDF + Video) ---
+  // Bir YouTube URL'sini (izle/kısa/paylaş linki, hangi biçimde olursa
+  // olsun) gömülebilir bir embed URL'ine çevirir. Tanınmayan bir video
+  // servisi linkiyse null döner -- o durumda öğrenci tarafında "yeni
+  // sekmede aç" davranışına düşülür.
+  const getYoutubeEmbedUrl = (url) => {
+    if (!url) return null;
+    try {
+      const u = new URL(url.trim());
+      let videoId = null;
+      if (u.hostname.includes('youtu.be')) {
+        videoId = u.pathname.slice(1);
+      } else if (u.hostname.includes('youtube.com')) {
+        if (u.pathname === '/watch') videoId = u.searchParams.get('v');
+        else if (u.pathname.startsWith('/shorts/')) videoId = u.pathname.split('/')[2];
+        else if (u.pathname.startsWith('/embed/')) videoId = u.pathname.split('/')[2];
+      }
+      return videoId ? `https://www.youtube.com/embed/${videoId}` : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const uploadKazanimPdf = async (learningOutcomeId, file) => {
+    if (!file || !learningOutcomeId) return;
+    setAuthLoading(true);
+    const fileExt = file.name.split('.').pop();
+    const fileName = `konu_${learningOutcomeId}_${Date.now()}.${fileExt}`;
+
+    const { error: storageError } = await supabase.storage
+      .from('kazanim-kaynaklari')
+      .upload(fileName, file);
+
+    if (storageError) {
+      alert('Ders notu yüklenemedi: ' + storageError.message);
+      setAuthLoading(false);
+      return;
+    }
+
+    const { data: publicUrlData } = supabase.storage
+      .from('kazanim-kaynaklari')
+      .getPublicUrl(fileName);
+
+    const { error: upsertError } = await supabase
+      .from('learning_outcome_resources')
+      .upsert([{
+        learning_outcome_id: learningOutcomeId,
+        pdf_url: publicUrlData.publicUrl,
+        pdf_filename: file.name,
+        updated_at: new Date().toISOString()
+      }], { onConflict: 'learning_outcome_id' });
+
+    setAuthLoading(false);
+    if (upsertError) {
+      alert('Ders notu kaydedilemedi: ' + upsertError.message);
+      return;
+    }
+
+    setLearningOutcomeResources((prev) => ({
+      ...prev,
+      [learningOutcomeId]: { ...(prev[learningOutcomeId] || {}), learning_outcome_id: learningOutcomeId, pdf_url: publicUrlData.publicUrl, pdf_filename: file.name }
+    }));
+  };
+
+  const removeKazanimPdf = async (learningOutcomeId) => {
+    if (!window.confirm('Bu kazanımın ders notunu kaldırmak istediğinize emin misiniz?')) return;
+    const { error } = await supabase
+      .from('learning_outcome_resources')
+      .upsert([{ learning_outcome_id: learningOutcomeId, pdf_url: null, pdf_filename: null, updated_at: new Date().toISOString() }], { onConflict: 'learning_outcome_id' });
+    if (error) { alert('Kaldırılamadı: ' + error.message); return; }
+    setLearningOutcomeResources((prev) => ({
+      ...prev,
+      [learningOutcomeId]: { ...(prev[learningOutcomeId] || {}), pdf_url: null, pdf_filename: null }
+    }));
+  };
+
+  const saveKazanimVideoUrl = async (learningOutcomeId, url) => {
+    const trimmed = (url || '').trim();
+    const { error } = await supabase
+      .from('learning_outcome_resources')
+      .upsert([{ learning_outcome_id: learningOutcomeId, video_url: trimmed || null, updated_at: new Date().toISOString() }], { onConflict: 'learning_outcome_id' });
+    if (error) { alert('Video linki kaydedilemedi: ' + error.message); return; }
+    setLearningOutcomeResources((prev) => ({
+      ...prev,
+      [learningOutcomeId]: { ...(prev[learningOutcomeId] || {}), learning_outcome_id: learningOutcomeId, video_url: trimmed || null }
+    }));
+  };
+
   // "+ Yeni Kazanım Ekle" -- seçili Ders Türü'ne bağlı yeni bir kazanım oluşturur.
   // Bir kazanım artık doğrudan Ders Türü'ne değil, bir Konu'ya bağlanıyor.
   // lesson_category_id kolonunu da (geriye dönük uyumluluk ve "ders türü
@@ -928,6 +1025,16 @@ export default function App() {
       .order('name');
     if (!outcomesError && outcomes) setLearningOutcomes(outcomes);
     else if (outcomesError) console.error('learning_outcomes okunamadı:', outcomesError);
+
+    // Riskli kazanımların altında gösterilen ders notu (PDF) / video kaynakları.
+    const { data: resourceRows, error: resourcesError } = await supabase
+      .from('learning_outcome_resources')
+      .select('learning_outcome_id, pdf_url, pdf_filename, video_url');
+    if (!resourcesError && resourceRows) {
+      const map = {};
+      resourceRows.forEach((r) => { map[r.learning_outcome_id] = r; });
+      setLearningOutcomeResources(map);
+    } else if (resourcesError) console.error('learning_outcome_resources okunamadı:', resourcesError);
   };
 
   // "+ Yeni Sınav Türü Ekle" -- yeni bir kayıt oluşturur, listeye ekler ve
@@ -1703,17 +1810,34 @@ export default function App() {
   // sorularda otomatik yansır, tek tek soru düzenlemeye gerek kalmaz. Eşleşen
   // bir kazanım bulunamazsa (silinmiş/yeniden adlandırılmışsa) eski kayıtlı
   // metne geri döner.
+  // Bir topicMap satırının (entry: {ders, konu, kazanim}) GÜNCEL master
+  // kayıtlardaki gerçek ID'lerini çözer. Kazanım adı üzerinden
+  // learningOutcomes'ta arayıp, oradan lessonCategoryId/topicId/outcomeId'yi
+  // döndürür -- bulunamazsa (silinmiş/hiç eşleşmemiş) null'lar döner.
+  // Hem bu sınavın kendi raporunu hem de ÖNERİ MOTORUNU (findKonuTesti,
+  // findOnerilenDeneme) aynı ID'lere göre çalıştırmak için tek, ortak
+  // bir yerden çözülüyor -- böylece "aynı kazanım farklı yazılmış" gibi
+  // metin bazlı uyuşmazlıklar öneri motorunu etkilemiyor.
+  const resolveEntryIds = (entry) => {
+    if (!entry || !entry.kazanim) return { lessonCategoryId: null, topicId: null, outcomeId: null };
+    const ders = lessonCategories.find((lc) => lc.name === entry.ders);
+    const matchingOutcome = learningOutcomes.find((lo) =>
+      lo.name === entry.kazanim && (!ders || lo.lesson_category_id === ders.id)
+    );
+    if (!matchingOutcome) return { lessonCategoryId: ders ? ders.id : null, topicId: null, outcomeId: null };
+    return {
+      lessonCategoryId: matchingOutcome.lesson_category_id,
+      topicId: matchingOutcome.topic_id,
+      outcomeId: matchingOutcome.id
+    };
+  };
+
   const resolveLiveKonuForEntry = (entry) => {
     if (!entry) return '';
-    if (entry.kazanim) {
-      const ders = lessonCategories.find((lc) => lc.name === entry.ders);
-      const matchingOutcome = learningOutcomes.find((lo) =>
-        lo.name === entry.kazanim && (!ders || lo.lesson_category_id === ders.id)
-      );
-      if (matchingOutcome) {
-        const liveTopic = topics.find((t) => t.id === matchingOutcome.topic_id);
-        if (liveTopic) return liveTopic.name;
-      }
+    const { topicId } = resolveEntryIds(entry);
+    if (topicId) {
+      const liveTopic = topics.find((t) => t.id === topicId);
+      if (liveTopic) return liveTopic.name;
     }
     return entry.konu || '';
   };
@@ -2037,9 +2161,11 @@ export default function App() {
       // ÖNEMLİ: topic.konu, sınavın topicMap'inde DONMUŞ (Excel yüklendiği/
       // elle girildiği andaki) bir metin -- Kategori Yönetimi'nde bir kazanımın
       // konusu sonradan değiştirilirse burada otomatik güncellenmez. Bu yüzden
-      // aynı admin panelde zaten var olan resolveLiveKonuForEntry ile GÜNCEL
-      // konu adını çözüyoruz (kazanım adı üzerinden canlı topic_id eşlemesi).
-      const konuName = resolveLiveKonuForEntry(topic) || topic.kazanim; // hiçbiri çözülemezse (silinmiş kazanım) kazanımı konu gibi kullan
+      // GÜNCEL ID'leri (resolveEntryIds) çözüp hem görünen adı hem de -- öneri
+      // motorunun metne değil ID'ye göre çalışabilmesi için -- lessonCategoryId/
+      // topicId/outcomeId'yi de saklıyoruz.
+      const { lessonCategoryId, topicId, outcomeId } = resolveEntryIds(topic);
+      const konuName = (topicId && topics.find((t) => t.id === topicId)?.name) || topic.konu || topic.kazanim;
 
       examTotal++;
       if (isEmpty) examEmpty++;
@@ -2048,25 +2174,28 @@ export default function App() {
         if (isEmpty) tailEmpty++;
       }
 
-      if (!byDers[topic.ders]) byDers[topic.ders] = { correct: 0, total: 0, empty: 0, emptyPages: [], konular: {} };
+      if (!byDers[topic.ders]) byDers[topic.ders] = { correct: 0, total: 0, empty: 0, emptyPages: [], konular: {}, lessonCategoryId };
       const dersEntry = byDers[topic.ders];
       dersEntry.total++;
       if (isCorrect) dersEntry.correct++;
       if (isEmpty) { dersEntry.empty++; dersEntry.emptyPages.push(i); }
+      if (!dersEntry.lessonCategoryId && lessonCategoryId) dersEntry.lessonCategoryId = lessonCategoryId;
 
       if (!dersEntry.konular[konuName]) {
-        dersEntry.konular[konuName] = { correct: 0, total: 0, empty: 0, emptyPages: [], kazanimlar: {} };
+        dersEntry.konular[konuName] = { correct: 0, total: 0, empty: 0, emptyPages: [], kazanimlar: {}, topicId };
       }
       const konuEntry = dersEntry.konular[konuName];
       konuEntry.total++;
       if (isCorrect) konuEntry.correct++;
       if (isEmpty) { konuEntry.empty++; konuEntry.emptyPages.push(i); }
+      if (!konuEntry.topicId && topicId) konuEntry.topicId = topicId;
 
       if (!konuEntry.kazanimlar[topic.kazanim]) {
-        konuEntry.kazanimlar[topic.kazanim] = { correct: 0, total: 0 };
+        konuEntry.kazanimlar[topic.kazanim] = { correct: 0, total: 0, outcomeId };
       }
       konuEntry.kazanimlar[topic.kazanim].total++;
       if (isCorrect) konuEntry.kazanimlar[topic.kazanim].correct++;
+      if (!konuEntry.kazanimlar[topic.kazanim].outcomeId && outcomeId) konuEntry.kazanimlar[topic.kazanim].outcomeId = outcomeId;
     }
 
     const examEmptyRatio = examTotal > 0 ? examEmpty / examTotal : 0;
@@ -2118,6 +2247,19 @@ export default function App() {
         const konuTierResult = computeTier(konuEntry);
         konuEntry.tier = konuTierResult.tier;
         konuEntry.oran = konuTierResult.oran;
+
+        // Kazanım seviyesinde örneklem çoğu zaman çok küçük (1-3 soru)
+        // olduğu için "Hedefte Değil" / süre analizini burada uygulamıyoruz --
+        // sadece doğru oranına göre basit bir barem (Riskli/Gelişmekte/İyi/
+        // Harika). Bu, riskli kazanımların altına kaynak (PDF/video)
+        // göstermek için yeterli.
+        Object.values(konuEntry.kazanimlar).forEach((kzEntry) => {
+          const oran = kzEntry.total > 0 ? kzEntry.correct / kzEntry.total : 0;
+          if (oran < 0.3) kzEntry.tier = 'riskli';
+          else if (oran < 0.5) kzEntry.tier = 'gelismekte';
+          else if (oran < 0.7) kzEntry.tier = 'iyi';
+          else kzEntry.tier = 'harika';
+        });
       });
     });
 
@@ -2127,40 +2269,36 @@ export default function App() {
 
   // Bir konuda öğrenci zayıfsa/orta seviyedeyse, o konuya özel bir "konu
   // testi" önerebilmek için: yayınlanmış sınavlar arasında, topicMap'inin
-  // en az %80'i aynı konu adını taşıyan (yani neredeyse tamamen o konudan
-  // oluşan) bir sınav arıyoruz. Adminin ayrıca bir eşleştirme yapmasına
-  // gerek kalmadan, mevcut Konu adlandırmasından otomatik çıkarım yapıyor.
-  const findKonuTesti = (konuName, excludeExamId) => {
-    if (!konuName) return null;
+  // en az %80'i AYNI KONU ID'sine (topic_id) çözülen bir sınav arıyoruz.
+  // ÖNEMLİ: artık konu ADI değil, GÜNCEL ID karşılaştırılıyor -- bir
+  // kazanımın konusu Kategoriler'den değiştirildiğinde, hem bu raporun
+  // kendisi hem de burada taranan aday sınavlar aynı canlı ID'ye göre
+  // çözüldüğü için öneri motoru asla eski/metin tabanlı bir uyuşmazlık
+  // yüzünden doğru testi kaçırmaz.
+  const findKonuTesti = (topicId, excludeExamId) => {
+    if (!topicId) return null;
     return exams.find((e) => {
       if (!e.isPublished || e.id === excludeExamId || !e.topicMap) return false;
-      const entries = Object.values(e.topicMap).filter((t) => t && t.konu);
+      const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
       if (entries.length === 0) return false;
-      const matchCount = entries.filter((t) => t.konu === konuName).length;
+      const matchCount = entries.filter((t) => resolveEntryIds(t).topicId === topicId).length;
       return (matchCount / entries.length) >= 0.8;
     }) || null;
   };
 
   // Bir öğrenci iyi/harika durumdaysa, aynı sınav türünden (ör. "deneme") VE
-  // AYNI DERSTEN, henüz çözmediği başka bir sınav önererek onu bir üst
-  // seviyeye iteriz.
-  // ÖNEMLİ (bug fix): Bu fonksiyon eskiden derse hiç bakmıyordu -- sadece
-  // examType (deneme/test) ve bitirilmemiş olma şartına bakıyordu. Sonuç:
-  // Türkçe'de "harika" çıkan bir öğrenciye, yayınlanmış ilk "deneme" sınavı
-  // ne olursa olsun (ör. bir Tarih denemesi) öneriliyordu. findKonuTesti'deki
-  // gibi, adayın topicMap'inin en az %80'inin AYNI ders adını taşıması
-  // şartını da ekliyoruz -- ders bilgisi verilmezse (çağıran taraf henüz
-  // güncellenmemişse) eski davranışa (sadece examType) düşer.
-  const findOnerilenDeneme = (excludeExamId, examType, ders) => {
+  // AYNI DERSE (artık ID ile, lessonCategoryId), henüz çözmediği başka bir
+  // sınav önererek onu bir üst seviyeye iteriz.
+  const findOnerilenDeneme = (excludeExamId, examType, lessonCategoryId) => {
     return exams.find((e) => {
       if (!e.isPublished || e.parentId || e.id === excludeExamId) return false;
       if (e.examType !== (examType || 'deneme')) return false;
       if (studentResultsMap[e.id] && studentResultsMap[e.id].is_finished) return false;
-      if (!ders) return true;
+      if (!lessonCategoryId) return true;
       if (!e.topicMap) return false;
-      const entries = Object.values(e.topicMap).filter((t) => t && t.ders);
+      const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
       if (entries.length === 0) return false;
-      const matchCount = entries.filter((t) => t.ders === ders).length;
+      const matchCount = entries.filter((t) => resolveEntryIds(t).lessonCategoryId === lessonCategoryId).length;
       return (matchCount / entries.length) >= 0.8;
     }) || null;
   };
@@ -2596,6 +2734,12 @@ export default function App() {
               🗂 Kategoriler
             </button>
             <button
+              onClick={() => setShowResourceManager(true)}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              📚 Kaynaklar
+            </button>
+            <button
               onClick={() => { setShowReportsAdmin(true); fetchAdminReports(adminReportsFilter); }}
               style={{ position: 'relative', padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
             >
@@ -2982,6 +3126,104 @@ export default function App() {
                     );
                   })
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showResourceManager && (
+          <div
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+            onClick={() => setShowResourceManager(false)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '760px', maxWidth: '100%', maxHeight: '84vh', display: 'flex', flexDirection: 'column' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>📚 Kazanım Kaynakları</h2>
+                <button onClick={() => setShowResourceManager(false)} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+              </div>
+
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
+                Bir kazanıma ders notu (PDF) ve/veya video linki ekleyin -- öğrenci o kazanımda
+                riskli çıkarsa, sonuç ekranında otomatik olarak burada eklediğiniz kaynak gösterilir.
+                Önce bir Ders Türü seçin.
+              </div>
+
+              <select
+                value={resourceManagerDersId || ''}
+                onChange={(e) => setResourceManagerDersId(e.target.value ? Number(e.target.value) : null)}
+                style={{ padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '14px' }}
+              >
+                <option value="">Ders Türü seçin...</option>
+                {lessonCategories.map((lc) => {
+                  const cat = examCategories.find((c) => c.id === lc.exam_category_id);
+                  return <option key={lc.id} value={lc.id}>{cat ? `${cat.name} · ${lc.name}` : lc.name}</option>;
+                })}
+              </select>
+
+              <div style={{ overflowY: 'auto', flex: 1 }}>
+                {!resourceManagerDersId ? (
+                  <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Kazanımları görmek için önce bir Ders Türü seçin.</p>
+                ) : (() => {
+                  const dersTopics = topics.filter((t) => t.lesson_category_id === resourceManagerDersId);
+                  const relevantOutcomes = learningOutcomes.filter((lo) => dersTopics.some((t) => t.id === lo.topic_id));
+                  if (relevantOutcomes.length === 0) {
+                    return <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Bu ders türünde henüz kazanım yok.</p>;
+                  }
+                  return dersTopics.map((topic) => {
+                    const topicOutcomes = relevantOutcomes.filter((lo) => lo.topic_id === topic.id);
+                    if (topicOutcomes.length === 0) return null;
+                    return (
+                      <div key={topic.id} style={{ marginBottom: '14px' }}>
+                        <div style={{ fontSize: '0.82rem', fontWeight: 'bold', color: '#334155', marginBottom: '6px' }}>{topic.name}</div>
+                        {topicOutcomes.map((lo) => {
+                          const resource = learningOutcomeResources[lo.id] || {};
+                          const draftVideo = resourceVideoDrafts[lo.id] !== undefined ? resourceVideoDrafts[lo.id] : (resource.video_url || '');
+                          return (
+                            <div key={lo.id} style={{ display: 'grid', gridTemplateColumns: '1fr 160px 220px', gap: '8px', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f1f5f9' }}>
+                              <span style={{ fontSize: '0.84rem' }}>{lo.name}</span>
+
+                              <div>
+                                {resource.pdf_url ? (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                    <a href={resource.pdf_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.76rem', color: '#0f6e56' }}>📄 {resource.pdf_filename || 'Dosya'}</a>
+                                    <button onClick={() => removeKazanimPdf(lo.id)} style={{ border: 'none', background: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '0.76rem' }}>✕</button>
+                                  </div>
+                                ) : (
+                                  <label style={{ fontSize: '0.76rem', color: '#0f6e56', cursor: 'pointer', border: '1px dashed #cbd5e1', borderRadius: '6px', padding: '4px 8px', display: 'inline-block' }}>
+                                    + PDF Yükle
+                                    <input
+                                      type="file"
+                                      accept="application/pdf"
+                                      style={{ display: 'none' }}
+                                      onChange={(e) => { if (e.target.files[0]) uploadKazanimPdf(lo.id, e.target.files[0]); e.target.value = ''; }}
+                                    />
+                                  </label>
+                                )}
+                              </div>
+
+                              <div style={{ display: 'flex', gap: '4px' }}>
+                                <input
+                                  type="text"
+                                  placeholder="YouTube linki..."
+                                  value={draftVideo}
+                                  onChange={(e) => setResourceVideoDrafts((prev) => ({ ...prev, [lo.id]: e.target.value }))}
+                                  style={{ flex: 1, fontSize: '0.76rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box' }}
+                                />
+                                <button
+                                  onClick={() => saveKazanimVideoUrl(lo.id, draftVideo)}
+                                  style={{ fontSize: '0.72rem', padding: '5px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}
+                                >Kaydet</button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </div>
           </div>
@@ -5246,7 +5488,7 @@ export default function App() {
                     const dersTavsiye = getDersTavsiyesi(ders, dersData);
                     let dersCtaExam = null;
                     if (dersTavsiye.aksiyon === 'deneme') {
-                      dersCtaExam = findOnerilenDeneme(activeStudentExam.id, activeStudentExam.examType, ders);
+                      dersCtaExam = findOnerilenDeneme(activeStudentExam.id, activeStudentExam.examType, dersData.lessonCategoryId);
                     }
                     return (
                       <div key={ders} className="yt-kazanim-box">
@@ -5286,9 +5528,9 @@ export default function App() {
 
                             let ctaExam = null;
                             if (tavsiye.aksiyon === 'konuTesti') {
-                              ctaExam = findKonuTesti(konuName, activeStudentExam.id);
+                              ctaExam = findKonuTesti(konuEntry.topicId, activeStudentExam.id);
                             } else if (tavsiye.aksiyon === 'deneme') {
-                              ctaExam = findOnerilenDeneme(activeStudentExam.id, activeStudentExam.examType, ders);
+                              ctaExam = findOnerilenDeneme(activeStudentExam.id, activeStudentExam.examType, dersData.lessonCategoryId);
                             }
 
                             return (
@@ -5352,17 +5594,68 @@ export default function App() {
                                       {Object.entries(konuEntry.kazanimlar).map(([kazanim, k]) => {
                                         const kzGreenWidth = getBaremGreenWidth(k.correct, k.total);
                                         const kzTextColor = getBaremTextColor(k.correct, k.total);
+                                        const resource = k.outcomeId ? learningOutcomeResources[k.outcomeId] : null;
+                                        const hasPdf = !!resource?.pdf_url;
+                                        const hasVideo = !!resource?.video_url;
+                                        const videoKey = `${konuKey}::${kazanim}`;
+                                        const isVideoOpen = !!expandedVideoKazanim[videoKey];
+                                        const embedUrl = hasVideo ? getYoutubeEmbedUrl(resource.video_url) : null;
+                                        const showResources = k.tier === 'riskli' && (hasPdf || hasVideo);
                                         return (
-                                          <li key={kazanim} style={{ display: 'grid', gridTemplateColumns: '1fr 130px', alignItems: 'center', gap: '10px', padding: '4px 0' }}>
-                                            <span style={{ fontSize: '0.78rem' }}>{kazanim}</span>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                              <div style={{ flex: 1, height: '11px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: '#E24B4A' }}>
-                                                <div style={{ height: '100%', width: `${kzGreenWidth}%`, backgroundColor: '#639922' }}></div>
+                                          <li key={kazanim} style={{ padding: '4px 0' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px', alignItems: 'center', gap: '10px' }}>
+                                              <span style={{ fontSize: '0.78rem' }}>{kazanim}</span>
+                                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                <div style={{ flex: 1, height: '11px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: '#E24B4A' }}>
+                                                  <div style={{ height: '100%', width: `${kzGreenWidth}%`, backgroundColor: '#639922' }}></div>
+                                                </div>
+                                                <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.7rem', fontWeight: 'bold', width: '32px', textAlign: 'right', color: kzTextColor }}>
+                                                  {k.correct}/{k.total}
+                                                </span>
                                               </div>
-                                              <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.7rem', fontWeight: 'bold', width: '32px', textAlign: 'right', color: kzTextColor }}>
-                                                {k.correct}/{k.total}
-                                              </span>
                                             </div>
+
+                                            {showResources && (
+                                              <div style={{ marginTop: '5px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                                {hasPdf && (
+                                                  <a
+                                                    href={resource.pdf_url}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="yt-resource-pill"
+                                                  >
+                                                    📄 Ders Notu
+                                                  </a>
+                                                )}
+                                                {hasVideo && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => setExpandedVideoKazanim((prev) => ({ ...prev, [videoKey]: !prev[videoKey] }))}
+                                                    className="yt-resource-pill"
+                                                  >
+                                                    {isVideoOpen ? '▲ Videoyu Kapat' : '🎥 Video Anlatım'}
+                                                  </button>
+                                                )}
+                                              </div>
+                                            )}
+
+                                            {showResources && isVideoOpen && hasVideo && (
+                                              embedUrl ? (
+                                                <div style={{ marginTop: '8px', position: 'relative', paddingBottom: '56.25%', height: 0, borderRadius: '8px', overflow: 'hidden' }}>
+                                                  <iframe
+                                                    src={embedUrl}
+                                                    title={`${kazanim} video anlatım`}
+                                                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' }}
+                                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                                    allowFullScreen
+                                                  />
+                                                </div>
+                                              ) : (
+                                                <p style={{ margin: '6px 0 0 0', fontSize: '0.76rem' }}>
+                                                  <a href={resource.video_url} target="_blank" rel="noopener noreferrer">▶ Videoyu izlemek için tıkla</a>
+                                                </p>
+                                              )
+                                            )}
                                           </li>
                                         );
                                       })}

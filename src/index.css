@@ -356,6 +356,24 @@ p {
 .yt-kazanim-box li { font-size: 0.85rem; color: var(--yt-ink-2); margin-bottom: 4px; }
 .yt-kazanim-box li b { color: var(--yt-mustard-deep); }
 
+/* Riskli kazanımların altında görünen "Ders Notu" / "Video Anlatım" etiketleri */
+.yt-resource-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--yt-mustard-deep);
+  background: #fff;
+  color: var(--yt-mustard-deep);
+  cursor: pointer;
+  text-decoration: none;
+  font-family: inherit;
+}
+.yt-resource-pill:hover { background: var(--yt-mustard-bg); }
+
 /* --- sort/filter bar --- */
 .yt-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
 .yt-select {
