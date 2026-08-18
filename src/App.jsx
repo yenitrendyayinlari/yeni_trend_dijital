@@ -2267,6 +2267,19 @@ export default function App() {
     return { byDers, hasData, sureSorunuGlobal };
   };
 
+  // Bir sınavın gerçekten ÇÖZÜLEBİLİR olup olmadığını kontrol eder --
+  // paket (isParent) ise en az bir yayınlanmış alt testi olmalı, tekil bir
+  // sınavsa kendi PDF'i/soru sayısı olmalı. Bu kontrol olmadan, kazanım
+  // haritası eşleşen ama içine henüz test eklenmemiş boş bir paket
+  // önerilip öğrenci boş bir sayfaya düşebiliyordu.
+  const examHasPlayableContent = (exam) => {
+    if (!exam) return false;
+    if (exam.isParent) {
+      return exams.some((c) => c.parentId === exam.id && c.isPublished);
+    }
+    return !!(exam.pdfFile || (exam.numPages && exam.numPages > 0));
+  };
+
   // Bir konuda öğrenci zayıfsa/orta seviyedeyse, o konuya özel bir "konu
   // testi" önerebilmek için: yayınlanmış sınavlar arasında, topicMap'inin
   // en az %80'i AYNI KONU ID'sine (topic_id) çözülen bir sınav arıyoruz.
@@ -2279,6 +2292,7 @@ export default function App() {
     if (!topicId) return null;
     return exams.find((e) => {
       if (!e.isPublished || e.id === excludeExamId || !e.topicMap) return false;
+      if (!examHasPlayableContent(e)) return false;
       const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
       if (entries.length === 0) return false;
       const matchCount = entries.filter((t) => resolveEntryIds(t).topicId === topicId).length;
@@ -2294,6 +2308,7 @@ export default function App() {
       if (!e.isPublished || e.parentId || e.id === excludeExamId) return false;
       if (e.examType !== (examType || 'deneme')) return false;
       if (studentResultsMap[e.id] && studentResultsMap[e.id].is_finished) return false;
+      if (!examHasPlayableContent(e)) return false;
       if (!lessonCategoryId) return true;
       if (!e.topicMap) return false;
       const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
@@ -3187,8 +3202,17 @@ export default function App() {
 
                               <div>
                                 {resource.pdf_url ? (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                                     <a href={resource.pdf_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.76rem', color: '#0f6e56' }}>📄 {resource.pdf_filename || 'Dosya'}</a>
+                                    <label style={{ fontSize: '0.72rem', color: '#334155', cursor: 'pointer', textDecoration: 'underline' }}>
+                                      Değiştir
+                                      <input
+                                        type="file"
+                                        accept="application/pdf"
+                                        style={{ display: 'none' }}
+                                        onChange={(e) => { if (e.target.files[0]) uploadKazanimPdf(lo.id, e.target.files[0]); e.target.value = ''; }}
+                                      />
+                                    </label>
                                     <button onClick={() => removeKazanimPdf(lo.id)} style={{ border: 'none', background: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '0.76rem' }}>✕</button>
                                   </div>
                                 ) : (
