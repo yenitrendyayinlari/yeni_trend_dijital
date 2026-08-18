@@ -2267,17 +2267,19 @@ export default function App() {
     return { byDers, hasData, sureSorunuGlobal };
   };
 
-  // Bir sınavın gerçekten ÇÖZÜLEBİLİR olup olmadığını kontrol eder --
-  // paket (isParent) ise en az bir yayınlanmış alt testi olmalı, tekil bir
-  // sınavsa kendi PDF'i/soru sayısı olmalı. Bu kontrol olmadan, kazanım
-  // haritası eşleşen ama içine henüz test eklenmemiş boş bir paket
-  // önerilip öğrenci boş bir sayfaya düşebiliyordu.
+  // Bir sınavın gerçekten ÇÖZÜLEBİLİR olup olmadığını kontrol eder.
+  // ÖNEMLİ: numPages (soru sayısı) tek başına yeterli değil -- kazanım
+  // haritası hazırlanırken önceden girilmiş olabilir ama asıl PDF hiç
+  // yüklenmemiş olabilir (tam bu yüzden "İdare" gibi boş bir sayfaya
+  // düşülüyordu). isParent bayrağına da güvenmiyoruz (bazı eski
+  // kayıtlarda tutarsız olabiliyor) -- bunun yerine doğrudan: ya kendi
+  // PDF'i var mı, ya da en az bir yayınlanmış alt testi var mı diye
+  // bakıyoruz. İkisi de yoksa öneri motoru bu sınavı asla önermez.
   const examHasPlayableContent = (exam) => {
     if (!exam) return false;
-    if (exam.isParent) {
-      return exams.some((c) => c.parentId === exam.id && c.isPublished);
-    }
-    return !!(exam.pdfFile || (exam.numPages && exam.numPages > 0));
+    const hasOwnPdf = !!exam.pdfFile;
+    const hasPublishedChildren = exams.some((c) => c.parentId === exam.id && c.isPublished && c.pdfFile);
+    return hasOwnPdf || hasPublishedChildren;
   };
 
   // Bir konuda öğrenci zayıfsa/orta seviyedeyse, o konuya özel bir "konu
