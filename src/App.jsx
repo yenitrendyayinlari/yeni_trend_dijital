@@ -5599,7 +5599,7 @@ export default function App() {
 
                                     {tavsiye.aksiyon === 'konuTesti' && ctaExam && (
                                       <button
-                                        onClick={() => { setActiveStudentExamId(null); setInspectingExamId(ctaExam.id); }}
+                                        onClick={() => { setActiveStudentExamId(null); setInspectingExamId(ctaExam.parentId || ctaExam.id); }}
                                         className="yt-btn yt-btn-primary"
                                         style={{ fontSize: '0.8rem', padding: '7px 14px', marginBottom: '10px' }}
                                       >
@@ -5608,7 +5608,7 @@ export default function App() {
                                     )}
                                     {tavsiye.aksiyon === 'deneme' && ctaExam && (
                                       <button
-                                        onClick={() => { setActiveStudentExamId(null); setInspectingExamId(ctaExam.id); }}
+                                        onClick={() => { setActiveStudentExamId(null); setInspectingExamId(ctaExam.parentId || ctaExam.id); }}
                                         className="yt-btn yt-btn-primary"
                                         style={{ fontSize: '0.8rem', padding: '7px 14px', marginBottom: '10px' }}
                                       >
