@@ -162,28 +162,37 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Ödeme başlatılamadı: ' + pendingError.message });
   }
 
-  const basketItems = examRows.map((e) => ({
-    id: e.id.toString(),
-    name: e.name || 'Dijital Sınav / Test',
-    category1: 'Eğitim',
-    itemType: Iyzipay.BASKET_ITEM_TYPE.VIRTUAL,
-    price: Number(e.price).toString()
-  }));
-
   // ÖNEMLİ: iyzico, sepet kalemlerinin (basketItems) toplamının, tahsil
-  // edilen tutarla (price) BİREBİR eşleşmesini bekliyor. Bakiye uyguladığımız
-  // için gerçek tahsilat (payableAmount), ürünlerin toplam fiyatından
-  // (totalPrice) düşük -- bu farkı negatif tutarlı bir "indirim kalemi"
-  // olarak sepete ekleyerek toplamı payableAmount'a eşitliyoruz.
-  if (balanceApplied > 0) {
-    basketItems.push({
-      id: 'hediye-bakiye-indirimi',
-      name: 'Hediye Bakiye İndirimi',
-      category1: 'İndirim',
+  // edilen tutarla (price) BİREBİR eşleşmesini bekliyor VE her kalemin
+  // fiyatının sıfırdan BÜYÜK olmasını şart koşuyor (negatif/sıfır "indirim
+  // kalemi" reddediliyor: "basketItemPrice sıfırdan küçük veya sıfıra eşit
+  // olamaz"). Bu yüzden indirimi ayrı bir satır olarak eklemek yerine, her
+  // ürünün fiyatını uyguladığımız bakiye oranında KÜÇÜLTÜP sepete öyle
+  // yazıyoruz. Yuvarlama farkını son kalemde telafi ederek toplamın tam
+  // olarak payableAmount'a eşit olmasını garanti ediyoruz.
+  const scaleRatio = payableAmount / totalPrice;
+  let runningSum = 0;
+  const basketItems = examRows.map((e, idx) => {
+    const isLast = idx === examRows.length - 1;
+    let itemPrice;
+    if (isLast) {
+      itemPrice = Number((payableAmount - runningSum).toFixed(2));
+      // Aşırı uçlarda (çok sayıda kalem + neredeyse tam bakiye kapsaması
+      // gibi) yuvarlama son kalemi 0 ya da altına düşürebilir; iyzico
+      // pozitif bekliyor, bu yüzden güvenli bir alt sınır koyuyoruz.
+      if (itemPrice <= 0) itemPrice = 0.01;
+    } else {
+      itemPrice = Math.max(0.01, Number((Number(e.price) * scaleRatio).toFixed(2)));
+      runningSum += itemPrice;
+    }
+    return {
+      id: e.id.toString(),
+      name: e.name || 'Dijital Sınav / Test',
+      category1: 'Eğitim',
       itemType: Iyzipay.BASKET_ITEM_TYPE.VIRTUAL,
-      price: (-balanceApplied).toFixed(2)
-    });
-  }
+      price: itemPrice.toString()
+    };
+  });
 
   // Origin header bazı durumlarda (ör. tarayıcı/istemci farklılıkları) boş
   // gelebilir; bu yüzden host + proto üzerinden güvenli bir fallback
@@ -243,12 +252,12 @@ export default async function handler(req, res) {
     basketItems
   };
 
-  // Not: totalPrice/payableAmount tam sayı TL değilse virgülden sonra iki
-  // haneye yuvarlanmış olarak yukarıda kullanıldı (toFixed(2)); basketItems
-  // toplamı iyzico tarafında price alanıyla (payableAmount) birebir eşleşmeli.
-  // Bakiye uygulanmış siparişlerde basketItems, ürünlerin TAM fiyatını
-  // taşımaya devam eder (ör. rapor/muhasebe amaçlı); iyzico'nun kabul ettiği
-  // gerçek tahsilat tutarı ise price/paidPrice alanındaki (indirimli) tutardır.
+  // Not: basketItems fiyatları yukarıda payableAmount'a göre orantılı olarak
+  // küçültüldü, dolayısıyla toplamları price alanıyla (payableAmount)
+  // birebir eşleşiyor -- iyzico'nun beklediği kural bu. Sistemdeki gerçek
+  // ürün fiyatı (totalPrice) ve o siparişte kullanılan bakiye (balanceApplied)
+  // ayrıca pending_checkouts kaydında saklandığı için muhasebe/rapor
+  // amacıyla hâlâ eksiksiz olarak erişilebilir durumda.
   iyzipay.checkoutFormInitialize.create(request, (err, result) => {
     if (err) {
       return res.status(500).json({ error: err.message });
