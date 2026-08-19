@@ -5,6 +5,7 @@ import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
 import sualinkLogo from './sualinklogo.png';
 import TopBanner, { TopBannerManageButton } from './TopBanner';
+import { SignupBonusManageButton } from './SignupBonus';
 import Footer from './Footer';
 
 // İyzico'nun checkoutFormContent alanı içindeki <script> etiketi,
@@ -140,6 +141,7 @@ export default function App() {
   const solutionRef = useRef(null);
   const [studentResultsMap, setStudentResultsMap] = useState({});
   const [studentPurchases, setStudentPurchases] = useState({}); 
+  const [studentBalance, setStudentBalance] = useState(null); // null: henüz yüklenmedi, number: yüklendi
 
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportText, setReportText] = useState('');
@@ -979,6 +981,7 @@ export default function App() {
       setAppMode('admin');
     } else {
       setAppMode('student');
+      ensureAndFetchStudentBalance();
     }
     // ÖNEMLİ: Bu listeler (Ders/Konu/Kazanım adları) sadece admin panelinde
     // DEĞİL, öğrenci sonuç ekranındaki Kazanım Analizi'nde de kullanılıyor
@@ -1093,6 +1096,32 @@ export default function App() {
       return purchasedMap;
     }
     return {};
+  };
+
+  // Öğrencinin bakiyesini (hediye bakiye dahil) çeker. İlk kez giriş
+  // yapıyorsa (henüz hiç bakiye kaydı yoksa), sunucu tarafındaki endpoint
+  // admin panelinde ayarlanmış tutarı OTOMATİK olarak bir kereliğine
+  // tanımlar -- bu yüzden bu fonksiyon her girişte çağrılsa bile güvenli
+  // (idempotent). Tutar asla client'ta hesaplanmıyor/varsayılmıyor, her
+  // zaman sunucudan geldiği gibi gösteriliyor.
+  const ensureAndFetchStudentBalance = async () => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) return;
+      const resp = await fetch('/api/ensure-signup-bonus', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      });
+      const result = await resp.json();
+      if (resp.ok) {
+        setStudentBalance(Number(result.balance) || 0);
+      } else {
+        console.error('Bakiye alınamadı:', result.error);
+      }
+    } catch (err) {
+      console.error('Bakiye alınamadı:', err);
+    }
   };
 
   const formatExamData = (item) => ({
@@ -1273,6 +1302,7 @@ export default function App() {
     setShowAccountPage(false);
     setStudentResultsMap({});
     setStudentPurchases({});
+    setStudentBalance(null);
     fetchPublicExams();
   };
 
@@ -2780,6 +2810,7 @@ export default function App() {
           <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>⚙️ Yönetici Paneli ({user.email})</h1>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             <TopBannerManageButton />
+            <SignupBonusManageButton />
             <button
               onClick={() => setShowAnnounceModal(true)}
               style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
@@ -4613,6 +4644,15 @@ export default function App() {
         >
           Sınavlarım
         </button>
+      )}
+      {user && appMode !== 'admin' && studentBalance !== null && (
+        <div
+          title="Bakiyeniz -- ödemelerde kullanılabilir"
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '8px', border: '1.5px solid var(--yt-line)', backgroundColor: 'var(--yt-paper-2)', whiteSpace: 'nowrap' }}
+        >
+          <span style={{ fontSize: '1rem' }}>🎁</span>
+          <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--yt-ink)' }}>₺{studentBalance}</span>
+        </div>
       )}
       <button onClick={() => setShowCart(true)} className="yt-cart-btn yt-cart-btn-wide" title="Sepet">
         <span style={{ fontSize: '1.15rem' }}>🛒</span>
