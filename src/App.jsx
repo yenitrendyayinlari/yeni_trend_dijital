@@ -2345,7 +2345,7 @@ export default function App() {
         };
       case 'gelismekte':
         return {
-          mesaj: `${konuName} konusunda orta seviyedesin, birkaç noktada tıkanıyorsun. Bir konu testiyle pekiştirebilirsin.`,
+          mesaj: `${konuName} konusunda orta seviyedesin, birkaç noktada tıkanıyorsun.`,
           aksiyon: 'konuTesti',
         };
       case 'iyi':
@@ -2355,7 +2355,7 @@ export default function App() {
         };
       case 'harika':
         return {
-          mesaj: `${konuName} konusunda harikasın! Yeni bir denemeyle kendini bir üst seviyede zorlayabilirsin.`,
+          mesaj: `${konuName} konusunda harikasın!`,
           aksiyon: 'deneme',
         };
       case 'hedefDisi':
@@ -2384,7 +2384,7 @@ export default function App() {
     switch (dersEntry.tier) {
       case 'riskli':
         return {
-          mesaj: `${dersName} dersinde genel olarak zorlanıyor gibisin. Bu, konuya hiç çalışmamış olmandan mı, yoksa çalışıp da zorlanmandan mı kaynaklanıyor? Aşağıdaki konulara bakarak nereden başlayacağını görebilirsin.`,
+          mesaj: `${dersName} dersinde genel olarak zorlanıyor gibisin. Ayrıntılı rapor ve öneriler için konu başlıklarına tıklayınız.`,
           aksiyon: null,
         };
       case 'gelismekte':
