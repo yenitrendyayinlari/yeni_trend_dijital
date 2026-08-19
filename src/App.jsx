@@ -2297,6 +2297,27 @@ export default function App() {
     return hasOwnPdf || hasPublishedChildren;
   };
 
+  // Bir aday sınavın öneri motorunda GÖSTERİLEBİLİR olup olmadığını
+  // kontrol eder.
+  // ÖNEMLİ (bug fix): price=0 her zaman "ücretsiz" demek değil -- bir ALT
+  // TEST (parentId dolu) için price=0, admin panelindeki notta da yazdığı
+  // gibi "bu test tek başına satılmaz, sadece üst paketi satın alanlar
+  // erişebilir" anlamına gelir. Eskiden bu ayrım yapılmıyordu: price=0 olan
+  // HER alt test, paketi satın almamış öğrenciye bile doğrudan "Ücretsiz
+  // Çöz" olarak öneriliyordu -- oysa öğrenci o teste hiç erişemiyordu.
+  // Şimdi: üst seviye (paket) sınavlarda price=0 gerçekten ücretsizdir; alt
+  // testlerde ise price=0 VE paket sahipliği yoksa bu test öneri listesine
+  // hiç girmez (paketi satın almış bir öğrenciye "owned" üzerinden zaten
+  // gösterilmeye devam eder).
+  const examIsIndividuallyRecommendable = (exam) => {
+    if (!examHasPlayableContent(exam)) return false;
+    const owned = !!(studentPurchases[exam.id] || (exam.parentId && studentPurchases[exam.parentId]));
+    if (owned) return true;
+    const isFree = !exam.parentId && (!exam.price || exam.price <= 0);
+    if (isFree) return true;
+    return !!(exam.price && exam.price > 0);
+  };
+
   // Bir konuda öğrenci zayıfsa/orta seviyedeyse, o konuya özel testleri
   // önerebilmek için: yayınlanmış sınavlar arasında, topicMap'inin en az
   // %80'i AYNI KONU ID'sine (topic_id) çözülen TÜM sınavları buluyoruz --
@@ -2305,21 +2326,20 @@ export default function App() {
   // kazanımın konusu Kategoriler'den değiştirildiğinde, hem bu raporun
   // kendisi hem de burada taranan aday sınavlar aynı canlı ID'ye göre
   // çözüldüğü için öneri motoru asla eski/metin tabanlı bir uyuşmazlık
-  // yüzünden doğru testi kaçırmaz. En ucuzdan pahalıya sıralanır, en
-  // fazla 5 sonuç döner (arayüz kalabalıklaşmasın diye).
+  // yüzünden doğru testi kaçırmaz. En ucuzdan pahalıya sıralanır, sonuç
+  // sayısı sınırlanmaz (eşleşen tüm testler gösterilir).
   const findKonuTestleri = (topicId, excludeExamId) => {
     if (!topicId) return [];
     return exams
       .filter((e) => {
         if (!e.isPublished || e.id === excludeExamId || !e.topicMap) return false;
-        if (!examHasPlayableContent(e)) return false;
+        if (!examIsIndividuallyRecommendable(e)) return false;
         const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
         if (entries.length === 0) return false;
         const matchCount = entries.filter((t) => resolveEntryIds(t).topicId === topicId).length;
         return (matchCount / entries.length) >= 0.8;
       })
-      .sort((a, b) => (a.price || 0) - (b.price || 0))
-      .slice(0, 5);
+      .sort((a, b) => (a.price || 0) - (b.price || 0));
   };
 
   // Bir öğrenci iyi/harika durumdaysa, aynı sınav türünden (ör. "deneme") VE
@@ -2331,7 +2351,7 @@ export default function App() {
         if (!e.isPublished || e.parentId || e.id === excludeExamId) return false;
         if (e.examType !== (examType || 'deneme')) return false;
         if (studentResultsMap[e.id] && studentResultsMap[e.id].is_finished) return false;
-        if (!examHasPlayableContent(e)) return false;
+        if (!examIsIndividuallyRecommendable(e)) return false;
         if (!lessonCategoryId) return true;
         if (!e.topicMap) return false;
         const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
@@ -2339,8 +2359,7 @@ export default function App() {
         const matchCount = entries.filter((t) => resolveEntryIds(t).lessonCategoryId === lessonCategoryId).length;
         return (matchCount / entries.length) >= 0.8;
       })
-      .sort((a, b) => (a.price || 0) - (b.price || 0))
-      .slice(0, 5);
+      .sort((a, b) => (a.price || 0) - (b.price || 0));
   };
 
   // Tier'a göre kısa, doğal dilde bir öneri cümlesi + aksiyon etiketi.
@@ -4477,11 +4496,21 @@ export default function App() {
   // listelerinde ortak kullanılıyor.
   const renderOneriTestSatiri = (ex) => {
     const owned = !!(studentPurchases[ex.id] || (ex.parentId && studentPurchases[ex.parentId]));
-    const free = !ex.price || ex.price <= 0;
+    // ÖNEMLİ (bug fix): price=0 sadece ÜST SEVİYE (paketsiz) sınavlarda
+    // gerçekten "ücretsiz" demektir. Bir alt testte price=0, "tek başına
+    // satılmaz, sadece üst paketi satın alan erişir" demektir -- bu yüzden
+    // parentId varsa "free" sayılmaz (examIsIndividuallyRecommendable zaten
+    // bu durumdaki alt testleri, sahip olunmadıkça listeye hiç sokmuyor).
+    const free = !ex.parentId && (!ex.price || ex.price <= 0);
     const inCart = cartItems.includes(ex.id);
     return (
       <div key={ex.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', border: '1px solid var(--yt-line)', borderRadius: '8px', backgroundColor: '#fff' }}>
-        <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--yt-ink)' }}>{ex.name || 'İsimsiz Test'}</span>
+        <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--yt-ink)' }}>
+          {ex.name || 'İsimsiz Test'}
+          {ex.numPages > 0 && (
+            <span style={{ color: 'var(--yt-graphite-soft)', fontWeight: 'normal' }}> · {ex.numPages} soru</span>
+          )}
+        </span>
         {owned || free ? (
           <button
             onClick={() => { setShowResults(false); startExam(ex); }}
