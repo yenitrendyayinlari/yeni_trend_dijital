@@ -1396,6 +1396,21 @@ export default function App() {
   };
 
   const activeStudentExam = exams.find(e => e.id === activeStudentExamId);
+
+  // PDF'te 1'den başlayan mutlak sayfa numarasını, sınavın Bölümler
+  // ayarına göre öğrencinin GÖRDÜĞÜ soru numarasına çevirir (ör. mutlak
+  // sayfa 120 ama "Genel Kültür" bölümünde 61-120 aralığındaysa -> 60.
+  // Soru paletinde/başlıkta ne yazıyorsa, çözüm ekranında da AYNI numara
+  // görünmeli -- bu yüzden ikisi de bu tek fonksiyonu kullanıyor.
+  const getDisplayQuestionLabel = (exam, absolutePage) => {
+    const secs = (exam && exam.sections) || [];
+    const sec = secs.find(s => absolutePage >= s.start && absolutePage <= s.end);
+    if (sec) {
+      return { number: absolutePage - sec.start + 1, sectionName: sec.name };
+    }
+    return { number: absolutePage, sectionName: null };
+  };
+
   
   useEffect(() => {
     if (user && appMode === 'student' && activeStudentExam && !isExamFinished && !showResults && !isPaused) {
@@ -5777,12 +5792,13 @@ export default function App() {
               <div className="yt-topbar" style={{ marginBottom: 0 }}>
                 <span>
                   {(() => {
-                    const secs = activeStudentExam.sections || [];
-                    const sec = secs.find(s => studentCurrentPage >= s.start && studentCurrentPage <= s.end);
-                    if (sec) {
-                      return `${sec.name} · SORU ${studentCurrentPage - sec.start + 1} / ${sec.end - sec.start + 1}`;
+                    const { number, sectionName } = getDisplayQuestionLabel(activeStudentExam, studentCurrentPage);
+                    if (sectionName) {
+                      const secs = activeStudentExam.sections || [];
+                      const sec = secs.find(s => studentCurrentPage >= s.start && studentCurrentPage <= s.end);
+                      return `${sectionName} · SORU ${number} / ${sec.end - sec.start + 1}`;
                     }
-                    return `SORU ${studentCurrentPage} / ${activeStudentExam.numPages}`;
+                    return `SORU ${number} / ${activeStudentExam.numPages}`;
                   })()}
                 </span>
                 {!showResults && (
@@ -5963,7 +5979,7 @@ export default function App() {
         {(showResults && viewingSolutionQ) && activeStudentExam.solutionPdfFile && (
           <div ref={solutionRef} className="yt-session-card" style={{ marginTop: '20px', borderColor: 'var(--yt-correct)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--yt-correct)', padding: '10px 14px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', color: '#fff', fontSize: '0.88rem' }}>
-              <span>{studentCurrentPage}. Soru Çözümü Aşağıda</span>
+              <span>{getDisplayQuestionLabel(activeStudentExam, studentCurrentPage).number}. Soru Çözümü Aşağıda</span>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 {reportedQuestions[reportKey(activeStudentExamId, studentCurrentPage)] ? (
                   <button disabled style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: 'rgba(255,255,255,0.18)', color: '#fff', fontSize: '0.78rem', fontWeight: 'bold', cursor: 'not-allowed' }}>
