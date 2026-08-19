@@ -5963,7 +5963,7 @@ export default function App() {
 
             {showResults && activeStudentExam.solutionPdfFile && (
               <button onClick={() => setViewingSolutionQ(v => !v)} className={`yt-btn yt-btn-correct${viewingSolutionQ ? ' active' : ''}`} style={{ width: '100%', marginBottom: '10px' }}>
-                {viewingSolutionQ ? '✕ Çözümü Gizle' : `${studentCurrentPage}. Çözümü Gör`}
+                {viewingSolutionQ ? '✕ Çözümü Gizle' : `${getDisplayQuestionLabel(activeStudentExam, studentCurrentPage).number}. Çözümü Gör`}
               </button>
             )}
 
@@ -6011,7 +6011,7 @@ export default function App() {
               style={{ width: '100%', maxWidth: '440px', padding: '20px' }}
             >
               <h3 style={{ margin: '0 0 6px 0', fontSize: '1rem' }}>
-                {studentCurrentPage}. Soru İçin Bildirim
+                {getDisplayQuestionLabel(activeStudentExam, studentCurrentPage).number}. Soru İçin Bildirim
               </h3>
               <p style={{ margin: '0 0 12px 0', fontSize: '0.82rem', color: 'rgba(251,249,243,0.6)' }}>
                 Soruda veya çözümde bir hata mı var? Görüşünüzü kısaca yazın, ekibimiz inceleyecek.
