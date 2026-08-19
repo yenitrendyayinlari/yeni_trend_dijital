@@ -29,6 +29,31 @@ const redirectPage = (siteUrl, status) => `<!DOCTYPE html>
   </body>
 </html>`;
 
+// Bir ödeme başarıyla tamamlandığında içerikleri tanımlar (varsa) ve
+// (varsa) uygulanmış hediye bakiyeyi ATOMİK olarak düşer. exam_id'ler
+// zaten sahiplenilmişse tekrar eklemez (idempotent).
+const grantPurchases = async (studentEmail, examIds) => {
+  const { data: existing } = await supabaseAdmin
+    .from('student_purchases')
+    .select('exam_id')
+    .eq('student_email', studentEmail)
+    .in('exam_id', examIds);
+
+  const alreadyOwned = new Set((existing || []).map((r) => r.exam_id));
+  const newRows = examIds
+    .filter((id) => !alreadyOwned.has(id))
+    .map((id) => ({ exam_id: id, student_email: studentEmail }));
+
+  if (newRows.length > 0) {
+    const { error: insertError } = await supabaseAdmin.from('student_purchases').insert(newRows);
+    if (insertError) {
+      console.error('Satın alma kaydedilemedi:', insertError);
+      return false;
+    }
+  }
+  return true;
+};
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).send('Method not allowed');
@@ -56,41 +81,76 @@ export default async function handler(req, res) {
     }
 
     if (result.status === 'success' && result.paymentStatus === 'SUCCESS') {
-      // conversationId -> alıcının e-postası, basketId -> satın alınan içerik ID'leri
-      const studentEmail = result.conversationId;
-      const examIds = (result.basketId || '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
+      const conversationId = result.conversationId;
 
-      if (studentEmail && examIds.length > 0) {
-        const rows = examIds.map((examId) => ({
-          exam_id: examId,
-          student_email: studentEmail
-        }));
+      // --- YENİ AKIŞ: conversationId, iyzipay-checkout.js'in oluşturduğu
+      // pending_checkouts kaydının id'si. Bu kayıttan e-postayı, içerik
+      // id'lerini ve (varsa) uygulanmış hediye bakiye tutarını GÜVENLE
+      // (tamamen sunucu tarafında üretilmiş bir kayıttan) okuyoruz.
+      const { data: pending, error: pendingError } = await supabaseAdmin
+        .from('pending_checkouts')
+        .select('*')
+        .eq('id', conversationId)
+        .maybeSingle();
 
-        // Aynı içerik daha önce kaydedilmişse tekrar eklememek için önce
-        // mevcut kayıtları çekip, sadece eksik olanları ekliyoruz.
-        const { data: existing } = await supabaseAdmin
-          .from('student_purchases')
-          .select('exam_id')
-          .eq('student_email', studentEmail)
-          .in('exam_id', examIds);
+      if (pendingError) {
+        console.error('Ödeme kaydı okunamadı:', pendingError);
+      }
 
-        const alreadyOwned = new Set((existing || []).map((r) => r.exam_id));
-        const newRows = rows.filter((r) => !alreadyOwned.has(r.exam_id));
+      if (pending) {
+        if (pending.status === 'completed') {
+          // İyzico aynı sonucu bir sebeple iki kez POST etmiş olabilir
+          // (ör. ağ tekrar denemesi) -- tekrar bakiye düşüp içerik
+          // eklemeden doğrudan başarı sayfasına dön.
+          return res.status(200).send(redirectPage(siteUrl, 'success'));
+        }
 
-        if (newRows.length > 0) {
-          const { error: insertError } = await supabaseAdmin
-            .from('student_purchases')
-            .insert(newRows);
+        const studentEmail = pending.student_email;
+        const examIds = (pending.exam_ids || '').split(',').map((s) => s.trim()).filter(Boolean);
+        const balanceApplied = Number(pending.balance_applied) || 0;
 
-          if (insertError) {
-            console.error('Satın alma kaydedilemedi:', insertError);
-            return res.status(200).send(redirectPage(siteUrl, 'db_error'));
+        const granted = await grantPurchases(studentEmail, examIds);
+        if (!granted) {
+          return res.status(200).send(redirectPage(siteUrl, 'db_error'));
+        }
+
+        if (balanceApplied > 0) {
+          const { error: deductError } = await supabaseAdmin.rpc('deduct_balance', {
+            p_email: studentEmail,
+            p_amount: balanceApplied
+          });
+          if (deductError) {
+            // Ödeme zaten iyzico'dan (indirimli tutar üzerinden) tahsil
+            // edildi -- bakiye düşümü başarısız olsa bile içeriği geri
+            // almıyoruz, sadece kayıt tutuyoruz. Bu durumda muhasebe
+            // tutarsızlığı için manuel kontrol gerekebilir.
+            console.error(
+              `Bakiye düşülemedi (ödeme zaten tahsil edildi -- öğrenci: ${studentEmail}, tutar: ${balanceApplied}):`,
+              deductError
+            );
           }
         }
 
+        await supabaseAdmin
+          .from('pending_checkouts')
+          .update({ status: 'completed' })
+          .eq('id', pending.id);
+
+        return res.status(200).send(redirectPage(siteUrl, 'success'));
+      }
+
+      // --- ESKİ AKIŞ (geriye dönük uyumluluk): pending_checkouts'ta kayıt
+      // bulunamadıysa, bu ödeme bu özellik devreye girmeden ÖNCE başlatılmış
+      // olabilir. O zaman conversationId doğrudan e-postaydı, basketId ise
+      // içerik id listesiydi -- eski mantıkla devam ediyoruz.
+      const studentEmail = conversationId;
+      const examIds = (result.basketId || '').split(',').map((s) => s.trim()).filter(Boolean);
+
+      if (studentEmail && examIds.length > 0) {
+        const granted = await grantPurchases(studentEmail, examIds);
+        if (!granted) {
+          return res.status(200).send(redirectPage(siteUrl, 'db_error'));
+        }
         return res.status(200).send(redirectPage(siteUrl, 'success'));
       }
 

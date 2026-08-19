@@ -73,6 +73,95 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Ücretsiz bir içerik için ödeme başlatılamaz.' });
   }
 
+  const totalPrice = examRows.reduce((sum, e) => sum + Number(e.price), 0);
+  const idList = examRows.map((e) => e.id).join(',');
+
+  // --- HEDİYE BAKİYE ---
+  // Öğrencinin GÜNCEL bakiyesini veritabanından okuyoruz (client'tan asla
+  // güven duyulmaz). Mevcutsa, toplam tutarı düşürmek için OTOMATİK olarak
+  // (bakiye kadar, en fazla toplam tutar kadar) uygulanır -- öğrencinin ayrıca
+  // bir şey seçmesi gerekmez.
+  const { data: balanceRow, error: balanceError } = await supabaseAdmin
+    .from('student_balances')
+    .select('balance')
+    .eq('student_email', email)
+    .maybeSingle();
+
+  if (balanceError) {
+    console.error('Bakiye okunamadı, bakiyesiz devam ediliyor:', balanceError);
+  }
+  const currentBalance = Number(balanceRow?.balance) || 0;
+  const balanceApplied = Math.min(currentBalance, totalPrice);
+  const payableAmount = Number((totalPrice - balanceApplied).toFixed(2));
+
+  // --- DURUM A: Bakiye toplam tutarı TAMAMEN karşılıyor ---
+  // iyzico'ya hiç gitmeye gerek yok; bakiyeyi ATOMİK olarak düş (deduct_balance
+  // fonksiyonu -- yetersiz bakiye/yarış durumuna karşı DB seviyesinde
+  // korumalı) ve içerikleri doğrudan tanımla.
+  if (payableAmount <= 0) {
+    const { data: newBalance, error: deductError } = await supabaseAdmin.rpc('deduct_balance', {
+      p_email: email,
+      p_amount: totalPrice
+    });
+
+    if (deductError) {
+      console.error('Bakiye düşülemedi:', deductError);
+      return res.status(400).json({
+        error: 'Bakiyeniz güncellendiği için işlem tamamlanamadı. Lütfen tekrar deneyin.'
+      });
+    }
+
+    const { data: existing } = await supabaseAdmin
+      .from('student_purchases')
+      .select('exam_id')
+      .eq('student_email', email)
+      .in('exam_id', requestedIds);
+    const alreadyOwned = new Set((existing || []).map((r) => r.exam_id));
+    const newRows = requestedIds
+      .filter((id) => !alreadyOwned.has(id))
+      .map((id) => ({ exam_id: id, student_email: email }));
+
+    if (newRows.length > 0) {
+      const { error: insertError } = await supabaseAdmin.from('student_purchases').insert(newRows);
+      if (insertError) {
+        console.error('Satın alma kaydedilemedi (bakiyeli ödeme):', insertError);
+        return res.status(500).json({ error: 'İçerik tanımlanamadı, lütfen destek ile iletişime geçin.' });
+      }
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      freeCheckout: true,
+      balanceApplied: totalPrice,
+      newBalance: Number(newBalance) || 0,
+      purchasedExamIds: requestedIds
+    });
+  }
+
+  // --- DURUM B: Bakiye toplamı KISMEN karşılıyor (ya da hiç bakiye yok) ---
+  // Kalan tutar (payableAmount) için iyzico'ya gidiyoruz. Bakiyeyi HENÜZ
+  // düşmüyoruz -- ödeme başarısız/iptal olursa bakiyeyi boşa harcamamak için
+  // gerçek düşüm, ödeme onaylandığında callback'te yapılır. Bu yüzden
+  // "ne kadar bakiye kullanılacağı" bilgisini, callback'in güvenle
+  // okuyabilmesi için bir pending_checkouts kaydına yazıp, o kaydın id'sini
+  // conversationId olarak iyzico'ya gönderiyoruz.
+  const { data: pending, error: pendingError } = await supabaseAdmin
+    .from('pending_checkouts')
+    .insert([{
+      student_email: email,
+      exam_ids: idList,
+      total_price: totalPrice,
+      balance_applied: balanceApplied,
+      status: 'pending'
+    }])
+    .select('id')
+    .single();
+
+  if (pendingError) {
+    console.error('Ödeme kaydı oluşturulamadı:', pendingError);
+    return res.status(500).json({ error: 'Ödeme başlatılamadı: ' + pendingError.message });
+  }
+
   const basketItems = examRows.map((e) => ({
     id: e.id.toString(),
     name: e.name || 'Dijital Sınav / Test',
@@ -81,13 +170,20 @@ export default async function handler(req, res) {
     price: Number(e.price).toString()
   }));
 
-  const totalPrice = examRows
-    .reduce((sum, e) => sum + Number(e.price), 0)
-    .toFixed(2);
-
-  // basketId'ye, ödeme başarılı olduğunda callback tarafında hangi içeriklerin
-  // satın alındığını çözebilmek için tüm exam id'lerini virgülle ayırarak koyuyoruz.
-  const idList = examRows.map((e) => e.id).join(',');
+  // ÖNEMLİ: iyzico, sepet kalemlerinin (basketItems) toplamının, tahsil
+  // edilen tutarla (price) BİREBİR eşleşmesini bekliyor. Bakiye uyguladığımız
+  // için gerçek tahsilat (payableAmount), ürünlerin toplam fiyatından
+  // (totalPrice) düşük -- bu farkı negatif tutarlı bir "indirim kalemi"
+  // olarak sepete ekleyerek toplamı payableAmount'a eşitliyoruz.
+  if (balanceApplied > 0) {
+    basketItems.push({
+      id: 'hediye-bakiye-indirimi',
+      name: 'Hediye Bakiye İndirimi',
+      category1: 'İndirim',
+      itemType: Iyzipay.BASKET_ITEM_TYPE.VIRTUAL,
+      price: (-balanceApplied).toFixed(2)
+    });
+  }
 
   // Origin header bazı durumlarda (ör. tarayıcı/istemci farklılıkları) boş
   // gelebilir; bu yüzden host + proto üzerinden güvenli bir fallback
@@ -99,11 +195,14 @@ export default async function handler(req, res) {
 
   const request = {
     locale: Iyzipay.LOCALE.TR,
-    // conversationId'ye doğrulanmış kullanıcının e-postasını koyuyoruz;
-    // callback bu sayede ödemeyi kimin yaptığını güvenilir şekilde çözebiliyor.
-    conversationId: email,
-    price: totalPrice.toString(),
-    paidPrice: totalPrice.toString(),
+    // ÖNEMLİ: conversationId artık ham e-posta DEĞİL, yukarıda oluşturduğumuz
+    // pending_checkouts kaydının id'si. Callback bu id üzerinden hem
+    // e-postayı hem de (varsa) düşülecek bakiye tutarını güvenle bulur --
+    // öğrenci bu değeri asla değiştiremez çünkü tamamen sunucuda üretiliyor.
+    conversationId: pending.id,
+    // Kullanıcıdan sadece KALAN tutar (bakiye düşüldükten sonra) tahsil edilir.
+    price: payableAmount.toFixed(2),
+    paidPrice: payableAmount.toFixed(2),
     currency: Iyzipay.CURRENCY.TRY,
     basketId: idList,
     paymentGroup: Iyzipay.PAYMENT_GROUP.PRODUCT,
@@ -144,10 +243,16 @@ export default async function handler(req, res) {
     basketItems
   };
 
+  // Not: totalPrice/payableAmount tam sayı TL değilse virgülden sonra iki
+  // haneye yuvarlanmış olarak yukarıda kullanıldı (toFixed(2)); basketItems
+  // toplamı iyzico tarafında price alanıyla (payableAmount) birebir eşleşmeli.
+  // Bakiye uygulanmış siparişlerde basketItems, ürünlerin TAM fiyatını
+  // taşımaya devam eder (ör. rapor/muhasebe amaçlı); iyzico'nun kabul ettiği
+  // gerçek tahsilat tutarı ise price/paidPrice alanındaki (indirimli) tutardır.
   iyzipay.checkoutFormInitialize.create(request, (err, result) => {
     if (err) {
       return res.status(500).json({ error: err.message });
     }
-    res.status(200).json(result);
+    res.status(200).json({ ...result, balanceApplied, payableAmount });
   });
 }
