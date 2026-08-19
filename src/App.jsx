@@ -2297,42 +2297,50 @@ export default function App() {
     return hasOwnPdf || hasPublishedChildren;
   };
 
-  // Bir konuda öğrenci zayıfsa/orta seviyedeyse, o konuya özel bir "konu
-  // testi" önerebilmek için: yayınlanmış sınavlar arasında, topicMap'inin
-  // en az %80'i AYNI KONU ID'sine (topic_id) çözülen bir sınav arıyoruz.
+  // Bir konuda öğrenci zayıfsa/orta seviyedeyse, o konuya özel testleri
+  // önerebilmek için: yayınlanmış sınavlar arasında, topicMap'inin en az
+  // %80'i AYNI KONU ID'sine (topic_id) çözülen TÜM sınavları buluyoruz --
+  // tek bir sonuç değil, liste (farklı paketlerden gelen testler de dahil).
   // ÖNEMLİ: artık konu ADI değil, GÜNCEL ID karşılaştırılıyor -- bir
   // kazanımın konusu Kategoriler'den değiştirildiğinde, hem bu raporun
   // kendisi hem de burada taranan aday sınavlar aynı canlı ID'ye göre
   // çözüldüğü için öneri motoru asla eski/metin tabanlı bir uyuşmazlık
-  // yüzünden doğru testi kaçırmaz.
-  const findKonuTesti = (topicId, excludeExamId) => {
-    if (!topicId) return null;
-    return exams.find((e) => {
-      if (!e.isPublished || e.id === excludeExamId || !e.topicMap) return false;
-      if (!examHasPlayableContent(e)) return false;
-      const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
-      if (entries.length === 0) return false;
-      const matchCount = entries.filter((t) => resolveEntryIds(t).topicId === topicId).length;
-      return (matchCount / entries.length) >= 0.8;
-    }) || null;
+  // yüzünden doğru testi kaçırmaz. En ucuzdan pahalıya sıralanır, en
+  // fazla 5 sonuç döner (arayüz kalabalıklaşmasın diye).
+  const findKonuTestleri = (topicId, excludeExamId) => {
+    if (!topicId) return [];
+    return exams
+      .filter((e) => {
+        if (!e.isPublished || e.id === excludeExamId || !e.topicMap) return false;
+        if (!examHasPlayableContent(e)) return false;
+        const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
+        if (entries.length === 0) return false;
+        const matchCount = entries.filter((t) => resolveEntryIds(t).topicId === topicId).length;
+        return (matchCount / entries.length) >= 0.8;
+      })
+      .sort((a, b) => (a.price || 0) - (b.price || 0))
+      .slice(0, 5);
   };
 
   // Bir öğrenci iyi/harika durumdaysa, aynı sınav türünden (ör. "deneme") VE
-  // AYNI DERSE (artık ID ile, lessonCategoryId), henüz çözmediği başka bir
-  // sınav önererek onu bir üst seviyeye iteriz.
-  const findOnerilenDeneme = (excludeExamId, examType, lessonCategoryId) => {
-    return exams.find((e) => {
-      if (!e.isPublished || e.parentId || e.id === excludeExamId) return false;
-      if (e.examType !== (examType || 'deneme')) return false;
-      if (studentResultsMap[e.id] && studentResultsMap[e.id].is_finished) return false;
-      if (!examHasPlayableContent(e)) return false;
-      if (!lessonCategoryId) return true;
-      if (!e.topicMap) return false;
-      const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
-      if (entries.length === 0) return false;
-      const matchCount = entries.filter((t) => resolveEntryIds(t).lessonCategoryId === lessonCategoryId).length;
-      return (matchCount / entries.length) >= 0.8;
-    }) || null;
+  // AYNI DERSE (artık ID ile, lessonCategoryId), henüz çözmediği TÜM
+  // denemeleri buluyoruz.
+  const findOnerilenDenemeler = (excludeExamId, examType, lessonCategoryId) => {
+    return exams
+      .filter((e) => {
+        if (!e.isPublished || e.parentId || e.id === excludeExamId) return false;
+        if (e.examType !== (examType || 'deneme')) return false;
+        if (studentResultsMap[e.id] && studentResultsMap[e.id].is_finished) return false;
+        if (!examHasPlayableContent(e)) return false;
+        if (!lessonCategoryId) return true;
+        if (!e.topicMap) return false;
+        const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
+        if (entries.length === 0) return false;
+        const matchCount = entries.filter((t) => resolveEntryIds(t).lessonCategoryId === lessonCategoryId).length;
+        return (matchCount / entries.length) >= 0.8;
+      })
+      .sort((a, b) => (a.price || 0) - (b.price || 0))
+      .slice(0, 5);
   };
 
   // Tier'a göre kısa, doğal dilde bir öneri cümlesi + aksiyon etiketi.
@@ -4104,6 +4112,30 @@ export default function App() {
                           />
                         </div>
 
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                          <div className="form-group" style={{ flex: 1 }}>
+                            <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Tekil Fiyat (₺):</label>
+                            <input
+                              type="number"
+                              value={editingExam.price || 0}
+                              onChange={(e) => updateExamInDb(editingExam.id, { price: Number(e.target.value) })}
+                              style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
+                            />
+                          </div>
+                          <div className="form-group" style={{ flex: 1 }}>
+                            <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Eski Fiyat (₺):</label>
+                            <input
+                              type="number"
+                              value={editingExam.originalPrice || 0}
+                              onChange={(e) => updateExamInDb(editingExam.id, { originalPrice: Number(e.target.value) })}
+                              style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
+                            />
+                          </div>
+                        </div>
+                        <p style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '-4px', marginBottom: '10px' }}>
+                          0 bırakılırsa bu test tek başına satılmaz, sadece üst paketi satın alanlar erişebilir.
+                        </p>
+
                         {adminActiveExam.examType === 'deneme' && (
                           <div className="form-group" style={{ marginBottom: '10px' }}>
                             <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>⏱️ Süre (Dakika) — Deneme Sınavı:</label>
@@ -4439,6 +4471,41 @@ export default function App() {
   // basınca (showCart true oluyordu ama çekmece hiç DOM'a girmiyordu)
   // hiçbir şey görünmüyordu. Artık paylaşılan bir fonksiyon, her sayfada
   // çağrılıyor.
+  // Kazanım Analizi'ndeki öneri kartlarında tek bir test satırı --
+  // sahip olunan/ücretsiz bir testse direkt "Çöz", değilse fiyat +
+  // "Sepete Ekle" gösterir. Hem konu hem ders seviyesindeki öneri
+  // listelerinde ortak kullanılıyor.
+  const renderOneriTestSatiri = (ex) => {
+    const owned = !!(studentPurchases[ex.id] || (ex.parentId && studentPurchases[ex.parentId]));
+    const free = !ex.price || ex.price <= 0;
+    const inCart = cartItems.includes(ex.id);
+    return (
+      <div key={ex.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', border: '1px solid var(--yt-line)', borderRadius: '8px', backgroundColor: '#fff' }}>
+        <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--yt-ink)' }}>{ex.name || 'İsimsiz Test'}</span>
+        {owned || free ? (
+          <button
+            onClick={() => { setShowResults(false); startExam(ex); }}
+            className="yt-btn yt-btn-primary"
+            style={{ fontSize: '0.74rem', padding: '5px 10px' }}
+          >
+            ▶ {owned ? 'Çöz' : 'Ücretsiz Çöz'}
+          </button>
+        ) : (
+          <>
+            <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.76rem', fontWeight: 'bold', color: 'var(--yt-mustard-deep)' }}>₺{ex.price}</span>
+            <button
+              onClick={() => toggleCartItem(ex.id)}
+              className={`yt-add-cart-btn${inCart ? ' in-cart' : ''}`}
+              style={{ fontSize: '0.74rem', padding: '5px 10px' }}
+            >
+              {inCart ? '✓ Sepette' : '+ Sepete Ekle'}
+            </button>
+          </>
+        )}
+      </div>
+    );
+  };
+
   const renderCartDrawer = () => {
     const cartExams = exams.filter(e => cartItems.includes(e.id));
     const cartTotal = cartExams.reduce((sum, e) => sum + (e.price || 0), 0);
@@ -4954,7 +5021,18 @@ export default function App() {
                       const childInProgress = !childCompleted && answeredCount > 0;
                       const totalQ = child.numPages || 0;
                       const progressPct = totalQ > 0 ? Math.round((answeredCount / totalQ) * 100) : 0;
-                      const ctaClass = childCompleted ? 'yt-btn-ghost' : (childInProgress ? 'yt-btn-primary' : (!isPaid || isPurchased ? 'yt-btn-outline' : 'yt-btn-locked'));
+
+                      // Bir alt test, üst paket satın alınmışsa YA DA kendisi ayrı
+                      // ayrı satın alınmışsa erişilebilir. Kendi fiyatı (price) 0
+                      // ise tek başına satılmıyor demektir -- sadece üst paket
+                      // yoluyla açılır.
+                      const childOwnPrice = child.price || 0;
+                      const childIndividuallyPurchased = !!studentPurchases[child.id];
+                      const childUnlocked = !isPaid || isPurchased || childIndividuallyPurchased;
+                      const childIndividuallySellable = childOwnPrice > 0;
+                      const childInCart = cartItems.includes(child.id);
+
+                      const ctaClass = childCompleted ? 'yt-btn-ghost' : (childInProgress ? 'yt-btn-primary' : (childUnlocked ? 'yt-btn-outline' : 'yt-btn-locked'));
                       return (
                         <div key={child.id} className="yt-subtest-row">
                           <div className={`yt-subtest-bubble${childCompleted ? ' done' : (childInProgress ? ' in-progress' : '')}`}>
@@ -4966,6 +5044,9 @@ export default function App() {
                               <span>{child.numPages || '?'} SORU</span>
                               {childCompleted && <span style={{ color: 'var(--yt-correct)' }}>Net: {childRes.net}</span>}
                               {childInProgress && <span style={{ color: 'var(--yt-mustard-deep)' }}>{answeredCount}/{totalQ} soru yapıldı</span>}
+                              {!childUnlocked && childIndividuallySellable && (
+                                <span style={{ color: 'var(--yt-mustard-deep)', fontWeight: 'bold' }}>₺{childOwnPrice}</span>
+                              )}
                             </div>
                             {childInProgress && (
                               <div className="yt-subtest-progress-track">
@@ -4973,35 +5054,65 @@ export default function App() {
                               </div>
                             )}
                           </div>
-                          <button
-                            onClick={() => {
-                              if (!user) {
-                                alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
-                                setAuthMode('login');
-                                setShowAuthModal(true);
-                                return;
-                              }
-                              if (!isPaid || isPurchased) {
-                                if (childCompleted) {
-                                  setActiveStudentExamId(child.id);
-                                  setInspectingExamId(null);
-                                  setStudentAnswers(childRes.answers || {});
-                                  setStudentCurrentPage(1);
-                                  setIsExamFinished(true);
-                                  setShowResults(true);
-                                  setViewingSolutionQ(false);
-                                  fetchAnswerKeyForReview(child.id);
-                                } else {
-                                  startExam(child);
+
+                          {!childUnlocked && childIndividuallySellable ? (
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                              <button
+                                onClick={() => toggleCartItem(child.id)}
+                                className={`yt-add-cart-btn${childInCart ? ' in-cart' : ''}`}
+                                style={{ fontSize: '0.76rem', padding: '6px 10px' }}
+                              >
+                                {childInCart ? '✓ Sepette' : '+ Sepete Ekle'}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (!user) {
+                                    alert("Satın alabilmek için lütfen giriş yapın veya üye olun.");
+                                    setAuthMode('login');
+                                    setShowAuthModal(true);
+                                    return;
+                                  }
+                                  handleIyzicoPayment(child);
+                                }}
+                                className="yt-btn yt-btn-buy"
+                                style={{ fontSize: '0.76rem', padding: '6px 10px' }}
+                              >
+                                Satın Al →
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                if (!user) {
+                                  alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
+                                  setAuthMode('login');
+                                  setShowAuthModal(true);
+                                  return;
                                 }
-                              } else {
-                                handleIyzicoPayment(inspectExam);
-                              }
-                            }}
-                            className={`yt-btn ${ctaClass}`}
-                          >
-                            {childCompleted ? 'Sonucu İncele' : (childInProgress ? 'Devam Et →' : (!isPaid || isPurchased ? 'Teste Başla →' : '🔒 Kilitli'))}
-                          </button>
+                                if (childUnlocked) {
+                                  if (childCompleted) {
+                                    setActiveStudentExamId(child.id);
+                                    setInspectingExamId(null);
+                                    setStudentAnswers(childRes.answers || {});
+                                    setStudentCurrentPage(1);
+                                    setIsExamFinished(true);
+                                    setShowResults(true);
+                                    setViewingSolutionQ(false);
+                                    fetchAnswerKeyForReview(child.id);
+                                  } else {
+                                    startExam(child);
+                                  }
+                                } else {
+                                  // Bu test tek başına satılmıyor (fiyatı 0) -- tek
+                                  // seçenek üst paketin tamamını satın almak.
+                                  handleIyzicoPayment(inspectExam);
+                                }
+                              }}
+                              className={`yt-btn ${ctaClass}`}
+                            >
+                              {childCompleted ? 'Sonucu İncele' : (childInProgress ? 'Devam Et →' : (childUnlocked ? 'Teste Başla →' : '🔒 Kilitli'))}
+                            </button>
+                          )}
                         </div>
                       );
                     })}
@@ -5550,9 +5661,9 @@ export default function App() {
                     const dersTextColor = getBaremTextColor(dersData.correct, dersData.total);
                     const dersMeta = KONU_TIER_META[dersData.tier] || { label: dersData.tier || '-', color: '#64748B', bg: '#F1F5F9' };
                     const dersTavsiye = getDersTavsiyesi(ders, dersData);
-                    let dersCtaExam = null;
+                    let dersCtaExams = [];
                     if (dersTavsiye.aksiyon === 'deneme') {
-                      dersCtaExam = findOnerilenDeneme(activeStudentExam.id, activeStudentExam.examType, dersData.lessonCategoryId);
+                      dersCtaExams = findOnerilenDenemeler(activeStudentExam.id, activeStudentExam.examType, dersData.lessonCategoryId);
                     }
                     return (
                       <div key={ders} className="yt-kazanim-box">
@@ -5572,14 +5683,10 @@ export default function App() {
                         </div>
 
                         <p style={{ margin: '8px 0 0 0', fontSize: '0.8rem', color: 'var(--yt-ink)' }}>{dersTavsiye.mesaj}</p>
-                        {dersTavsiye.aksiyon === 'deneme' && dersCtaExam && (
-                          <button
-                            onClick={() => { setActiveStudentExamId(null); setInspectingExamId(dersCtaExam.id); }}
-                            className="yt-btn yt-btn-primary"
-                            style={{ fontSize: '0.78rem', padding: '6px 12px', marginTop: '8px' }}
-                          >
-                            🚀 {dersCtaExam.name || 'Yeni Deneme'}'yi Çöz
-                          </button>
+                        {dersTavsiye.aksiyon === 'deneme' && dersCtaExams.length > 0 && (
+                          <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {dersCtaExams.map((ex) => renderOneriTestSatiri(ex))}
+                          </div>
                         )}
 
                         <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -5590,11 +5697,11 @@ export default function App() {
                             const kGreenWidth = getBaremGreenWidth(konuEntry.correct, konuEntry.total);
                             const tavsiye = getKonuTavsiyesi(konuName, konuEntry);
 
-                            let ctaExam = null;
+                            let ctaExams = [];
                             if (tavsiye.aksiyon === 'konuTesti') {
-                              ctaExam = findKonuTesti(konuEntry.topicId, activeStudentExam.id);
+                              ctaExams = findKonuTestleri(konuEntry.topicId, activeStudentExam.id);
                             } else if (tavsiye.aksiyon === 'deneme') {
-                              ctaExam = findOnerilenDeneme(activeStudentExam.id, activeStudentExam.examType, dersData.lessonCategoryId);
+                              ctaExams = findOnerilenDenemeler(activeStudentExam.id, activeStudentExam.examType, dersData.lessonCategoryId);
                             }
 
                             return (
@@ -5635,23 +5742,10 @@ export default function App() {
                                   <div style={{ padding: '12px 14px', backgroundColor: '#FAFAF7', borderTop: '1px solid var(--yt-line)' }}>
                                     <p style={{ margin: '0 0 10px 0', fontSize: '0.82rem', color: 'var(--yt-ink)' }}>{tavsiye.mesaj}</p>
 
-                                    {tavsiye.aksiyon === 'konuTesti' && ctaExam && (
-                                      <button
-                                        onClick={() => { setActiveStudentExamId(null); setInspectingExamId(ctaExam.parentId || ctaExam.id); }}
-                                        className="yt-btn yt-btn-primary"
-                                        style={{ fontSize: '0.8rem', padding: '7px 14px', marginBottom: '10px' }}
-                                      >
-                                        📘 {ctaExam.name || 'Konu Testi'}'ni Çöz
-                                      </button>
-                                    )}
-                                    {tavsiye.aksiyon === 'deneme' && ctaExam && (
-                                      <button
-                                        onClick={() => { setActiveStudentExamId(null); setInspectingExamId(ctaExam.parentId || ctaExam.id); }}
-                                        className="yt-btn yt-btn-primary"
-                                        style={{ fontSize: '0.8rem', padding: '7px 14px', marginBottom: '10px' }}
-                                      >
-                                        🚀 {ctaExam.name || 'Yeni Deneme'}'yi Çöz
-                                      </button>
+                                    {(tavsiye.aksiyon === 'konuTesti' || tavsiye.aksiyon === 'deneme') && ctaExams.length > 0 && (
+                                      <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                        {ctaExams.map((ex) => renderOneriTestSatiri(ex))}
+                                      </div>
                                     )}
 
                                     <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none' }}>
