@@ -6,6 +6,7 @@ import { initializePayment } from './iyzipayService';
 import sualinkLogo from './sualinklogo.png';
 import TopBanner, { TopBannerManageButton } from './TopBanner';
 import { SignupBonusManageButton } from './SignupBonus';
+import BalanceGiftModal from './BalanceGiftModal';
 import Footer from './Footer';
 
 // İyzico'nun checkoutFormContent alanı içindeki <script> etiketi,
@@ -2004,7 +2005,15 @@ export default function App() {
       return;
     }
 
-    const confirmed = window.confirm(`"${exam.name}" isimli sınav ücretli (₺${exam.price}). İyzico ödeme formu açılacaktır. Onaylıyor musunuz?`);
+    // Not: Gerçek tutar her zaman sunucuda hesaplanır; burada sadece
+    // onay mesajını daha bilgilendirici göstermek için varolan bakiyeyi
+    // (studentBalance) kullanıyoruz.
+    const estimatedApplied = Math.min(studentBalance || 0, exam.price);
+    const estimatedPayable = exam.price - estimatedApplied;
+    const confirmMsg = estimatedApplied > 0
+      ? `"${exam.name}" isimli sınav ücretli (₺${exam.price}). ₺${estimatedApplied} bakiyenizden kullanılacak, kalan ₺${estimatedPayable} için iyzico ödeme formu açılacaktır. Onaylıyor musunuz?`
+      : `"${exam.name}" isimli sınav ücretli (₺${exam.price}). İyzico ödeme formu açılacaktır. Onaylıyor musunuz?`;
+    const confirmed = window.confirm(confirmMsg);
     if (!confirmed) return;
 
     // Not: price/email artık sunucuda (Authorization token'ı ve veritabanı
@@ -2025,6 +2034,16 @@ export default function App() {
       if (err) {
         console.error("Ödeme hatası:", err);
         alert("Ödeme başlatılırken bir hata oluştu.");
+        return;
+      }
+
+      // Toplam tutar tamamen hediye bakiyeden karşılandıysa iyzico'ya hiç
+      // gidilmez -- içerik sunucu tarafında zaten tanımlandı, burada sadece
+      // arayüzü güncelliyoruz.
+      if (result.freeCheckout) {
+        setStudentPurchases(prev => ({ ...prev, [exam.id]: true }));
+        setStudentBalance(result.newBalance ?? 0);
+        alert(`🎉 Ödeme bakiyenizden karşılandı! ₺${result.balanceApplied} bakiye kullanıldı. İçerik hesabınıza tanımlandı.`);
         return;
       }
 
@@ -2056,7 +2075,15 @@ export default function App() {
     if (cartExams.length === 0) return;
     const cartTotal = cartExams.reduce((sum, e) => sum + (e.price || 0), 0);
 
-    const confirmed = window.confirm(`Sepetinizdeki ${cartExams.length} içerik için toplam ₺${cartTotal.toLocaleString('tr-TR')} tutarında ödeme yapılacak. Onaylıyor musunuz?`);
+    // Not: Gerçek tutar her zaman sunucuda hesaplanır; burada sadece
+    // onay mesajını daha bilgilendirici göstermek için varolan bakiyeyi
+    // (studentBalance) kullanıyoruz.
+    const estimatedApplied = Math.min(studentBalance || 0, cartTotal);
+    const estimatedPayable = cartTotal - estimatedApplied;
+    const confirmMsg = estimatedApplied > 0
+      ? `Sepetinizdeki ${cartExams.length} içerik için toplam ₺${cartTotal.toLocaleString('tr-TR')}. ₺${estimatedApplied} bakiyenizden kullanılacak, kalan ₺${estimatedPayable} için iyzico ödeme formu açılacaktır. Onaylıyor musunuz?`
+      : `Sepetinizdeki ${cartExams.length} içerik için toplam ₺${cartTotal.toLocaleString('tr-TR')} tutarında ödeme yapılacak. Onaylıyor musunuz?`;
+    const confirmed = window.confirm(confirmMsg);
     if (!confirmed) return;
 
     // Not: price/email artık sunucuda (Authorization token'ı ve veritabanı
@@ -2077,6 +2104,21 @@ export default function App() {
       if (err) {
         console.error("Ödeme hatası:", err);
         alert("Ödeme başlatılırken bir hata oluştu.");
+        return;
+      }
+
+      // Toplam tutar tamamen hediye bakiyeden karşılandıysa iyzico'ya hiç
+      // gidilmez -- içerikler sunucu tarafında zaten tanımlandı, burada
+      // sadece arayüzü (satın alınanlar + sepet + bakiye) güncelliyoruz.
+      if (result.freeCheckout) {
+        setStudentPurchases(prev => {
+          const updated = { ...prev };
+          (result.purchasedExamIds || []).forEach(id => { updated[id] = true; });
+          return updated;
+        });
+        setStudentBalance(result.newBalance ?? 0);
+        setCartItems([]);
+        alert(`🎉 Ödeme bakiyenizden karşılandı! ₺${result.balanceApplied} bakiye kullanıldı. İçerikler hesabınıza tanımlandı.`);
         return;
       }
 
@@ -4652,6 +4694,7 @@ export default function App() {
         >
           <span style={{ fontSize: '1rem' }}>🎁</span>
           <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--yt-ink)' }}>₺{studentBalance}</span>
+          <BalanceGiftModal balance={studentBalance} studentEmail={user.email} />
         </div>
       )}
       <button onClick={() => setShowCart(true)} className="yt-cart-btn yt-cart-btn-wide" title="Sepet">
