@@ -5517,7 +5517,31 @@ export default function App() {
 
             {kazanimReport && kazanimReport.hasData && (
               <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--yt-line)' }}>
-                <h3 style={{ margin: '0 0 4px 0', fontSize: '1rem' }}>Kazanım Analizi</h3>
+                <div style={{
+                  backgroundColor: '#E24B4A',
+                  color: '#fff',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  fontSize: '0.85rem',
+                  fontWeight: '600',
+                  lineHeight: 1.45,
+                  marginBottom: '14px'
+                }}>
+                  Uyarı: Gelişiminizi hızlandırmak için aşağıda yer alan soru paletinden yanlış cevapladığınız soruları ve cevaplarını inceleyiniz.
+                </div>
+                <h3 style={{
+                  margin: '0 0 4px 0',
+                  fontSize: '1.15rem',
+                  fontFamily: 'var(--yt-font-display)',
+                  fontWeight: '700',
+                  background: 'linear-gradient(90deg, #1d4e89 0%, #2f7bc4 40%, #f2a93b 75%, #f28c1e 100%)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  backgroundClip: 'text',
+                  display: 'inline-block'
+                }}>
+                  Sualink Raporu
+                </h3>
                 <p style={{ margin: '0 0 16px 0', fontSize: '0.85rem', color: 'var(--yt-graphite)' }}>
                   Önce derse, sonra içindeki bir konuya tıkla -- kazanım bazlı ayrıntıyı ve sana özel önerimizi orada görürsün.
                 </p>
