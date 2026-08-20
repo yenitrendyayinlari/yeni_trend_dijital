@@ -128,6 +128,13 @@ export default function App() {
   const [showNewDersForKazanimInput, setShowNewDersForKazanimInput] = useState(false);
   const [newDersForKazanimName, setNewDersForKazanimName] = useState('');
   const [showCategoryManager, setShowCategoryManager] = useState(false);
+  // Soru başı fiyat: admin panelinde ayarlanan, "Soru / Sayfa Sayısı"
+  // değiştiğinde Fiyat/Eski Fiyat'ı otomatik hesaplamak için kullanılan
+  // tek (global) katsayı. `pricing_settings` tablosunun TEK satırında
+  // (id=1) tutulur.
+  const [pricePerQuestion, setPricePerQuestion] = useState(0);
+  const [showPricingSettings, setShowPricingSettings] = useState(false);
+  const [pricingDraft, setPricingDraft] = useState('0');
   // Kategori Yönetimi artık sekmeler yerine iç içe (Sınav Türü > Ders Türü >
   // Konu > Kazanım) açılır/kapanır bir akordiyon ağacı olarak gösteriliyor.
   // Her seviyenin kendi "hangi kayıtlar açık" haritası var (id -> boolean).
@@ -1021,9 +1028,56 @@ export default function App() {
     return true;
   };
 
+  const fetchPricingSettings = async () => {
+    const { data, error } = await supabase
+      .from('pricing_settings')
+      .select('price_per_question')
+      .eq('id', 1)
+      .maybeSingle();
+    if (!error && data) setPricePerQuestion(Number(data.price_per_question) || 0);
+    else if (error) console.error('Soru başı fiyat ayarı okunamadı:', error);
+  };
+
+  const savePricePerQuestion = async (newValue) => {
+    const parsed = Number(newValue);
+    if (Number.isNaN(parsed) || parsed < 0) {
+      alert('Geçerli bir tutar girin (0 veya üzeri).');
+      return;
+    }
+    const { error } = await supabase
+      .from('pricing_settings')
+      .upsert({ id: 1, price_per_question: parsed });
+    if (error) {
+      alert(
+        'Kaydedilemedi: ' + error.message +
+        '\n\n"pricing_settings" tablosu veritabanında henüz yoksa, önce onu oluşturmak gerekir (id int8 PK, price_per_question numeric).'
+      );
+      return;
+    }
+    setPricePerQuestion(parsed);
+    setShowPricingSettings(false);
+  };
+
+  // Soru sayısı her değiştiğinde (elle ya da PDF'ten otomatik algılanarak),
+  // Fiyat VE Eski Fiyat'ı "soru sayısı x soru başı fiyat" olarak YENİDEN
+  // hesaplayıp üzerine yazar -- daha önce girilmiş manuel bir indirim varsa
+  // bile (admin ile konuşulup onaylanan davranış budur). Soru başı fiyat
+  // henüz ayarlanmamışsa (0), fiyatlara hiç dokunmuyoruz -- aksi halde
+  // hiçbir katsayı girilmemişken tüm fiyatlar sessizce 0'a düşerdi.
+  const applyNumPagesWithAutoPrice = (examId, numPagesValue) => {
+    const n = Number(numPagesValue) || 0;
+    if (pricePerQuestion > 0) {
+      const computedPrice = Number((n * pricePerQuestion).toFixed(2));
+      updateExamInDb(examId, { numPages: n, price: computedPrice, originalPrice: computedPrice });
+    } else {
+      updateExamInDb(examId, { numPages: n });
+    }
+  };
+
   const checkUserRoleAndSetMode = (currentUser) => {
     if (currentUser.email === 'admin@yayinevi.com') {
       setAppMode('admin');
+      fetchPricingSettings();
     } else {
       setAppMode('student');
       ensureAndFetchStudentBalance();
@@ -1676,7 +1730,17 @@ export default function App() {
       // hakkı doğrulanıp kısa ömürlü imzalı bir URL üretiliyor.
       setAuthLoading(false);
       const updates = { pdfFile: fileName };
-      if (detectedPages) updates.numPages = detectedPages;
+      if (detectedPages) {
+        updates.numPages = detectedPages;
+        // Soru sayısı PDF'ten otomatik algılandığında da, manuel girişte
+        // olduğu gibi, soru başı fiyat ayarlıysa Fiyat/Eski Fiyat'ı aynı
+        // formülle yeniden hesaplıyoruz.
+        if (pricePerQuestion > 0) {
+          const computedPrice = Number((detectedPages * pricePerQuestion).toFixed(2));
+          updates.price = computedPrice;
+          updates.originalPrice = computedPrice;
+        }
+      }
       await updateExamInDb(examId, updates);
     };
     uploadPdf();
@@ -3093,6 +3157,13 @@ export default function App() {
             <TopBannerManageButton />
             <SignupBonusManageButton />
             <button
+              onClick={() => { setPricingDraft(String(pricePerQuestion)); setShowPricingSettings(true); }}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              💲 Soru Başı Fiyat
+              <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 'normal' }}>(₺{pricePerQuestion})</span>
+            </button>
+            <button
               onClick={() => setShowAnnounceModal(true)}
               style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
             >
@@ -3124,6 +3195,44 @@ export default function App() {
             <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
           </div>
         </header>
+
+        {showPricingSettings && (
+          <div
+            onClick={() => setShowPricingSettings(false)}
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '22px', width: '400px', maxWidth: '100%' }}
+            >
+              <h3 style={{ margin: '0 0 6px 0', fontSize: '1.05rem', color: '#0f172a' }}>💲 Soru Başı Fiyat</h3>
+              <p style={{ margin: '0 0 14px 0', fontSize: '0.82rem', color: '#64748b' }}>
+                Bu tutar, bir testin/paketin "Soru / Sayfa Sayısı" alanı her değiştiğinde (elle ya da PDF yüklenip otomatik algılandığında), Fiyat ve Eski Fiyat'ı <b>soru sayısı × bu tutar</b> olarak otomatik hesaplar -- daha önce girilmiş manuel bir indirim varsa bile üzerine yazar. İndirim uygulamak isterseniz, hesaplama sonrası Fiyat alanını elle düşürebilirsiniz; Eski Fiyat, listedeki referans fiyat olarak kalır.
+              </p>
+              <label style={{ fontSize: '0.8rem', color: '#475569', display: 'block', marginBottom: '4px' }}>Soru başına tutar (₺)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={pricingDraft}
+                onChange={(e) => setPricingDraft(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid #e2e8f0', borderRadius: '6px', boxSizing: 'border-box', fontSize: '0.9rem', marginBottom: '16px' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button type="button" onClick={() => setShowPricingSettings(false)} style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>
+                  Vazgeç
+                </button>
+                <button
+                  type="button"
+                  onClick={() => savePricePerQuestion(pricingDraft)}
+                  style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', backgroundColor: '#0f172a', color: '#fff', cursor: 'pointer', fontWeight: 'bold' }}
+                >
+                  Kaydet
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {showAnnounceModal && (
           <div
@@ -4544,12 +4653,12 @@ export default function App() {
 
                         <div className="form-group" style={{ marginBottom: '10px' }}>
                           <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>
-                            Soru / Sayfa Sayısı <span style={{ fontWeight: 'normal', color: '#64748b' }}>(PDF yüklenince otomatik dolar)</span>:
+                            Soru / Sayfa Sayısı <span style={{ fontWeight: 'normal', color: '#64748b' }}>(PDF yüklenince otomatik dolar{pricePerQuestion > 0 ? `, fiyat soru başı ₺${pricePerQuestion} üzerinden otomatik hesaplanır` : ''})</span>:
                           </label>
                           <input
                             type="number"
                             value={editingExam.numPages || 0}
-                            onChange={(e) => updateExamInDb(editingExam.id, { numPages: Number(e.target.value) })}
+                            onChange={(e) => applyNumPagesWithAutoPrice(editingExam.id, e.target.value)}
                             style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
                           />
                         </div>
