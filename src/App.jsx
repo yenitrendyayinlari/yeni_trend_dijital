@@ -69,6 +69,16 @@ export default function App() {
   // Admin "Kaynaklar" ekranı: hangi Ders Türü seçili, ve hangi kazanımın
   // video linki şu an düzenleniyor (kaydetmeden önce serbestçe yazabilsin diye).
   const [showResourceManager, setShowResourceManager] = useState(false);
+  // Excel'den toplu test yükleme (bir üst ürüne onlarca test tek seferde
+  // eklemek için). Kazanım haritası bu akışa dahil değil -- admin onu
+  // sonradan tek tek/mevcut ekranlardan elle girecek.
+  const [showBulkImport, setShowBulkImport] = useState(false);
+  const [bulkImportParentId, setBulkImportParentId] = useState(null);
+  const [bulkExcelRows, setBulkExcelRows] = useState([]); // [{name, numPages, sinavPdfName, cozumPdfName, cevapAnahtari}]
+  const [bulkPdfFiles, setBulkPdfFiles] = useState(new Map()); // dosya adı (küçük harf) -> File
+  const [bulkImporting, setBulkImporting] = useState(false);
+  const [bulkImportProgress, setBulkImportProgress] = useState({ current: 0, total: 0 });
+  const [bulkImportErrors, setBulkImportErrors] = useState([]);
   const [resourceManagerDersId, setResourceManagerDersId] = useState(null);
   const [resourceVideoDrafts, setResourceVideoDrafts] = useState({}); // { [learning_outcome_id]: taslak metin }
   // Öğrenci sonuç ekranında hangi kazanımın video oynatıcısı açık (anahtar: learning_outcome_id ya da kazanım adı).
@@ -1894,6 +1904,153 @@ export default function App() {
   // kullanışlı: bir Konu ya da Kazanım YENİDEN ADLANDIRILDIĞINDA, o adı
   // kullanan sorularda güncel adı otomatik gösterir.
 
+  // --- Excel'den Toplu Test Yükleme ---
+  // Sütun sırası: 1. İçerik Adı, 2. Soru Sayısı, 3. Sınav PDF (dosya adı),
+  // 4. Çözüm PDF (dosya adı, opsiyonel), 5. Hızlı Cevap Anahtarı (opsiyonel).
+  // İlk satır başlık kabul edilir.
+  const handleBulkExcelSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        const parsed = [];
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row || row.length === 0) continue;
+          const name = String(row[0] || '').trim();
+          if (!name) continue;
+          parsed.push({
+            name,
+            numPages: Number(row[1]) || 0,
+            sinavPdfName: String(row[2] || '').trim(),
+            cozumPdfName: String(row[3] || '').trim(),
+            cevapAnahtari: String(row[4] || '').trim()
+          });
+        }
+        if (parsed.length === 0) {
+          alert('Excel dosyasında geçerli satır bulunamadı. Sütun sırasının İçerik Adı / Soru Sayısı / Sınav PDF / Çözüm PDF / Hızlı Cevap Anahtarı olduğundan emin olun.');
+          return;
+        }
+        setBulkExcelRows(parsed);
+      } catch (err) {
+        alert('Excel dosyası okunamadı: ' + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleBulkPdfSelect = (e) => {
+    const files = Array.from(e.target.files || []);
+    const map = new Map();
+    files.forEach((f) => map.set(f.name.toLowerCase(), f));
+    setBulkPdfFiles(map);
+  };
+
+  const runBulkImport = async () => {
+    const parentExam = exams.find((ex) => ex.id === bulkImportParentId);
+    if (!parentExam || bulkExcelRows.length === 0) return;
+
+    setBulkImporting(true);
+    setBulkImportErrors([]);
+    setBulkImportProgress({ current: 0, total: bulkExcelRows.length });
+
+    const existingChildren = exams.filter((ex) => ex.parentId === parentExam.id);
+    let nextOrder = existingChildren.length > 0
+      ? Math.max(...existingChildren.map((ex) => ex.sortOrder || 0)) + 1
+      : 0;
+
+    const errors = [];
+
+    for (let i = 0; i < bulkExcelRows.length; i++) {
+      const row = bulkExcelRows[i];
+      setBulkImportProgress({ current: i + 1, total: bulkExcelRows.length });
+
+      try {
+        // 1) Test kaydını oluştur
+        const insertPayload = {
+          name: row.name,
+          parent_id: parentExam.id,
+          is_published: true,
+          exam_type: parentExam.examType || 'test',
+          category_exam_type: '',
+          category_lesson: '',
+          duration: parentExam.duration || 0,
+          price: 0,
+          sections: [],
+          num_pages: row.numPages,
+          sort_order: nextOrder
+        };
+        nextOrder++;
+
+        const { data, error } = await supabase.from('exams').insert([insertPayload]).select();
+        if (error) throw new Error('Kayıt oluşturulamadı: ' + error.message);
+        const newExam = formatExamData(data[0]);
+        setExams((prev) => [...prev, newExam]);
+
+        // 2) Sınav PDF'i eşleştir ve yükle
+        if (row.sinavPdfName) {
+          const sinavFile = bulkPdfFiles.get(row.sinavPdfName.toLowerCase());
+          if (sinavFile) {
+            const fileExt = sinavFile.name.split('.').pop();
+            const fileName = `exam_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
+            const { error: upErr } = await supabase.storage.from('exam-files').upload(fileName, sinavFile);
+            if (upErr) throw new Error('Sınav PDF yüklenemedi: ' + upErr.message);
+            await supabase.from('exams').update({ pdf_file: fileName }).eq('id', newExam.id);
+            setExams((prev) => prev.map((ex) => ex.id === newExam.id ? { ...ex, pdfFile: fileName } : ex));
+          } else {
+            errors.push(`${row.name}: "${row.sinavPdfName}" adlı dosya seçilenler arasında bulunamadı.`);
+          }
+        }
+
+        // 3) Çözüm PDF'i (opsiyonel) eşleştir ve yükle
+        if (row.cozumPdfName) {
+          const cozumFile = bulkPdfFiles.get(row.cozumPdfName.toLowerCase());
+          if (cozumFile) {
+            const fileExt = cozumFile.name.split('.').pop();
+            const fileName = `sol_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
+            const { error: upErr } = await supabase.storage.from('exam-files').upload(fileName, cozumFile);
+            if (upErr) throw new Error('Çözüm PDF yüklenemedi: ' + upErr.message);
+            await supabase.from('exams').update({ solution_pdf_file: fileName }).eq('id', newExam.id);
+            setExams((prev) => prev.map((ex) => ex.id === newExam.id ? { ...ex, solutionPdfFile: fileName } : ex));
+          } else {
+            errors.push(`${row.name}: "${row.cozumPdfName}" adlı çözüm dosyası seçilenler arasında bulunamadı.`);
+          }
+        }
+
+        // 4) Hızlı cevap anahtarı (opsiyonel)
+        if (row.cevapAnahtari) {
+          const sanitized = row.cevapAnahtari.toUpperCase().replace(/[^ABCDE]/g, '');
+          const key = {};
+          for (let j = 0; j < sanitized.length && j < row.numPages; j++) key[j + 1] = sanitized[j];
+          if (Object.keys(key).length > 0) {
+            const { error: keyErr } = await supabase.from('exam_answer_keys').upsert([{ exam_id: newExam.id, answer_key: key }], { onConflict: 'exam_id' });
+            if (keyErr) throw new Error('Cevap anahtarı kaydedilemedi: ' + keyErr.message);
+            setExams((prev) => prev.map((ex) => ex.id === newExam.id ? { ...ex, answerKey: key } : ex));
+          }
+        }
+      } catch (err) {
+        errors.push(`${row.name || 'Satır ' + (i + 1)}: ${err.message}`);
+      }
+    }
+
+    setBulkImportErrors(errors);
+    setBulkImporting(false);
+
+    if (errors.length === 0) {
+      alert(`✓ ${bulkExcelRows.length} test başarıyla eklendi.`);
+      setShowBulkImport(false);
+      setBulkExcelRows([]);
+      setBulkPdfFiles(new Map());
+    } else {
+      alert(`${bulkExcelRows.length - errors.length}/${bulkExcelRows.length} test eklendi. ${errors.length} satırda sorun oldu -- listeyi kontrol edin.`);
+    }
+  };
+
   const handleAddSubTest = async () => {
     const adminActiveExam = exams.find(e => e.id === activeAdminExamId);
     if (!adminActiveExam) return;
@@ -3371,6 +3528,103 @@ export default function App() {
         )}
 
 
+        {showBulkImport && (
+          <div
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+            onClick={() => { if (!bulkImporting) setShowBulkImport(false); }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '760px', maxWidth: '100%', maxHeight: '84vh', display: 'flex', flexDirection: 'column' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>📥 Excel'den Toplu Test Yükle</h2>
+                {!bulkImporting && (
+                  <button onClick={() => { setShowBulkImport(false); setBulkExcelRows([]); setBulkPdfFiles(new Map()); setBulkImportErrors([]); }} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+                )}
+              </div>
+
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '14px' }}>
+                Sütun sırası: 1. İçerik Adı, 2. Soru Sayısı, 3. Sınav PDF (dosya adı), 4. Çözüm PDF (dosya adı, opsiyonel), 5. Hızlı Cevap Anahtarı (opsiyonel).
+                İlk satır başlık kabul edilir. Kazanım haritası bu ekrandan girilmez -- testler eklendikten sonra "Testleri Yönet"ten tek tek elle eklersiniz.
+              </div>
+
+              <div style={{ display: 'flex', gap: '16px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                <div style={{ flex: '1 1 300px' }}>
+                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>1. Excel Dosyası</label>
+                  <input type="file" accept=".xlsx,.xls" onChange={handleBulkExcelSelect} disabled={bulkImporting} style={{ fontSize: '0.8rem', width: '100%' }} />
+                  {bulkExcelRows.length > 0 && <div style={{ fontSize: '0.76rem', color: '#16a34a', marginTop: '4px' }}>✓ {bulkExcelRows.length} satır okundu.</div>}
+                </div>
+                <div style={{ flex: '1 1 300px' }}>
+                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>2. PDF Dosyaları (sınav + çözüm, hepsi bir arada)</label>
+                  <input type="file" accept="application/pdf" multiple onChange={handleBulkPdfSelect} disabled={bulkImporting} style={{ fontSize: '0.8rem', width: '100%' }} />
+                  {bulkPdfFiles.size > 0 && <div style={{ fontSize: '0.76rem', color: '#16a34a', marginTop: '4px' }}>✓ {bulkPdfFiles.size} dosya seçildi.</div>}
+                </div>
+              </div>
+
+              {bulkExcelRows.length > 0 && (
+                <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #f1f5f9', borderRadius: '8px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>İçerik Adı</th>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Soru</th>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Sınav PDF</th>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Çözüm PDF</th>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Cevap</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bulkExcelRows.map((row, i) => {
+                        const sinavOk = row.sinavPdfName && bulkPdfFiles.has(row.sinavPdfName.toLowerCase());
+                        const cozumOk = !row.cozumPdfName || bulkPdfFiles.has(row.cozumPdfName.toLowerCase());
+                        return (
+                          <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
+                            <td style={{ padding: '5px 8px' }}>{row.name}</td>
+                            <td style={{ padding: '5px 8px' }}>{row.numPages}</td>
+                            <td style={{ padding: '5px 8px', color: sinavOk ? '#16a34a' : '#dc2626' }}>
+                              {row.sinavPdfName ? (sinavOk ? '✓ ' : '✗ ') + row.sinavPdfName : '—'}
+                            </td>
+                            <td style={{ padding: '5px 8px', color: cozumOk ? '#16a34a' : '#dc2626' }}>
+                              {row.cozumPdfName ? (cozumOk ? '✓ ' : '✗ ') + row.cozumPdfName : '—'}
+                            </td>
+                            <td style={{ padding: '5px 8px', fontFamily: 'monospace' }}>{row.cevapAnahtari ? `${row.cevapAnahtari.length} harf` : '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {bulkImportErrors.length > 0 && (
+                <div style={{ marginTop: '10px', padding: '10px', backgroundColor: '#fef2f2', borderRadius: '6px', maxHeight: '120px', overflowY: 'auto' }}>
+                  {bulkImportErrors.map((err, i) => (
+                    <div key={i} style={{ fontSize: '0.74rem', color: '#dc2626' }}>{err}</div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '10px' }}>
+                {bulkImporting && (
+                  <span style={{ fontSize: '0.82rem', color: '#334155' }}>
+                    {bulkImportProgress.current} / {bulkImportProgress.total} işleniyor...
+                  </span>
+                )}
+                <button
+                  onClick={runBulkImport}
+                  disabled={bulkImporting || bulkExcelRows.length === 0}
+                  className="yt-btn yt-btn-primary"
+                  style={{ opacity: (bulkImporting || bulkExcelRows.length === 0) ? 0.5 : 1 }}
+                >
+                  {bulkImporting ? 'Yükleniyor...' : `${bulkExcelRows.length || ''} Testi İçe Aktar`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+
         {authLoading && (
           <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'var(--yt-mustard-bg)', color: 'var(--yt-mustard-deep)', marginBottom: '16px', borderRadius: '6px', fontWeight: 'bold' }}>
             ⏳ İşlem yapılıyor, lütfen bekleyin...
@@ -3414,6 +3668,12 @@ export default function App() {
                           style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#e0e7ff', color: '#4338ca', cursor: 'pointer', fontWeight: 'bold', border: '1px dashed #4338ca' }}
                         >
                           📝 Testleri Yönet
+                        </button>
+                        <button
+                          onClick={() => { setBulkImportParentId(parentExam.id); setShowBulkImport(true); }}
+                          style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#dcfce7', color: '#15803d', cursor: 'pointer', fontWeight: 'bold', border: '1px dashed #15803d' }}
+                        >
+                          📥 Excel'den Toplu Test Yükle
                         </button>
                         <button onClick={() => togglePublish(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: parentExam.isPublished ? '#f59e0b' : '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 'bold' }}>
                           {parentExam.isPublished ? 'Yayından Kaldır' : 'Yayınla'}
