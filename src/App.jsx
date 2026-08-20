@@ -4893,6 +4893,15 @@ export default function App() {
       const resData = studentResultsMap[inspectExam.id];
       const isCompleted = resData?.is_finished;
       const inCart = cartItems.includes(inspectExam.id);
+      // ÖNEMLİ (bug fix): Bu sayfa şimdiye kadar SADECE "alt testleri olan
+      // paket" senaryosunu destekliyordu (childExams.length > 0). Kendi
+      // PDF'i/soru sayısı olan, hiç alt testi olmayan TEK BAŞINA bir sınav
+      // (childExams.length === 0 ama inspectExam'in kendi numPages/pdfFile'ı
+      // var) için ne satın alma butonu ne de "Teste Başla" seçeneği hiç
+      // gösterilmiyordu -- her zaman "henüz test eklenmedi" mesajı çıkıyordu,
+      // satın alınmış olsa bile. Bu bayrak, aşağıdaki üç noktada bu durumu
+      // ayırt edip doğru arayüzü göstermek için kullanılıyor.
+      const isStandalone = childExams.length === 0 && !!(inspectExam.pdfFile || (inspectExam.numPages && inspectExam.numPages > 0));
       const relatedExams = exams
         .filter(e => e.isPublished && !e.parentId && e.id !== inspectExam.id && e.categoryLesson === inspectExam.categoryLesson)
         .slice(0, 3);
@@ -5007,7 +5016,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {isPaid && !isPurchased && childExams.length > 0 && (
+                {isPaid && !isPurchased && (childExams.length > 0 || isStandalone) && (
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button onClick={() => toggleCartItem(inspectExam.id)} className={`yt-add-cart-btn${inCart ? ' in-cart' : ''}`}>
                       {inCart ? '✓ Sepette' : '+ Sepete Ekle'}
@@ -5029,7 +5038,7 @@ export default function App() {
                   </div>
                 )}
 
-                {childExams.length === 0 && (
+                {childExams.length === 0 && !isStandalone && (
                   <div style={{ fontSize: '0.8rem', color: 'var(--yt-graphite-soft)', fontStyle: 'italic' }}>
                     Test eklendiğinde burada &quot;Teste Başla&quot; seçeneği görünecek.
                   </div>
@@ -5229,6 +5238,75 @@ export default function App() {
                       );
                     })}
                   </div>
+                ) : isStandalone ? (
+                  // ÖNEMLİ (bug fix): Alt testi olmayan, kendi PDF'i/soru
+                  // sayısı olan TEK BAŞINA bir sınav -- mantığı yukarıdaki
+                  // alt test satırıyla birebir aynı (tamamlandı/devam
+                  // ediyor/kilitli), sadece `child` yerine `inspectExam`
+                  // üzerinden çalışıyor.
+                  (() => {
+                    const ownRes = studentResultsMap[inspectExam.id];
+                    const ownCompleted = ownRes?.is_finished;
+                    const ownAnsweredCount = ownRes?.answers ? Object.keys(ownRes.answers).length : 0;
+                    const ownInProgress = !ownCompleted && ownAnsweredCount > 0;
+                    const ownTotalQ = inspectExam.numPages || 0;
+                    const ownProgressPct = ownTotalQ > 0 ? Math.round((ownAnsweredCount / ownTotalQ) * 100) : 0;
+                    const ownUnlocked = !isPaid || isPurchased;
+                    const ctaClass = ownCompleted ? 'yt-btn-ghost' : (ownInProgress ? 'yt-btn-primary' : (ownUnlocked ? 'yt-btn-outline' : 'yt-btn-locked'));
+                    return (
+                      <div className="yt-subtest-list">
+                        <div className="yt-subtest-row">
+                          <div className={`yt-subtest-bubble${ownCompleted ? ' done' : (ownInProgress ? ' in-progress' : '')}`}>
+                            {ownCompleted ? '✓' : (ownInProgress ? '…' : 1)}
+                          </div>
+                          <div style={{ flex: 1, minWidth: '160px' }}>
+                            <strong style={{ color: 'var(--yt-ink)' }}>{inspectExam.name || 'İsimsiz Test'}</strong>
+                            <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px', display: 'flex', gap: '12px' }}>
+                              <span>{inspectExam.numPages || '?'} SORU</span>
+                              {ownCompleted && <span style={{ color: 'var(--yt-correct)' }}>Net: {ownRes.net}</span>}
+                              {ownInProgress && <span style={{ color: 'var(--yt-mustard-deep)' }}>{ownAnsweredCount}/{ownTotalQ} soru yapıldı</span>}
+                            </div>
+                            {ownInProgress && (
+                              <div className="yt-subtest-progress-track">
+                                <div className="yt-subtest-progress-fill" style={{ width: `${ownProgressPct}%` }} />
+                              </div>
+                            )}
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              if (!user) {
+                                alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
+                                setAuthMode('login');
+                                setShowAuthModal(true);
+                                return;
+                              }
+                              if (ownUnlocked) {
+                                if (ownCompleted) {
+                                  setActiveStudentExamId(inspectExam.id);
+                                  setInspectingExamId(null);
+                                  setStudentAnswers(ownRes.answers || {});
+                                  setStudentCurrentPage(1);
+                                  setIsExamFinished(true);
+                                  setShowResults(true);
+                                  setViewingSolutionQ(false);
+                                  fetchAnswerKeyForReview(inspectExam.id);
+                                } else {
+                                  setShowResults(false);
+                                  startExam(inspectExam);
+                                }
+                              } else {
+                                handleIyzicoPayment(inspectExam);
+                              }
+                            }}
+                            className={`yt-btn ${ctaClass}`}
+                          >
+                            {ownCompleted ? 'Sonucu İncele' : (ownInProgress ? 'Devam Et →' : (ownUnlocked ? 'Teste Başla →' : '🔒 Kilitli'))}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()
                 ) : (
                   <div style={{ textAlign: 'center', padding: '20px', color: 'var(--yt-graphite-soft)', fontSize: '0.9rem' }}>
                     Bu içerik için henüz test eklenmedi. Yakında yayında olacak.
