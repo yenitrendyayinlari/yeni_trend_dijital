@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
+import * as pdfjsLib from 'pdfjs-dist';
 import SecurePdfViewer from './SecurePdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
@@ -8,6 +9,26 @@ import TopBanner, { TopBannerManageButton } from './TopBanner';
 import { SignupBonusManageButton } from './SignupBonus';
 import BalanceGiftModal from './BalanceGiftModal';
 import Footer from './Footer';
+
+// Admin panelinde PDF yüklendiğinde sayfa sayısını (= soru sayısı, sistemde
+// her PDF sayfası bir soruya karşılık geliyor) tarayıcıda otomatik okumak
+// için PdfViewer.jsx'teki aynı kararlı CDN worker kurulumu kullanılıyor.
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+// Bir PDF File nesnesinden (henüz storage'a yüklenmeden, tarayıcıda) sayfa
+// sayısını okur. Okunamazsa (bozuk dosya vb.) null döner -- çağıran taraf bu
+// durumda eski manuel "Soru / Sayfa Sayısı" değerini korumalı.
+async function readPdfPageCount(file) {
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+    const pdfDoc = await loadingTask.promise;
+    return pdfDoc.numPages;
+  } catch (err) {
+    console.error('PDF sayfa sayısı okunamadı:', err);
+    return null;
+  }
+}
 
 // İyzico'nun checkoutFormContent alanı içindeki <script> etiketi,
 // innerHTML ile DOM'a eklendiğinde tarayıcı tarafından ÇALIŞTIRILMAZ
@@ -1632,11 +1653,18 @@ export default function App() {
         return;
       }
 
+      // Soru / Sayfa Sayısı'nı elle girmeye gerek kalmasın diye, PDF'in
+      // kendisinden otomatik okuyoruz (her sayfa = bir soru). Okunamazsa
+      // (bozuk dosya vb.) mevcut değeri değiştirmeden bırakıyoruz.
+      const detectedPages = await readPdfPageCount(file);
+
       // Storage artık private -- public URL yerine sadece dosya adını
       // (path) saklıyoruz; görüntülenirken /api/get-pdf-url ile erişim
       // hakkı doğrulanıp kısa ömürlü imzalı bir URL üretiliyor.
       setAuthLoading(false);
-      await updateExamInDb(examId, { pdfFile: fileName });
+      const updates = { pdfFile: fileName };
+      if (detectedPages) updates.numPages = detectedPages;
+      await updateExamInDb(examId, updates);
     };
     uploadPdf();
   };
@@ -1772,6 +1800,19 @@ export default function App() {
     XLSX.writeFile(wb, 'kazanim-referans-listesi.xlsx');
   };
 
+  // Boş Excel Şablonu: toplu test yükleme ekranındaki sütun sırasıyla
+  // (İçerik Adı, Sınav PDF, Çözüm PDF, Hızlı Cevap Anahtarı) sadece başlık
+  // satırını içeren boş bir .xlsx indirir -- admin doğrudan bunun üzerine
+  // yazabilsin diye.
+  const downloadBulkImportTemplate = () => {
+    const rows = [['İçerik Adı', 'Sınav PDF (dosya adı)', 'Çözüm PDF (dosya adı, opsiyonel)', 'Hızlı Cevap Anahtarı (opsiyonel)']];
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Testler');
+    XLSX.writeFile(wb, 'toplu-test-yukleme-sablonu.xlsx');
+  };
+
+
   const handleTopicMapUpload = (examId, e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1905,9 +1946,11 @@ export default function App() {
   // kullanan sorularda güncel adı otomatik gösterir.
 
   // --- Excel'den Toplu Test Yükleme ---
-  // Sütun sırası: 1. İçerik Adı, 2. Soru Sayısı, 3. Sınav PDF (dosya adı),
-  // 4. Çözüm PDF (dosya adı, opsiyonel), 5. Hızlı Cevap Anahtarı (opsiyonel).
-  // İlk satır başlık kabul edilir.
+  // Sütun sırası: 1. İçerik Adı, 2. Sınav PDF (dosya adı), 3. Çözüm PDF
+  // (dosya adı, opsiyonel), 4. Hızlı Cevap Anahtarı (opsiyonel).
+  // İlk satır başlık kabul edilir. Soru/Sayfa Sayısı artık Excel'den
+  // alınmıyor -- eşleşen Sınav PDF'inden otomatik okunuyor (bkz.
+  // readPdfPageCount, runBulkImport içinde kullanılıyor).
   const handleBulkExcelSelect = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1926,14 +1969,13 @@ export default function App() {
           if (!name) continue;
           parsed.push({
             name,
-            numPages: Number(row[1]) || 0,
-            sinavPdfName: String(row[2] || '').trim(),
-            cozumPdfName: String(row[3] || '').trim(),
-            cevapAnahtari: String(row[4] || '').trim()
+            sinavPdfName: String(row[1] || '').trim(),
+            cozumPdfName: String(row[2] || '').trim(),
+            cevapAnahtari: String(row[3] || '').trim()
           });
         }
         if (parsed.length === 0) {
-          alert('Excel dosyasında geçerli satır bulunamadı. Sütun sırasının İçerik Adı / Soru Sayısı / Sınav PDF / Çözüm PDF / Hızlı Cevap Anahtarı olduğundan emin olun.');
+          alert('Excel dosyasında geçerli satır bulunamadı. Sütun sırasının İçerik Adı / Sınav PDF / Çözüm PDF / Hızlı Cevap Anahtarı olduğundan emin olun.');
           return;
         }
         setBulkExcelRows(parsed);
@@ -1971,7 +2013,26 @@ export default function App() {
       setBulkImportProgress({ current: i + 1, total: bulkExcelRows.length });
 
       try {
-        // 1) Test kaydını oluştur
+        // 1) Sınav PDF'ini önce eşleştir ve YÜKLEMEDEN ÖNCE sayfa sayısını
+        // oku -- bu sayede kaydı oluştururken artık Excel'deki bir sütuna
+        // değil, PDF'in kendisine güveniyoruz (her sayfa = bir soru).
+        let sinavFile = null;
+        let detectedPages = 0;
+        if (row.sinavPdfName) {
+          sinavFile = bulkPdfFiles.get(row.sinavPdfName.toLowerCase());
+          if (sinavFile) {
+            const pages = await readPdfPageCount(sinavFile);
+            if (pages) {
+              detectedPages = pages;
+            } else {
+              errors.push(`${row.name}: "${row.sinavPdfName}" dosyasının sayfa sayısı okunamadı, elle girmen gerekecek.`);
+            }
+          } else {
+            errors.push(`${row.name}: "${row.sinavPdfName}" adlı dosya seçilenler arasında bulunamadı.`);
+          }
+        }
+
+        // 2) Test kaydını oluştur
         const insertPayload = {
           name: row.name,
           parent_id: parentExam.id,
@@ -1982,7 +2043,7 @@ export default function App() {
           duration: parentExam.duration || 0,
           price: 0,
           sections: [],
-          num_pages: row.numPages,
+          num_pages: detectedPages,
           sort_order: nextOrder
         };
         nextOrder++;
@@ -1992,22 +2053,17 @@ export default function App() {
         const newExam = formatExamData(data[0]);
         setExams((prev) => [...prev, newExam]);
 
-        // 2) Sınav PDF'i eşleştir ve yükle
-        if (row.sinavPdfName) {
-          const sinavFile = bulkPdfFiles.get(row.sinavPdfName.toLowerCase());
-          if (sinavFile) {
-            const fileExt = sinavFile.name.split('.').pop();
-            const fileName = `exam_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
-            const { error: upErr } = await supabase.storage.from('exam-files').upload(fileName, sinavFile);
-            if (upErr) throw new Error('Sınav PDF yüklenemedi: ' + upErr.message);
-            await supabase.from('exams').update({ pdf_file: fileName }).eq('id', newExam.id);
-            setExams((prev) => prev.map((ex) => ex.id === newExam.id ? { ...ex, pdfFile: fileName } : ex));
-          } else {
-            errors.push(`${row.name}: "${row.sinavPdfName}" adlı dosya seçilenler arasında bulunamadı.`);
-          }
+        // 3) Sınav PDF'ini storage'a yükle (sayfa sayısı yukarıda zaten okundu)
+        if (sinavFile) {
+          const fileExt = sinavFile.name.split('.').pop();
+          const fileName = `exam_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
+          const { error: upErr } = await supabase.storage.from('exam-files').upload(fileName, sinavFile);
+          if (upErr) throw new Error('Sınav PDF yüklenemedi: ' + upErr.message);
+          await supabase.from('exams').update({ pdf_file: fileName }).eq('id', newExam.id);
+          setExams((prev) => prev.map((ex) => ex.id === newExam.id ? { ...ex, pdfFile: fileName } : ex));
         }
 
-        // 3) Çözüm PDF'i (opsiyonel) eşleştir ve yükle
+        // 4) Çözüm PDF'i (opsiyonel) eşleştir ve yükle
         if (row.cozumPdfName) {
           const cozumFile = bulkPdfFiles.get(row.cozumPdfName.toLowerCase());
           if (cozumFile) {
@@ -2022,11 +2078,11 @@ export default function App() {
           }
         }
 
-        // 4) Hızlı cevap anahtarı (opsiyonel)
+        // 5) Hızlı cevap anahtarı (opsiyonel)
         if (row.cevapAnahtari) {
           const sanitized = row.cevapAnahtari.toUpperCase().replace(/[^ABCDE]/g, '');
           const key = {};
-          for (let j = 0; j < sanitized.length && j < row.numPages; j++) key[j + 1] = sanitized[j];
+          for (let j = 0; j < sanitized.length && j < detectedPages; j++) key[j + 1] = sanitized[j];
           if (Object.keys(key).length > 0) {
             const { error: keyErr } = await supabase.from('exam_answer_keys').upsert([{ exam_id: newExam.id, answer_key: key }], { onConflict: 'exam_id' });
             if (keyErr) throw new Error('Cevap anahtarı kaydedilemedi: ' + keyErr.message);
@@ -3544,10 +3600,18 @@ export default function App() {
                 )}
               </div>
 
-              <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '14px' }}>
-                Sütun sırası: 1. İçerik Adı, 2. Soru Sayısı, 3. Sınav PDF (dosya adı), 4. Çözüm PDF (dosya adı, opsiyonel), 5. Hızlı Cevap Anahtarı (opsiyonel).
-                İlk satır başlık kabul edilir. Kazanım haritası bu ekrandan girilmez -- testler eklendikten sonra "Testleri Yönet"ten tek tek elle eklersiniz.
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
+                Sütun sırası: 1. İçerik Adı, 2. Sınav PDF (dosya adı), 3. Çözüm PDF (dosya adı, opsiyonel), 4. Hızlı Cevap Anahtarı (opsiyonel).
+                İlk satır başlık kabul edilir. Soru/Sayfa sayısı artık PDF'ten otomatik okunur, Excel'e girmenize gerek yok. Kazanım haritası bu ekrandan girilmez -- testler eklendikten sonra "Testleri Yönet"ten tek tek elle eklersiniz.
               </div>
+
+              <button
+                type="button"
+                onClick={downloadBulkImportTemplate}
+                style={{ alignSelf: 'flex-start', marginBottom: '14px', padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', color: '#334155', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}
+              >
+                📥 Boş Excel Şablonu İndir
+              </button>
 
               <div style={{ display: 'flex', gap: '16px', marginBottom: '14px', flexWrap: 'wrap' }}>
                 <div style={{ flex: '1 1 300px' }}>
@@ -3568,7 +3632,6 @@ export default function App() {
                     <thead>
                       <tr style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
                         <th style={{ textAlign: 'left', padding: '6px 8px' }}>İçerik Adı</th>
-                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Soru</th>
                         <th style={{ textAlign: 'left', padding: '6px 8px' }}>Sınav PDF</th>
                         <th style={{ textAlign: 'left', padding: '6px 8px' }}>Çözüm PDF</th>
                         <th style={{ textAlign: 'left', padding: '6px 8px' }}>Cevap</th>
@@ -3581,7 +3644,6 @@ export default function App() {
                         return (
                           <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
                             <td style={{ padding: '5px 8px' }}>{row.name}</td>
-                            <td style={{ padding: '5px 8px' }}>{row.numPages}</td>
                             <td style={{ padding: '5px 8px', color: sinavOk ? '#16a34a' : '#dc2626' }}>
                               {row.sinavPdfName ? (sinavOk ? '✓ ' : '✗ ') + row.sinavPdfName : '—'}
                             </td>
@@ -4455,7 +4517,9 @@ export default function App() {
                         </div>
 
                         <div className="form-group" style={{ marginBottom: '10px' }}>
-                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Soru / Sayfa Sayısı:</label>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>
+                            Soru / Sayfa Sayısı <span style={{ fontWeight: 'normal', color: '#64748b' }}>(PDF yüklenince otomatik dolar)</span>:
+                          </label>
                           <input
                             type="number"
                             value={editingExam.numPages || 0}
