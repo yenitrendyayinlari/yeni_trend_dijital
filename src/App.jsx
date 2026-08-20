@@ -18,15 +18,28 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs
 // Bir PDF File nesnesinden (henüz storage'a yüklenmeden, tarayıcıda) sayfa
 // sayısını okur. Okunamazsa (bozuk dosya vb.) null döner -- çağıran taraf bu
 // durumda eski manuel "Soru / Sayfa Sayısı" değerini korumalı.
-async function readPdfPageCount(file) {
+// sharedWorker (opsiyonel): toplu içe aktarımda (bkz. runBulkImport) her PDF
+// için ayrı bir PDF.js worker açıp bunu asla kapatmamak, tarayıcı sekmesinde
+// worker/bellek sızıntısına yol açıyordu -- 10+ test arka arkaya işlenince
+// kaynaklar tükenip Supabase'e giden fetch istekleri "Failed to fetch" ile
+// çökmeye başlıyordu. Çözüm iki parçalı: (1) burada pdfDoc.destroy() ile o
+// dokümanın kaynaklarını her zaman serbest bırakıyoruz, (2) çağıran taraf
+// tüm döngü boyunca TEK bir worker'ı paylaşabilsin diye sharedWorker kabul
+// ediyoruz (her PDF için CDN'den yeniden worker script indirmemek için).
+async function readPdfPageCount(file, sharedWorker) {
+  let pdfDoc = null;
   try {
     const arrayBuffer = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdfDoc = await loadingTask.promise;
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, worker: sharedWorker });
+    pdfDoc = await loadingTask.promise;
     return pdfDoc.numPages;
   } catch (err) {
     console.error('PDF sayfa sayısı okunamadı:', err);
     return null;
+  } finally {
+    if (pdfDoc) {
+      try { await pdfDoc.destroy(); } catch (_) { /* zaten kapanmışsa yoksay */ }
+    }
   }
 }
 
@@ -2008,90 +2021,103 @@ export default function App() {
 
     const errors = [];
 
-    for (let i = 0; i < bulkExcelRows.length; i++) {
-      const row = bulkExcelRows[i];
-      setBulkImportProgress({ current: i + 1, total: bulkExcelRows.length });
+    // ÖNEMLİ: readPdfPageCount her çağrıldığında yeni bir PDF.js worker
+    // açıyordu ve hiç kapatılmıyordu -- 78 test arka arkaya işlenirken
+    // onlarca worker açık kalıp tarayıcı sekmesini kaynak tükenmesine
+    // sürüklüyor, bir noktadan sonra Supabase'e giden fetch istekleri
+    // "Failed to fetch" ile çökmeye başlıyordu. Tüm döngü boyunca TEK bir
+    // worker paylaşılıyor (performans için) ve döngü ne şekilde biterse
+    // bitsin (hata dahil) finally'de mutlaka kapatılıyor.
+    const pdfWorker = new pdfjsLib.PDFWorker({ name: 'bulk-import-worker' });
 
-      try {
-        // 1) Sınav PDF'ini önce eşleştir ve YÜKLEMEDEN ÖNCE sayfa sayısını
-        // oku -- bu sayede kaydı oluştururken artık Excel'deki bir sütuna
-        // değil, PDF'in kendisine güveniyoruz (her sayfa = bir soru).
-        let sinavFile = null;
-        let detectedPages = 0;
-        if (row.sinavPdfName) {
-          sinavFile = bulkPdfFiles.get(row.sinavPdfName.toLowerCase());
-          if (sinavFile) {
-            const pages = await readPdfPageCount(sinavFile);
-            if (pages) {
-              detectedPages = pages;
+    try {
+      for (let i = 0; i < bulkExcelRows.length; i++) {
+        const row = bulkExcelRows[i];
+        setBulkImportProgress({ current: i + 1, total: bulkExcelRows.length });
+
+        try {
+          // 1) Sınav PDF'ini önce eşleştir ve YÜKLEMEDEN ÖNCE sayfa sayısını
+          // oku -- bu sayede kaydı oluştururken artık Excel'deki bir sütuna
+          // değil, PDF'in kendisine güveniyoruz (her sayfa = bir soru).
+          let sinavFile = null;
+          let detectedPages = 0;
+          if (row.sinavPdfName) {
+            sinavFile = bulkPdfFiles.get(row.sinavPdfName.toLowerCase());
+            if (sinavFile) {
+              const pages = await readPdfPageCount(sinavFile, pdfWorker);
+              if (pages) {
+                detectedPages = pages;
+              } else {
+                errors.push(`${row.name}: "${row.sinavPdfName}" dosyasının sayfa sayısı okunamadı, elle girmen gerekecek.`);
+              }
             } else {
-              errors.push(`${row.name}: "${row.sinavPdfName}" dosyasının sayfa sayısı okunamadı, elle girmen gerekecek.`);
+              errors.push(`${row.name}: "${row.sinavPdfName}" adlı dosya seçilenler arasında bulunamadı.`);
             }
-          } else {
-            errors.push(`${row.name}: "${row.sinavPdfName}" adlı dosya seçilenler arasında bulunamadı.`);
           }
-        }
 
-        // 2) Test kaydını oluştur
-        const insertPayload = {
-          name: row.name,
-          parent_id: parentExam.id,
-          is_published: true,
-          exam_type: parentExam.examType || 'test',
-          category_exam_type: '',
-          category_lesson: '',
-          duration: parentExam.duration || 0,
-          price: 0,
-          sections: [],
-          num_pages: detectedPages,
-          sort_order: nextOrder
-        };
-        nextOrder++;
+          // 2) Test kaydını oluştur
+          const insertPayload = {
+            name: row.name,
+            parent_id: parentExam.id,
+            is_published: true,
+            exam_type: parentExam.examType || 'test',
+            category_exam_type: '',
+            category_lesson: '',
+            duration: parentExam.duration || 0,
+            price: 0,
+            sections: [],
+            num_pages: detectedPages,
+            sort_order: nextOrder
+          };
+          nextOrder++;
 
-        const { data, error } = await supabase.from('exams').insert([insertPayload]).select();
-        if (error) throw new Error('Kayıt oluşturulamadı: ' + error.message);
-        const newExam = formatExamData(data[0]);
-        setExams((prev) => [...prev, newExam]);
+          const { data, error } = await supabase.from('exams').insert([insertPayload]).select();
+          if (error) throw new Error('Kayıt oluşturulamadı: ' + error.message);
+          const newExam = formatExamData(data[0]);
+          setExams((prev) => [...prev, newExam]);
 
-        // 3) Sınav PDF'ini storage'a yükle (sayfa sayısı yukarıda zaten okundu)
-        if (sinavFile) {
-          const fileExt = sinavFile.name.split('.').pop();
-          const fileName = `exam_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
-          const { error: upErr } = await supabase.storage.from('exam-files').upload(fileName, sinavFile);
-          if (upErr) throw new Error('Sınav PDF yüklenemedi: ' + upErr.message);
-          await supabase.from('exams').update({ pdf_file: fileName }).eq('id', newExam.id);
-          setExams((prev) => prev.map((ex) => ex.id === newExam.id ? { ...ex, pdfFile: fileName } : ex));
-        }
-
-        // 4) Çözüm PDF'i (opsiyonel) eşleştir ve yükle
-        if (row.cozumPdfName) {
-          const cozumFile = bulkPdfFiles.get(row.cozumPdfName.toLowerCase());
-          if (cozumFile) {
-            const fileExt = cozumFile.name.split('.').pop();
-            const fileName = `sol_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
-            const { error: upErr } = await supabase.storage.from('exam-files').upload(fileName, cozumFile);
-            if (upErr) throw new Error('Çözüm PDF yüklenemedi: ' + upErr.message);
-            await supabase.from('exams').update({ solution_pdf_file: fileName }).eq('id', newExam.id);
-            setExams((prev) => prev.map((ex) => ex.id === newExam.id ? { ...ex, solutionPdfFile: fileName } : ex));
-          } else {
-            errors.push(`${row.name}: "${row.cozumPdfName}" adlı çözüm dosyası seçilenler arasında bulunamadı.`);
+          // 3) Sınav PDF'ini storage'a yükle (sayfa sayısı yukarıda zaten okundu)
+          if (sinavFile) {
+            const fileExt = sinavFile.name.split('.').pop();
+            const fileName = `exam_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
+            const { error: upErr } = await supabase.storage.from('exam-files').upload(fileName, sinavFile);
+            if (upErr) throw new Error('Sınav PDF yüklenemedi: ' + upErr.message);
+            await supabase.from('exams').update({ pdf_file: fileName }).eq('id', newExam.id);
+            setExams((prev) => prev.map((ex) => ex.id === newExam.id ? { ...ex, pdfFile: fileName } : ex));
           }
-        }
 
-        // 5) Hızlı cevap anahtarı (opsiyonel)
-        if (row.cevapAnahtari) {
-          const sanitized = row.cevapAnahtari.toUpperCase().replace(/[^ABCDE]/g, '');
-          const key = {};
-          for (let j = 0; j < sanitized.length && j < detectedPages; j++) key[j + 1] = sanitized[j];
-          if (Object.keys(key).length > 0) {
-            const { error: keyErr } = await supabase.from('exam_answer_keys').upsert([{ exam_id: newExam.id, answer_key: key }], { onConflict: 'exam_id' });
-            if (keyErr) throw new Error('Cevap anahtarı kaydedilemedi: ' + keyErr.message);
-            setExams((prev) => prev.map((ex) => ex.id === newExam.id ? { ...ex, answerKey: key } : ex));
+          // 4) Çözüm PDF'i (opsiyonel) eşleştir ve yükle
+          if (row.cozumPdfName) {
+            const cozumFile = bulkPdfFiles.get(row.cozumPdfName.toLowerCase());
+            if (cozumFile) {
+              const fileExt = cozumFile.name.split('.').pop();
+              const fileName = `sol_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
+              const { error: upErr } = await supabase.storage.from('exam-files').upload(fileName, cozumFile);
+              if (upErr) throw new Error('Çözüm PDF yüklenemedi: ' + upErr.message);
+              await supabase.from('exams').update({ solution_pdf_file: fileName }).eq('id', newExam.id);
+              setExams((prev) => prev.map((ex) => ex.id === newExam.id ? { ...ex, solutionPdfFile: fileName } : ex));
+            } else {
+              errors.push(`${row.name}: "${row.cozumPdfName}" adlı çözüm dosyası seçilenler arasında bulunamadı.`);
+            }
           }
+
+          // 5) Hızlı cevap anahtarı (opsiyonel)
+          if (row.cevapAnahtari) {
+            const sanitized = row.cevapAnahtari.toUpperCase().replace(/[^ABCDE]/g, '');
+            const key = {};
+            for (let j = 0; j < sanitized.length && j < detectedPages; j++) key[j + 1] = sanitized[j];
+            if (Object.keys(key).length > 0) {
+              const { error: keyErr } = await supabase.from('exam_answer_keys').upsert([{ exam_id: newExam.id, answer_key: key }], { onConflict: 'exam_id' });
+              if (keyErr) throw new Error('Cevap anahtarı kaydedilemedi: ' + keyErr.message);
+              setExams((prev) => prev.map((ex) => ex.id === newExam.id ? { ...ex, answerKey: key } : ex));
+            }
+          }
+        } catch (err) {
+          errors.push(`${row.name || 'Satır ' + (i + 1)}: ${err.message}`);
         }
-      } catch (err) {
-        errors.push(`${row.name || 'Satır ' + (i + 1)}: ${err.message}`);
       }
+    } finally {
+      pdfWorker.destroy();
     }
 
     setBulkImportErrors(errors);
