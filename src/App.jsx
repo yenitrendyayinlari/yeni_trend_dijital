@@ -1074,6 +1074,36 @@ export default function App() {
     }
   };
 
+  // "Soru Başı Fiyat" penceresindeki "Tüm Testleri Yeniden Hesapla" butonu
+  // için: mevcut TÜM testlerin/paketlerin Fiyat ve Eski Fiyat'ını, güncel
+  // soru başı tutara göre (soru sayısı x tutar) yeniden hesaplar. Sadece
+  // yeni oluşturulan/soru sayısı değiştirilen testler için değil, sistemde
+  // zaten var olan ve hiç dokunulmamış testler için de -- hem bu özelliği
+  // ilk kurarken hem de birim fiyatı SONRADAN artırdığınızda tekrar tekrar
+  // kullanılabilir. Daha önce elle girilmiş fiyatlar (₺0 bırakılmış
+  // "pakete bağlı" alt testler dahil) üzerine yazılır -- Soru Sayısı
+  // değiştiğinde uyguladığımız otomatik hesaplamayla aynı davranış.
+  const recalculateAllExamPrices = async () => {
+    if (!(pricePerQuestion > 0)) {
+      alert('Önce soru başı bir tutar girip kaydedin.');
+      return;
+    }
+    const targets = exams.filter((e) => (e.numPages || 0) > 0);
+    if (targets.length === 0) {
+      alert('Soru sayısı girilmiş hiçbir test/paket bulunamadı.');
+      return;
+    }
+    const confirmed = window.confirm(
+      `${targets.length} test/paketin Fiyat ve Eski Fiyat'ı, güncel soru başı tutar (₺${pricePerQuestion}) ile "soru sayısı × birim fiyat" olarak YENİDEN hesaplanacak -- daha önce elle girilmiş fiyatlar (indirimler ve ₺0 bırakılmış pakete-bağlı alt testler dahil) üzerine yazılacak. Devam edilsin mi?`
+    );
+    if (!confirmed) return;
+    for (const ex of targets) {
+      const computedPrice = Number(((ex.numPages || 0) * pricePerQuestion).toFixed(2));
+      await updateExamInDb(ex.id, { price: computedPrice, originalPrice: computedPrice });
+    }
+    alert(`✓ ${targets.length} test/paketin fiyatı güncellendi.`);
+  };
+
   const checkUserRoleAndSetMode = (currentUser) => {
     if (currentUser.email === 'admin@yayinevi.com') {
       setAppMode('admin');
@@ -3229,6 +3259,19 @@ export default function App() {
                 >
                   Kaydet
                 </button>
+              </div>
+
+              <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
+                <button
+                  type="button"
+                  onClick={recalculateAllExamPrices}
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', color: '#0f172a', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.84rem' }}
+                >
+                  🔄 Güncel Fiyata Göre Tüm Testleri Yeniden Hesapla
+                </button>
+                <p style={{ margin: '6px 0 0 0', fontSize: '0.72rem', color: '#94a3b8' }}>
+                  Sistemde soru sayısı girilmiş TÜM test/paketlerin fiyatını, yukarıdaki güncel tutara göre yeniden hesaplar -- daha önce hiç dokunulmamış eski kayıtları da kapsar. Fiyatı sonradan artırırsanız/azaltırsanız da bunu kullanabilirsiniz.
+                </p>
               </div>
             </div>
           </div>
