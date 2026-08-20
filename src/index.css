@@ -579,3 +579,144 @@ p {
   width: auto;
   display: block;
 }
+
+/* ============================================================
+   Anasayfa hero banner ("SUAL BURADAN BAŞLIYOR!")
+   ============================================================ */
+.yt-hero {
+  position: relative;
+  overflow: hidden;
+  background: var(--yt-paper-2);
+  border-bottom: 1.5px solid var(--yt-line);
+}
+.yt-hero-blob {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--yt-line-soft);
+  opacity: 0.6;
+  z-index: 0;
+}
+.yt-hero-blob.one { width: 340px; height: 340px; top: -140px; left: -110px; }
+.yt-hero-blob.two { width: 260px; height: 260px; bottom: -120px; right: -60px; }
+
+.yt-hero-inner {
+  position: relative;
+  z-index: 1;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 60px 24px;
+  display: flex;
+  align-items: center;
+  gap: 48px;
+}
+@media (max-width: 860px) {
+  .yt-hero-inner {
+    flex-direction: column;
+    text-align: center;
+    padding: 40px 20px 36px;
+    gap: 28px;
+  }
+}
+
+.yt-hero-text {
+  flex: 1 1 420px;
+  min-width: 260px;
+}
+.yt-hero-title {
+  font-family: var(--yt-font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: clamp(1.7rem, 4vw, 2.9rem);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  color: var(--yt-ink);
+  margin: 0 0 26px;
+}
+.yt-hero-actions {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+@media (max-width: 860px) {
+  .yt-hero-actions { justify-content: center; }
+}
+.yt-hero-btn {
+  font-family: var(--yt-font-body);
+  font-weight: 700;
+  font-size: 0.95rem;
+  border-radius: 999px;
+  padding: 15px 28px;
+  cursor: pointer;
+  border: 1.5px solid transparent;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
+}
+.yt-hero-btn:hover { transform: translateY(-1px); }
+.yt-hero-btn-primary {
+  background: var(--yt-ink);
+  color: var(--yt-paper-2);
+  box-shadow: 0 10px 24px -14px rgba(23, 33, 58, 0.55);
+}
+.yt-hero-btn-primary:hover { background: var(--yt-ink-2); }
+.yt-hero-btn-outline {
+  background: transparent;
+  color: var(--yt-ink);
+  border-color: var(--yt-ink);
+}
+.yt-hero-btn-outline:hover { background: var(--yt-ink); color: var(--yt-paper-2); }
+
+.yt-hero-visual {
+  position: relative;
+  flex: 0 0 auto;
+  width: 260px;
+  height: 260px;
+}
+.yt-hero-visual-circle {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--yt-mustard-bg);
+  border: 2px solid var(--yt-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.yt-hero-sticker {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid var(--yt-ink);
+  font-family: var(--yt-font-display);
+  font-weight: 700;
+  box-shadow: var(--yt-shadow);
+}
+.yt-hero-sticker.check {
+  width: 58px;
+  height: 58px;
+  top: -12px;
+  right: -8px;
+  background: var(--yt-correct);
+  color: #fff;
+  font-size: 1.5rem;
+}
+.yt-hero-sticker.star {
+  width: 46px;
+  height: 46px;
+  bottom: 6px;
+  left: -20px;
+  background: #fff;
+  color: var(--yt-mustard-deep);
+  font-size: 1.4rem;
+}
+.yt-hero-sticker.pencil {
+  width: 40px;
+  height: 40px;
+  bottom: -10px;
+  right: 28px;
+  background: var(--yt-ink);
+  color: var(--yt-mustard-bg);
+  font-size: 1.15rem;
+}

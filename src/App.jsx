@@ -5792,8 +5792,60 @@ export default function App() {
             </div>
           </header>
 
+          <div className="yt-hero">
+            <div className="yt-hero-blob one"></div>
+            <div className="yt-hero-blob two"></div>
+            <div className="yt-hero-inner">
+              <div className="yt-hero-text">
+                <h1 className="yt-hero-title">Sual buradan başlıyor!</h1>
+                <div className="yt-hero-actions">
+                  <button
+                    type="button"
+                    className="yt-hero-btn yt-hero-btn-primary"
+                    onClick={() => document.getElementById('yt-kategori-filtre')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  >
+                    Test İhtiyacını Belirle
+                  </button>
+                  <button
+                    type="button"
+                    className="yt-hero-btn yt-hero-btn-outline"
+                    onClick={() => document.getElementById('yt-urun-listesi')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  >
+                    Test Satın Al
+                  </button>
+                </div>
+              </div>
+              <div className="yt-hero-visual">
+                <div className="yt-hero-visual-circle">
+                  <svg viewBox="0 0 120 120" width="72%" height="72%" aria-hidden="true">
+                    <rect x="14" y="10" width="92" height="100" rx="8" fill="var(--yt-paper-2)" stroke="var(--yt-ink)" strokeWidth="2.5" />
+                    {[0, 1, 2, 3].map((row) => (
+                      <g key={row} transform={`translate(0, ${row * 22})`}>
+                        <rect x="26" y="30" width="34" height="5" rx="2.5" fill="var(--yt-line)" />
+                        {[0, 1, 2].map((col) => (
+                          <circle
+                            key={col}
+                            cx={72 + col * 12}
+                            cy="32.5"
+                            r="4.5"
+                            fill={row === 1 && col === 1 ? 'var(--yt-mustard)' : 'none'}
+                            stroke="var(--yt-ink)"
+                            strokeWidth="1.6"
+                          />
+                        ))}
+                      </g>
+                    ))}
+                  </svg>
+                </div>
+                <div className="yt-hero-sticker check" aria-hidden="true">✓</div>
+                <div className="yt-hero-sticker star" aria-hidden="true">★</div>
+                <div className="yt-hero-sticker pencil" aria-hidden="true">✎</div>
+              </div>
+            </div>
+          </div>
+
           <div className="wrap" style={{ maxWidth: '920px', margin: '0 auto', padding: '0 24px' }}>
-            <div className="yt-chip-row" style={{ padding: '18px 0' }}>
+            <div id="yt-kategori-filtre" className="yt-chip-row" style={{ padding: '18px 0' }}>
               {allCategories.map(cat => (
                 <button
                   key={cat}
@@ -5806,7 +5858,7 @@ export default function App() {
             </div>
           </div>
 
-          <main style={{ maxWidth: '920px', margin: '0 auto', padding: '0 24px 60px' }}>
+          <main id="yt-urun-listesi" style={{ maxWidth: '920px', margin: '0 auto', padding: '0 24px 60px' }}>
             {publishedExams.length > 0 && (
               <div className="yt-toolbar">
                 <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.76rem', color: 'var(--yt-graphite)' }}>{publishedExams.length} içerik listeleniyor</span>
