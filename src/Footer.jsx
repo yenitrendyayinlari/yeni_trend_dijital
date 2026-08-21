@@ -8,6 +8,7 @@ const COMPANY_TAX_OFFICE = 'İvedik V.D.';
 const COMPANY_TAX_NO = '1670510787';
 const SITE_NAME = 'Sualink';
 const SITE_URL = 'sualink.com';
+const ETBIS_URL = 'https://etbis.ticaret.gov.tr/tr/SiteSorgulamaSonuc?siteId=76f265d4-2848-47f6-8f9e-3fcadf226256';
 
 // ------------------------------------------------------------------
 // Yasal metinler — şirketin resmi bilgileriyle (unvan, adres, MERSİS,
@@ -305,6 +306,15 @@ export default function Footer() {
         .yt-footer-bottom span {
           font-family: var(--yt-font-mono); font-size: 0.72rem; color: var(--yt-graphite-soft);
         }
+        .yt-footer-etbis {
+          display: flex; align-items: center; gap: 10px; padding-top: 18px; margin-top: 18px;
+          border-top: 1px solid var(--yt-line);
+        }
+        .yt-footer-etbis img { width: 76px; height: 76px; border: 1px solid var(--yt-line); border-radius: 6px; padding: 4px; background: #fff; flex-shrink: 0; }
+        .yt-footer-etbis-text { display: flex; flex-direction: column; gap: 2px; }
+        .yt-footer-etbis-text strong { font-size: 0.8rem; color: var(--yt-ink); }
+        .yt-footer-etbis-text a { font-size: 0.76rem; color: var(--yt-graphite-soft); text-decoration: none; word-break: break-all; }
+        .yt-footer-etbis-text a:hover { color: var(--yt-ink); text-decoration: underline; }
         .yt-legal-body p { font-size: 0.86rem; color: var(--yt-graphite); line-height: 1.65; margin: 0 0 14px; }
         .yt-legal-body strong { color: var(--yt-ink); }
       `}</style>
@@ -354,8 +364,24 @@ export default function Footer() {
             </div>
           </div>
 
+          <div className="yt-footer-etbis">
+            <img
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(ETBIS_URL)}`}
+              alt="ETBİS Doğrulama QR Kodu"
+              width="76"
+              height="76"
+              loading="lazy"
+            />
+            <div className="yt-footer-etbis-text">
+              <strong>ETBİS Kayıtlı İşletme</strong>
+              <a href={ETBIS_URL} target="_blank" rel="noopener noreferrer">
+                Kaydı doğrulamak için QR kodu okutun veya buraya tıklayın
+              </a>
+            </div>
+          </div>
+
           <div className="yt-footer-bottom">
-            <span>© {year} {COMPANY_NAME} · Tüm hakları saklıdır.</span>
+            <span>© {year} {SITE_URL} · Tüm hakları saklıdır.</span>
             <span>{SITE_URL}</span>
           </div>
         </div>
