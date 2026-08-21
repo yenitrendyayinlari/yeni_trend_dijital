@@ -5987,7 +5987,21 @@ export default function App() {
                   <button
                     type="button"
                     className="yt-hero-btn yt-hero-btn-primary"
-                    onClick={() => document.getElementById('yt-kategori-filtre')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                    onClick={() => {
+                      // "Test İhtiyacını Belirle" -> ihtiyaç belirleme sınavı olarak
+                      // ayrılan ürüne (id: 81) götürür. Sınav zaten bellekte
+                      // yüklüyse (public/öğrenci listesi) uygulama içi geçiş
+                      // yaparız -- URL otomatik olarak ?exam=81 olur (bkz.
+                      // inspectingExamId <-> URL senkron efekti). Herhangi bir
+                      // sebeple henüz yüklenmemişse (ör. çok erken tıklanmışsa)
+                      // doğrudan paylaşım linkine yönlendiririz.
+                      const targetExam = exams.find(e => String(e.id) === '81');
+                      if (targetExam) {
+                        setInspectingExamId(targetExam.id);
+                      } else {
+                        window.location.href = 'https://sualink.com/?exam=81';
+                      }
+                    }}
                   >
                     Test İhtiyacını Belirle
                   </button>
