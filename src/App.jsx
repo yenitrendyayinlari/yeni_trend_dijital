@@ -1066,9 +1066,20 @@ export default function App() {
   // hiçbir katsayı girilmemişken tüm fiyatlar sessizce 0'a düşerdi.
   const applyNumPagesWithAutoPrice = (examId, numPagesValue) => {
     const n = Number(numPagesValue) || 0;
+    const exam = exams.find((e) => e.id === examId);
     if (pricePerQuestion > 0) {
       const computedPrice = Number((n * pricePerQuestion).toFixed(2));
       updateExamInDb(examId, { numPages: n, price: computedPrice, originalPrice: computedPrice });
+      // Bu bir ALT TEST ise, üst paketin (ana ürün) fiyatını da -- tüm
+      // kardeş testlerin YENİ toplam soru sayısına göre -- hemen
+      // güncelliyoruz. Aksi halde paket fiyatı, siz "Güncel Fiyata Göre
+      // Tüm Testleri Yeniden Hesapla"yı elle çalıştırana kadar eski kalırdı.
+      if (exam && exam.parentId) {
+        const siblings = exams.filter((c) => c.parentId === exam.parentId);
+        const newTotal = siblings.reduce((sum, c) => sum + (c.id === examId ? n : (c.numPages || 0)), 0);
+        const parentPrice = Number((newTotal * pricePerQuestion).toFixed(2));
+        updateExamInDb(exam.parentId, { price: parentPrice, originalPrice: parentPrice });
+      }
     } else {
       updateExamInDb(examId, { numPages: n });
     }
@@ -1076,32 +1087,54 @@ export default function App() {
 
   // "Soru Başı Fiyat" penceresindeki "Tüm Testleri Yeniden Hesapla" butonu
   // için: mevcut TÜM testlerin/paketlerin Fiyat ve Eski Fiyat'ını, güncel
-  // soru başı tutara göre (soru sayısı x tutar) yeniden hesaplar. Sadece
-  // yeni oluşturulan/soru sayısı değiştirilen testler için değil, sistemde
-  // zaten var olan ve hiç dokunulmamış testler için de -- hem bu özelliği
-  // ilk kurarken hem de birim fiyatı SONRADAN artırdığınızda tekrar tekrar
-  // kullanılabilir. Daha önce elle girilmiş fiyatlar (₺0 bırakılmış
-  // "pakete bağlı" alt testler dahil) üzerine yazılır -- Soru Sayısı
-  // değiştiğinde uyguladığımız otomatik hesaplamayla aynı davranış.
+  // soru başı tutara göre yeniden hesaplar. Sadece yeni oluşturulan/soru
+  // sayısı değiştirilen testler için değil, sistemde zaten var olan ve hiç
+  // dokunulmamış testler için de -- hem bu özelliği ilk kurarken hem de
+  // birim fiyatı SONRADAN artırdığınızda tekrar tekrar kullanılabilir.
+  // Daha önce elle girilmiş fiyatlar (₺0 bırakılmış "pakete bağlı" alt
+  // testler dahil) üzerine yazılır.
   const recalculateAllExamPrices = async () => {
     if (!(pricePerQuestion > 0)) {
       alert('Önce soru başı bir tutar girip kaydedin.');
       return;
     }
-    const targets = exams.filter((e) => (e.numPages || 0) > 0);
-    if (targets.length === 0) {
+    // Alt testler: kendi soru sayılarına göre.
+    const childTargets = exams.filter((e) => e.parentId && (e.numPages || 0) > 0);
+
+    // Üst ürünler (paketler): kendi numPages'i genelde 0'dır (paketin
+    // "soru sayısı" kavramı yoktur) -- bu yüzden paket fiyatı, ALTINDAKİ
+    // TÜM testlerin soru sayısı TOPLAMINA göre hesaplanır. Hiç alt testi
+    // olmayan (tek başına/standalone) bir üst ürün varsa, o zaman kendi
+    // numPages'i kullanılır.
+    const parentExams = exams.filter((e) => !e.parentId);
+    const parentTargets = parentExams
+      .map((p) => {
+        const children = exams.filter((c) => c.parentId === p.id);
+        const totalQuestions = children.length > 0
+          ? children.reduce((sum, c) => sum + (c.numPages || 0), 0)
+          : (p.numPages || 0);
+        return { exam: p, totalQuestions };
+      })
+      .filter((x) => x.totalQuestions > 0);
+
+    const totalCount = childTargets.length + parentTargets.length;
+    if (totalCount === 0) {
       alert('Soru sayısı girilmiş hiçbir test/paket bulunamadı.');
       return;
     }
     const confirmed = window.confirm(
-      `${targets.length} test/paketin Fiyat ve Eski Fiyat'ı, güncel soru başı tutar (₺${pricePerQuestion}) ile "soru sayısı × birim fiyat" olarak YENİDEN hesaplanacak -- daha önce elle girilmiş fiyatlar (indirimler ve ₺0 bırakılmış pakete-bağlı alt testler dahil) üzerine yazılacak. Devam edilsin mi?`
+      `${totalCount} test/paketin (paketler, altındaki testlerin TOPLAM soru sayısına göre) Fiyat ve Eski Fiyat'ı, güncel soru başı tutar (₺${pricePerQuestion}) ile yeniden hesaplanacak -- daha önce elle girilmiş fiyatlar (indirimler ve ₺0 bırakılmış pakete-bağlı alt testler dahil) üzerine yazılacak. Devam edilsin mi?`
     );
     if (!confirmed) return;
-    for (const ex of targets) {
+    for (const ex of childTargets) {
       const computedPrice = Number(((ex.numPages || 0) * pricePerQuestion).toFixed(2));
       await updateExamInDb(ex.id, { price: computedPrice, originalPrice: computedPrice });
     }
-    alert(`✓ ${targets.length} test/paketin fiyatı güncellendi.`);
+    for (const { exam, totalQuestions } of parentTargets) {
+      const computedPrice = Number((totalQuestions * pricePerQuestion).toFixed(2));
+      await updateExamInDb(exam.id, { price: computedPrice, originalPrice: computedPrice });
+    }
+    alert(`✓ ${totalCount} test/paketin fiyatı güncellendi.`);
   };
 
   const checkUserRoleAndSetMode = (currentUser) => {
