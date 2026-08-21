@@ -306,15 +306,8 @@ export default function Footer() {
         .yt-footer-bottom span {
           font-family: var(--yt-font-mono); font-size: 0.72rem; color: var(--yt-graphite-soft);
         }
-        .yt-footer-etbis {
-          display: flex; align-items: center; gap: 10px; padding-top: 18px; margin-top: 18px;
-          border-top: 1px solid var(--yt-line);
-        }
-        .yt-footer-etbis img { width: 76px; height: 76px; border: 1px solid var(--yt-line); border-radius: 6px; padding: 4px; background: #fff; flex-shrink: 0; }
-        .yt-footer-etbis-text { display: flex; flex-direction: column; gap: 2px; }
-        .yt-footer-etbis-text strong { font-size: 0.8rem; color: var(--yt-ink); }
-        .yt-footer-etbis-text a { font-size: 0.76rem; color: var(--yt-graphite-soft); text-decoration: none; word-break: break-all; }
-        .yt-footer-etbis-text a:hover { color: var(--yt-ink); text-decoration: underline; }
+        .yt-footer-etbis-link { display: inline-block; margin-top: 12px; }
+        .yt-footer-etbis-link img { width: 40px; height: 40px; border: 1px solid var(--yt-line); border-radius: 4px; padding: 3px; background: #fff; display: block; }
         .yt-legal-body p { font-size: 0.86rem; color: var(--yt-graphite); line-height: 1.65; margin: 0 0 14px; }
         .yt-legal-body strong { color: var(--yt-ink); }
       `}</style>
@@ -342,6 +335,23 @@ export default function Footer() {
                     </li>
                   ))}
                 </ul>
+                {group.title === 'Yasal' && (
+                  <a
+                    href={ETBIS_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="yt-footer-etbis-link"
+                    title="ETBİS kaydını doğrula"
+                  >
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(ETBIS_URL)}`}
+                      alt="ETBİS Doğrulama QR Kodu"
+                      width="40"
+                      height="40"
+                      loading="lazy"
+                    />
+                  </a>
+                )}
               </div>
             ))}
 
@@ -361,22 +371,6 @@ export default function Footer() {
                 Ödemeleriniz iyzico altyapısı üzerinden SSL ile şifrelenerek işlenir.
                 Kart bilgileriniz sitemizde saklanmaz.
               </p>
-            </div>
-          </div>
-
-          <div className="yt-footer-etbis">
-            <img
-              src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(ETBIS_URL)}`}
-              alt="ETBİS Doğrulama QR Kodu"
-              width="76"
-              height="76"
-              loading="lazy"
-            />
-            <div className="yt-footer-etbis-text">
-              <strong>ETBİS Kayıtlı İşletme</strong>
-              <a href={ETBIS_URL} target="_blank" rel="noopener noreferrer">
-                Kaydı doğrulamak için QR kodu okutun veya buraya tıklayın
-              </a>
             </div>
           </div>
 
