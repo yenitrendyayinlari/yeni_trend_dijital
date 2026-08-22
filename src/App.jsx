@@ -2577,31 +2577,23 @@ export default function App() {
 
   // Kazanım Analizi -- Ders > Konu > Kazanım hiyerarşisiyle çalışır.
   // topicMap zaten { ders, konu, kazanim } üçlüsünü tuttuğu için ek bir veri
-  // toplamaya gerek yok, sadece raporlama katmanını Konu seviyesinde
-  // gruplayacak şekilde genişletiyoruz.
-  //
-  // Ayrıca her Konu için bir ek sinyal hesaplıyoruz:
-  // "hedefDisi": öğrenci o konuyu BİLEREK atlamış olabilir (konudaki boş
-  // oranı sınav geneline göre çok yüksek, VE bu süre yetişmemesiyle
-  // açıklanamıyor -- yani boş sorular sınavın sonuna kümelenmiş değil).
-  // Bu konular "riskli" diye kırmızı gösterilmez, nötr bir notla geçilir.
+  // Ayrıca her Konu/Ders için bir ek sinyal hesaplıyoruz: "hedefDisi" --
+  // öğrenci o ders/konudan HİÇ soru cevaplamamışsa (tamamı boşsa), bunu
+  // düşük performans (kırmızı/"Riskli") olarak göstermek yerine nötr bir
+  // soruyla geçiyoruz: "Bu dersten/konudan soru cevaplamayacak mısın?" --
+  // ne test öneriyoruz ne kaynak, çünkü amacımız önce cevapladığı kısımları
+  // belli bir seviyeye getirmek.
   //
   // NOT: Bilerek bir "yetersiz veri / az soru var" eşiği YOK -- konuda tek
-  // soru bile olsa, elimizdeki veriyle gerçek bir tier (Riskli/Gelişmekte/
-  // İyi/Harika) veriyoruz. Hiçbir şey söylememek, öğrenciye yanlış bir şey
-  // söylemekten daha kötü bir tercih değil.
+  // soru bile olsa, elimizdeki veriyle gerçek bir barem (Riskli/İyi/Harika)
+  // veriyoruz. Hiçbir şey söylememek, öğrenciye yanlış bir şey söylemekten
+  // daha kötü bir tercih değil.
   const getKazanimReport = () => {
     if (!activeStudentExam || !activeStudentExam.topicMap || Object.keys(activeStudentExam.topicMap).length === 0) {
       return null;
     }
     const numP = activeStudentExam.numPages;
-    const byDers = {}; // { ders: { correct, total, empty, konular: { konu: { correct, total, empty, emptyPages: [], kazanimlar: {...} } } } }
-
-    let examTotal = 0;
-    let examEmpty = 0;
-    const tailStart = Math.max(1, numP - Math.ceil(numP * 0.2) + 1);
-    let tailTotal = 0;
-    let tailEmpty = 0;
+    const byDers = {}; // { ders: { correct, total, empty, konular: { konu: { correct, total, empty, kazanimlar: {...} } } } }
 
     for (let i = 1; i <= numP; i++) {
       const topic = activeStudentExam.topicMap[i];
@@ -2620,27 +2612,20 @@ export default function App() {
       const { lessonCategoryId, topicId, outcomeId } = resolveEntryIds(topic);
       const konuName = (topicId && topics.find((t) => t.id === topicId)?.name) || topic.konu || topic.kazanim;
 
-      examTotal++;
-      if (isEmpty) examEmpty++;
-      if (i >= tailStart) {
-        tailTotal++;
-        if (isEmpty) tailEmpty++;
-      }
-
-      if (!byDers[topic.ders]) byDers[topic.ders] = { correct: 0, total: 0, empty: 0, emptyPages: [], konular: {}, lessonCategoryId };
+      if (!byDers[topic.ders]) byDers[topic.ders] = { correct: 0, total: 0, empty: 0, konular: {}, lessonCategoryId };
       const dersEntry = byDers[topic.ders];
       dersEntry.total++;
       if (isCorrect) dersEntry.correct++;
-      if (isEmpty) { dersEntry.empty++; dersEntry.emptyPages.push(i); }
+      if (isEmpty) dersEntry.empty++;
       if (!dersEntry.lessonCategoryId && lessonCategoryId) dersEntry.lessonCategoryId = lessonCategoryId;
 
       if (!dersEntry.konular[konuName]) {
-        dersEntry.konular[konuName] = { correct: 0, total: 0, empty: 0, emptyPages: [], kazanimlar: {}, topicId };
+        dersEntry.konular[konuName] = { correct: 0, total: 0, empty: 0, kazanimlar: {}, topicId };
       }
       const konuEntry = dersEntry.konular[konuName];
       konuEntry.total++;
       if (isCorrect) konuEntry.correct++;
-      if (isEmpty) { konuEntry.empty++; konuEntry.emptyPages.push(i); }
+      if (isEmpty) konuEntry.empty++;
       if (!konuEntry.topicId && topicId) konuEntry.topicId = topicId;
 
       if (!konuEntry.kazanimlar[topic.kazanim]) {
@@ -2651,46 +2636,29 @@ export default function App() {
       if (!konuEntry.kazanimlar[topic.kazanim].outcomeId && outcomeId) konuEntry.kazanimlar[topic.kazanim].outcomeId = outcomeId;
     }
 
-    const examEmptyRatio = examTotal > 0 ? examEmpty / examTotal : 0;
-    const tailEmptyRatio = tailTotal > 0 ? tailEmpty / tailTotal : 0;
-    // "Süre yetişmedi" sinyali: sınavın son ~%20'lik kısmı, sınav geneline
-    // göre belirgin şekilde daha boş kalmışsa.
-    const sureSorunuGlobal = tailEmptyRatio >= 0.5 && (tailEmptyRatio - examEmptyRatio) >= 0.25;
-
     // Konu VE Ders seviyesinde AYNI barem kullanılıyor -- tek bir yerden
     // hesaplanıyor ki ikisi arasında tutarsızlık olmasın.
-    // Barem: Riskli <%30, Gelişmekte %30-50, İyi %50-70, Harika >=%70.
-    // "Hedefte Değil" ayrı bir kural: boş oranı çok yüksekse (>=%60) VE
-    // sınav geneli boş oranı düşükse (<%35) VE bu "süre yetişmedi" ile
-    // açıklanamıyorsa (boşluklar sona kümelenmiş değilse), öğrencinin o
-    // ders/konuyu BİLEREK atlamış olabileceğini varsayıp nötr gösteriyoruz.
+    // Barem (3 kademe): Riskli <%40, İyi %40-%69, Harika >=%70 -- bilerek
+    // sonuç ekranındaki oran renginin (getBaremTextColor) kırmızı/turuncu/
+    // yeşil sınırlarıyla AYNI: rozet ve altındaki rakamın rengi hep tutarlı
+    // olsun diye.
+    // "Hedefte Değil": bu ders/konudan HİÇ soru cevaplanmamışsa (cevaplanan
+    // sayısı 0 ise), bunu performans barem'i dışında tutup nötr bir soru
+    // olarak gösteriyoruz -- ne test ne kaynak öneriyoruz.
     const computeTier = (entry) => {
-      const oran = entry.total > 0 ? entry.correct / entry.total : 0;
-      const emptyRatio = entry.total > 0 ? entry.empty / entry.total : 0;
-      const tailShare = entry.emptyPages.length > 0
-        ? entry.emptyPages.filter((p) => p >= tailStart).length / entry.emptyPages.length
-        : 0;
-
-      let tier;
-      if (
-        emptyRatio >= 0.6 &&
-        examEmptyRatio < 0.35 &&
-        !(sureSorunuGlobal && tailShare >= 0.6)
-      ) {
-        tier = 'hedefDisi';
-      } else if (oran < 0.3) {
-        tier = 'riskli';
-      } else if (oran < 0.5) {
-        tier = 'gelismekte';
-      } else if (oran < 0.7) {
-        tier = 'iyi';
-      } else {
-        tier = 'harika';
+      const answered = entry.total - entry.empty;
+      if (answered === 0) {
+        return { tier: 'hedefDisi', oran: 0 };
       }
+      const oran = entry.correct / entry.total;
+      let tier;
+      if (oran < 0.4) tier = 'riskli';
+      else if (oran < 0.7) tier = 'iyi';
+      else tier = 'harika';
       return { tier, oran };
     };
 
-    // İkinci geçiş: her Ders VE her Konu için tier hesapla.
+    // İkinci geçiş: her Ders VE her Konu için barem hesapla.
     Object.values(byDers).forEach((dersEntry) => {
       const dersTierResult = computeTier(dersEntry);
       dersEntry.tier = dersTierResult.tier;
@@ -2702,14 +2670,12 @@ export default function App() {
         konuEntry.oran = konuTierResult.oran;
 
         // Kazanım seviyesinde örneklem çoğu zaman çok küçük (1-3 soru)
-        // olduğu için "Hedefte Değil" / süre analizini burada uygulamıyoruz --
-        // sadece doğru oranına göre basit bir barem (Riskli/Gelişmekte/İyi/
-        // Harika). Bu, riskli kazanımların altına kaynak (PDF/video)
-        // göstermek için yeterli.
+        // olduğu için "Hedefte Değil" ayrımını burada uygulamıyoruz -- sadece
+        // doğru oranına göre aynı 3 kademeli barem (Riskli/İyi/Harika). Bu,
+        // riskli kazanımların altına kaynak (PDF/video) göstermek için yeterli.
         Object.values(konuEntry.kazanimlar).forEach((kzEntry) => {
           const oran = kzEntry.total > 0 ? kzEntry.correct / kzEntry.total : 0;
-          if (oran < 0.3) kzEntry.tier = 'riskli';
-          else if (oran < 0.5) kzEntry.tier = 'gelismekte';
+          if (oran < 0.4) kzEntry.tier = 'riskli';
           else if (oran < 0.7) kzEntry.tier = 'iyi';
           else kzEntry.tier = 'harika';
         });
@@ -2717,7 +2683,7 @@ export default function App() {
     });
 
     const hasData = Object.keys(byDers).length > 0;
-    return { byDers, hasData, sureSorunuGlobal };
+    return { byDers, hasData };
   };
 
   // Bir sınavın gerçekten ÇÖZÜLEBİLİR olup olmadığını kontrol eder.
@@ -2800,18 +2766,19 @@ export default function App() {
       .sort((a, b) => (a.price || 0) - (b.price || 0));
   };
 
-  // Tier'a göre kısa, doğal dilde bir öneri cümlesi + aksiyon etiketi.
+  // Barem'e göre kısa, doğal dilde bir öneri cümlesi + aksiyon etiketi.
+  // - riskli: test/deneme önermiyoruz, konu anlatımı/videoya yönlendiriyoruz
+  //   (asıl kaynak linki -- varsa -- kazanım kırılımında, en altta çıkar).
+  // - iyi: bu konuya özel bir test öneriyoruz.
+  // - harika: hiçbir şey önermiyoruz -- öğrenci bu konuda zaten iyi durumda.
+  // - hedefDisi: bu konudan HİÇ soru cevaplanmamış (hepsi boş) -- performans
+  //   notu vermek yerine nötr bir soru soruyoruz, test/kaynak önermiyoruz.
   const getKonuTavsiyesi = (konuName, konuEntry) => {
     switch (konuEntry.tier) {
       case 'riskli':
         return {
-          mesaj: `${konuName} konusunda ciddi bir eksiğin var. Önce temelden tekrar etmeni öneririz.`,
+          mesaj: `${konuName} konusunda ciddi bir eksiğin var. Önce konu anlatımı/video ile temelden tekrar etmeni öneririz.`,
           aksiyon: 'video',
-        };
-      case 'gelismekte':
-        return {
-          mesaj: `${konuName} konusunda orta seviyedesin, birkaç noktada tıkanıyorsun.`,
-          aksiyon: 'konuTesti',
         };
       case 'iyi':
         return {
@@ -2820,12 +2787,12 @@ export default function App() {
         };
       case 'harika':
         return {
-          mesaj: `${konuName} konusunda harikasın!`,
-          aksiyon: 'deneme',
+          mesaj: `${konuName} konusunda harikasın! Bu konuyla ilgili şu an için ek bir önerimiz yok.`,
+          aksiyon: null,
         };
       case 'hedefDisi':
         return {
-          mesaj: `${konuName} konusundan soruları büyük ölçüde boş bırakmışsın. Bu konu hedefinde değilse sorun değil.`,
+          mesaj: `${konuName} konusundan hiç soru cevaplamamışsın. Bu konudan soru cevaplamayacak mısın?`,
           aksiyon: 'hedefDisi',
         };
       default:
@@ -2838,13 +2805,13 @@ export default function App() {
     }
   };
 
-  // Ders (Türkçe/Matematik/Tarih...) seviyesindeki tier'a göre kısa bir
-  // değerlendirme + (varsa) aksiyon. Konu seviyesinden farklı olarak:
-  // - riskli: doğrudan bir kaynak önermek yerine SORUYORUZ (bilinçli mi
-  //   çalışmıyor, yoksa zorlanıyor mu belli değil) -- aksiyon yok, sadece mesaj.
-  // - gelismekte: aşağıdaki konu kırılımına bakmasını öneriyoruz -- aksiyon yok,
-  //   zaten konu listesi hemen altında duruyor.
-  // - iyi / harika: aynı dersten yeni bir deneme öneriyoruz (findOnerilenDeneme).
+  // Ders (Türkçe/Matematik/Tarih...) seviyesindeki barem'e göre kısa bir
+  // değerlendirme + (varsa) aksiyon. Konu seviyesiyle AYNI mantık:
+  // - riskli: doğrudan bir kaynak önermek yerine aşağıdaki konu kırılımına
+  //   bakmasını öneriyoruz -- aksiyon yok, sadece mesaj.
+  // - iyi: aynı dersten yeni bir deneme öneriyoruz (findOnerilenDenemeler).
+  // - harika: hiçbir şey önermiyoruz.
+  // - hedefDisi: bu dersten HİÇ soru cevaplanmamış -- nötr bir soru soruyoruz.
   const getDersTavsiyesi = (dersName, dersEntry) => {
     switch (dersEntry.tier) {
       case 'riskli':
@@ -2852,24 +2819,19 @@ export default function App() {
           mesaj: `${dersName} dersinde genel olarak zorlanıyor gibisin. Ayrıntılı rapor ve öneriler için konu başlıklarına tıklayınız.`,
           aksiyon: null,
         };
-      case 'gelismekte':
-        return {
-          mesaj: `${dersName} dersinde orta seviyedesin. Aşağıdaki konu kırılımına bakarak hangi konuların seni geride bıraktığını görebilir, oradan bir konu testiyle pekiştirebilirsin.`,
-          aksiyon: null,
-        };
       case 'iyi':
         return {
-          mesaj: `${dersName} dersine genel olarak hakimsin. Ayrıntılı rapor ve öneriler için konu başlıklarına tıklayınız.`,
+          mesaj: `${dersName} dersine genel olarak hakimsin. Daha fazla test çözerek iyice sağlama alabilirsin.`,
           aksiyon: 'deneme',
         };
       case 'harika':
         return {
-          mesaj: `${dersName} dersinde harikasın! Aynı dersten yeni bir denemeyle kendini bir üst seviyede zorlayabilirsin.`,
-          aksiyon: 'deneme',
+          mesaj: `${dersName} dersinde harikasın! Bu dersle ilgili şu an için ek bir önerimiz yok.`,
+          aksiyon: null,
         };
       case 'hedefDisi':
         return {
-          mesaj: `${dersName} dersindeki soruların büyük kısmını boş bırakmışsın. Bu ders hedefinde değilse sorun değil.`,
+          mesaj: `${dersName} dersinden hiç soru cevaplamamışsın. Bu dersten soru cevaplamayacak mısın?`,
           aksiyon: null,
         };
       default:
@@ -2880,9 +2842,8 @@ export default function App() {
 
   const KONU_TIER_META = {
     riskli: { label: 'Riskli', color: '#E24B4A', bg: '#FBE4E2' },
-    gelismekte: { label: 'Gelişmekte', color: '#B8860B', bg: '#FBF0D9' },
-    iyi: { label: 'İyi', color: '#2F7A3D', bg: '#E3F3E6' },
-    harika: { label: 'Harika', color: '#1F6634', bg: '#D9F0DD' },
+    iyi: { label: 'İyi', color: '#C2660C', bg: '#FCEBD9' },
+    harika: { label: 'Harika', color: '#2F7A3D', bg: '#E3F3E6' },
     hedefDisi: { label: 'Hedefte Değil', color: '#64748B', bg: '#F1F5F9' },
   };
 
