@@ -6409,8 +6409,9 @@ export default function App() {
                 </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   {Object.entries(kazanimReport.byDers).map(([ders, dersData]) => {
+                    const dersIsHedefDisi = dersData.tier === 'hedefDisi';
                     const dersGreenWidth = getBaremGreenWidth(dersData.correct, dersData.total);
-                    const dersTextColor = getBaremTextColor(dersData.correct, dersData.total);
+                    const dersTextColor = dersIsHedefDisi ? '#94A3B8' : getBaremTextColor(dersData.correct, dersData.total);
                     const dersMeta = KONU_TIER_META[dersData.tier] || { label: dersData.tier || '-', color: '#64748B', bg: '#F1F5F9' };
                     const dersTavsiye = getDersTavsiyesi(ders, dersData);
                     let dersCtaExams = [];
@@ -6425,8 +6426,12 @@ export default function App() {
                             {dersMeta.label}
                           </span>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <div style={{ flex: 1, height: '16px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: '#E24B4A' }}>
-                              <div style={{ height: '100%', width: `${dersGreenWidth}%`, backgroundColor: '#639922' }}></div>
+                            {/* "Hedefte Değil" (hiç cevaplanmamış) tamamen kırmızı bir çubukla
+                                gösterilirse "başarısız oldu" izlenimi verir -- oysa hiç denenmemiş.
+                                Bu yüzden bu durumda çubuğu nötr gri yapıyoruz, kırmızı/yeşil sadece
+                                gerçekten cevaplanmış (riskli/iyi/harika) derslerde kullanılıyor. */}
+                            <div style={{ flex: 1, height: '16px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: dersIsHedefDisi ? 'var(--yt-line)' : '#E24B4A' }}>
+                              {!dersIsHedefDisi && <div style={{ height: '100%', width: `${dersGreenWidth}%`, backgroundColor: '#639922' }}></div>}
                             </div>
                             <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.8rem', fontWeight: 'bold', width: '38px', textAlign: 'right', color: dersTextColor }}>
                               {dersData.correct}/{dersData.total}
@@ -6445,6 +6450,7 @@ export default function App() {
                           {Object.entries(dersData.konular).map(([konuName, konuEntry]) => {
                             const konuKey = `${ders}::${konuName}`;
                             const isOpen = !!expandedKonular[konuKey];
+                            const konuIsHedefDisi = konuEntry.tier === 'hedefDisi';
                             const meta = KONU_TIER_META[konuEntry.tier] || { label: konuEntry.tier || '-', color: '#64748B', bg: '#F1F5F9' };
                             const kGreenWidth = getBaremGreenWidth(konuEntry.correct, konuEntry.total);
                             const tavsiye = getKonuTavsiyesi(konuName, konuEntry);
@@ -6481,10 +6487,10 @@ export default function App() {
                                     {meta.label}
                                   </span>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <div style={{ flex: 1, height: '10px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: '#E24B4A' }}>
-                                      <div style={{ height: '100%', width: `${kGreenWidth}%`, backgroundColor: '#639922' }}></div>
+                                    <div style={{ flex: 1, height: '10px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: konuIsHedefDisi ? 'var(--yt-line)' : '#E24B4A' }}>
+                                      {!konuIsHedefDisi && <div style={{ height: '100%', width: `${kGreenWidth}%`, backgroundColor: '#639922' }}></div>}
                                     </div>
-                                    <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.72rem', fontWeight: 'bold', width: '32px', textAlign: 'right' }}>
+                                    <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.72rem', fontWeight: 'bold', width: '32px', textAlign: 'right', color: konuIsHedefDisi ? '#94A3B8' : 'inherit' }}>
                                       {konuEntry.correct}/{konuEntry.total}
                                     </span>
                                   </div>
