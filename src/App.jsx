@@ -5960,6 +5960,14 @@ export default function App() {
         return avgB - avgA;
       });
 
+      // Ana sayfa hero'sundaki "X Test · Y Soru" güven göstergesi -- gerçekten
+      // çözülebilir (yayında ve kendi PDF'i olan) her sınavı sayıyoruz; salt
+      // klasör görevi gören, kendi PDF'i olmayan üst paketler dahil edilmiyor
+      // ki sayı şişirilmiş görünmesin.
+      const solvableExams = exams.filter(e => e.isPublished && e.pdfFile);
+      const totalTestCount = solvableExams.length;
+      const totalSoruCount = solvableExams.reduce((sum, e) => sum + (e.numPages || 0), 0);
+
       const uniqueExamTypes = Array.from(
         new Set(
           exams
@@ -6018,6 +6026,16 @@ export default function App() {
             <div className="yt-hero-inner">
               <div className="yt-hero-text">
                 <h1 className="yt-hero-title">Sual buradan başlıyor!</h1>
+                {totalTestCount > 0 && (
+                  <div style={{ display: 'flex', gap: '22px', margin: '10px 0 4px' }}>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--yt-graphite)' }}>
+                      <strong style={{ fontSize: '1.15rem', color: 'var(--yt-ink)', fontFamily: 'var(--yt-font-display)' }}>{totalTestCount.toLocaleString('tr-TR')}+</strong> Test
+                    </span>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--yt-graphite)' }}>
+                      <strong style={{ fontSize: '1.15rem', color: 'var(--yt-ink)', fontFamily: 'var(--yt-font-display)' }}>{totalSoruCount.toLocaleString('tr-TR')}+</strong> Soru
+                    </span>
+                  </div>
+                )}
                 <div className="yt-hero-actions">
                   <button
                     type="button"
