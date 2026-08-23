@@ -306,9 +306,21 @@ export default function Footer() {
         .yt-footer-bottom span {
           font-family: var(--yt-font-mono); font-size: 0.72rem; color: var(--yt-graphite-soft);
         }
-        .yt-footer-etbis-link { display: inline-block; margin-top: 12px; }
-        .yt-footer-etbis-link img { width: 40px; height: 40px; border: 1px solid var(--yt-line); border-radius: 4px; padding: 3px; background: #fff; display: block; }
+        .yt-footer-etbis-link {
+          display: inline-flex; align-items: center; margin-top: 12px;
+          padding: 4px; border: 1px solid var(--yt-line); border-radius: 6px;
+          background: #fff; transition: box-shadow 0.2s;
+        }
+        .yt-footer-etbis-link:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
+        .yt-footer-etbis-link img { height: 40px; width: auto; display: block; }
         .yt-legal-body p { font-size: 0.86rem; color: var(--yt-graphite); line-height: 1.65; margin: 0 0 14px; }
+        .yt-eco-badge {
+          display: flex; align-items: flex-start; gap: 6px; margin-top: 10px;
+          padding: 8px 10px; border-radius: 6px; background: #eef6ee;
+          border: 1px solid #d7ead9;
+        }
+        .yt-eco-badge svg { flex-shrink: 0; margin-top: 1px; }
+        .yt-eco-badge span { font-size: 0.76rem; color: #2f7a3d; line-height: 1.4; font-weight: 600; }
         .yt-legal-body strong { color: var(--yt-ink); }
       `}</style>
 
@@ -321,6 +333,13 @@ export default function Footer() {
               </div>
               <p>Dijital sınav ve soru bankası platformu. Sorularınızı çözün,
                 performansınızı takip edin.</p>
+              <div className="yt-eco-badge">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <path d="M5 20c8-1 14-7 14-15-8 0-14 6-14 15Z" stroke="#2f7a3d" strokeWidth="1.8" strokeLinejoin="round" />
+                  <path d="M5 20c1.5-4 5-7 9-9" stroke="#2f7a3d" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+                <span>Kağıt basmıyor, kargo göndermiyoruz -- %100 dijital olarak karbon ayak izimizi azaltıyoruz.</span>
+              </div>
             </div>
 
             {linkGroups.map(group => (
@@ -344,10 +363,8 @@ export default function Footer() {
                     title="ETBİS kaydını doğrula"
                   >
                     <img
-                      src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(ETBIS_URL)}`}
-                      alt="ETBİS Doğrulama QR Kodu"
-                      width="40"
-                      height="40"
+                      src="https://etbis-papi.ticaret.gov.tr/cms-api/MediaAndFile/GetFile?fileLink=etbis-cms/Settings/logo1.png"
+                      alt="e-ticaret Bilgi Platformu"
                       loading="lazy"
                     />
                   </a>
