@@ -6027,14 +6027,9 @@ export default function App() {
               <div className="yt-hero-text">
                 <h1 className="yt-hero-title">Sual buradan başlıyor!</h1>
                 {totalTestCount > 0 && (
-                  <div style={{ display: 'flex', gap: '22px', margin: '10px 0 4px' }}>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--yt-graphite)' }}>
-                      <strong style={{ fontSize: '1.15rem', color: 'var(--yt-ink)', fontFamily: 'var(--yt-font-display)' }}>{totalTestCount.toLocaleString('tr-TR')}+</strong> Test
-                    </span>
-                    <span style={{ fontSize: '0.85rem', color: 'var(--yt-graphite)' }}>
-                      <strong style={{ fontSize: '1.15rem', color: 'var(--yt-ink)', fontFamily: 'var(--yt-font-display)' }}>{totalSoruCount.toLocaleString('tr-TR')}+</strong> Soru
-                    </span>
-                  </div>
+                  <p style={{ margin: '8px 0 20px', fontSize: '1.15rem', fontWeight: '700', color: 'var(--yt-ink)', lineHeight: 1.4 }}>
+                    {totalTestCount.toLocaleString('tr-TR')}+ test ve {totalSoruCount.toLocaleString('tr-TR')}+ soruluk içerikle hazırız.
+                  </p>
                 )}
                 <div className="yt-hero-actions">
                   <button
