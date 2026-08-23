@@ -216,6 +216,28 @@ export default function App() {
   const [openReportsCount, setOpenReportsCount] = useState(0);
   const [replyDrafts, setReplyDrafts] = useState({});
 
+  // Fatura Bilgileri: öğrenci kendi TC Kimlik No / fatura e-postası / adres
+  // bilgisini "Sınavlarım" sayfasından girip kaydediyor (billing_info
+  // tablosu, RLS ile sadece kendi satırını okur/yazar). Admin panelinde
+  // ise "Faturalar" bölümünden TÜM öğrencilerin girdiği bilgileri (yine RLS
+  // ile, admin@yayinevi.com için ayrı bir SELECT politikasıyla) görüp
+  // e-posta üzerinden arayabiliyor.
+  const [myBillingInfo, setMyBillingInfo] = useState(null);
+  const [billingDraft, setBillingDraft] = useState({ fullName: '', tcKimlikNo: '', invoiceEmail: '', address: '' });
+  const [savingBillingInfo, setSavingBillingInfo] = useState(false);
+  const [showBillingAdmin, setShowBillingAdmin] = useState(false);
+  const [billingRecords, setBillingRecords] = useState([]);
+  const [billingRecordsLoading, setBillingRecordsLoading] = useState(false);
+  const [billingSearch, setBillingSearch] = useState('');
+  // Ödeme öncesi ZORUNLU fatura bilgisi adımı: öğrenci fatura bilgisini
+  // henüz girmemişse, ödemeye (iyzico'ya veya bakiye ile ücretsiz karşılamaya)
+  // geçmeden ÖNCE bu bilgiyi istiyoruz -- aksi halde ödeme tamamlanıp fatura
+  // kesilemeyen bir öğrenci ortaya çıkıyordu. pendingPaymentAction, fatura
+  // bilgisi kaydedildikten HEMEN SONRA hangi ödeme işleminin devam edeceğini
+  // tutar: { type: 'single', exam } ya da { type: 'cart' }.
+  const [showBillingGateModal, setShowBillingGateModal] = useState(false);
+  const [pendingPaymentAction, setPendingPaymentAction] = useState(null);
+
   const [showAnnounceModal, setShowAnnounceModal] = useState(false);
   const [announceTitle, setAnnounceTitle] = useState('');
   const [announceMessage, setAnnounceMessage] = useState('');
@@ -1162,6 +1184,12 @@ export default function App() {
     } else {
       setAppMode('student');
       ensureAndFetchStudentBalance();
+      // Fatura bilgisini giriş anında çekiyoruz (sadece "Sınavlarım"
+      // sayfasını açtığında değil) -- ödeme akışındaki zorunlu fatura
+      // bilgisi kontrolü (bkz. handleIyzicoPayment/handleCartCheckout),
+      // öğrenci daha o sayfayı hiç açmadan direkt ödemeye geçse bile
+      // doğru çalışsın diye.
+      fetchMyBillingInfo(currentUser.email);
     }
     // ÖNEMLİ: Bu listeler (Ders/Konu/Kazanım adları) sadece admin panelinde
     // DEĞİL, öğrenci sonuç ekranındaki Kazanım Analizi'nde de kullanılıyor
@@ -2435,6 +2463,11 @@ export default function App() {
     }
   };
 
+  // Fatura bilgisinin TAM (dört alan da dolu) olup olmadığını kontrol eder.
+  const hasCompleteBillingInfo = () => {
+    return !!(myBillingInfo && myBillingInfo.full_name && myBillingInfo.tc_kimlik_no && myBillingInfo.invoice_email && myBillingInfo.address);
+  };
+
   const handleIyzicoPayment = async (exam) => {
     if (!user) {
       alert("Ödeme yapabilmek ve sınava katılabilmek için lütfen giriş yapın.");
@@ -2442,7 +2475,18 @@ export default function App() {
       setShowAuthModal(true);
       return;
     }
+    // ÖDEME ÖNCESİ ZORUNLU FATURA ADIMI: fatura bilgisi eksikse, ödemeyi
+    // burada durdurup önce fatura formunu açıyoruz. Form kaydedilince
+    // proceedIyzicoPayment aşağıda otomatik devam ettirilir.
+    if (!hasCompleteBillingInfo()) {
+      setPendingPaymentAction({ type: 'single', exam });
+      setShowBillingGateModal(true);
+      return;
+    }
+    proceedIyzicoPayment(exam);
+  };
 
+  const proceedIyzicoPayment = async (exam) => {
     // Not: Gerçek tutar her zaman sunucuda hesaplanır; burada sadece
     // onay mesajını daha bilgilendirici göstermek için varolan bakiyeyi
     // (studentBalance) kullanıyoruz.
@@ -2508,7 +2552,17 @@ export default function App() {
       setShowAuthModal(true);
       return;
     }
+    if (cartItems.length === 0) return;
+    // ÖDEME ÖNCESİ ZORUNLU FATURA ADIMI -- bkz. handleIyzicoPayment'taki not.
+    if (!hasCompleteBillingInfo()) {
+      setPendingPaymentAction({ type: 'cart' });
+      setShowBillingGateModal(true);
+      return;
+    }
+    proceedCartCheckout();
+  };
 
+  const proceedCartCheckout = async () => {
     const cartExams = exams.filter(e => cartItems.includes(e.id));
     if (cartExams.length === 0) return;
     const cartTotal = cartExams.reduce((sum, e) => sum + (e.price || 0), 0);
@@ -3275,6 +3329,102 @@ export default function App() {
     }
   };
 
+  // Giriş yapmış öğrencinin daha önce kaydettiği fatura bilgisini getirir
+  // (varsa) ve düzenleme formunu onunla doldurur. checkUserRoleAndSetMode
+  // içinden çağrıldığında `user` state'i henüz güncellenmemiş olabileceği
+  // için e-postayı parametre olarak da kabul ediyoruz.
+  const fetchMyBillingInfo = async (emailOverride) => {
+    const email = emailOverride || user?.email;
+    if (!email) return;
+    const { data, error } = await supabase
+      .from('billing_info')
+      .select('*')
+      .eq('student_email', email)
+      .maybeSingle();
+    if (!error && data) {
+      setMyBillingInfo(data);
+      setBillingDraft({
+        fullName: data.full_name || '',
+        tcKimlikNo: data.tc_kimlik_no || '',
+        invoiceEmail: data.invoice_email || '',
+        address: data.address || '',
+      });
+    } else if (error) {
+      console.error('Fatura bilgisi okunamadı:', error);
+    }
+  };
+
+  // Öğrenci "Fatura Bilgilerim" formunu kaydettiğinde çağrılır. TC Kimlik No
+  // basit bir uzunluk/rakam kontrolünden geçiriliyor (11 haneli, sadece
+  // rakam) -- gerçek bir algoritma doğrulaması (checksum) yapmıyoruz, sadece
+  // bariz yanlış girişleri (harf, eksik hane) önlüyoruz.
+  // `silent` true ise başarı alert'i göstermez -- ödeme akışındaki zorunlu
+  // fatura adımından çağrıldığında (bkz. showBillingGateModal), kaydettikten
+  // hemen sonra ödeme onayı diyaloğu açılacağı için ayrı bir "kaydedildi"
+  // uyarısı gösterip akışı kesmek istemiyoruz. Başarılıysa true, değilse
+  // false döner -- çağıran taraf buna göre bir sonraki adıma geçip
+  // geçmeyeceğine karar verir.
+  const saveMyBillingInfo = async (silent) => {
+    if (!user) return false;
+    const { fullName, tcKimlikNo, invoiceEmail, address } = billingDraft;
+    if (!fullName.trim() || !tcKimlikNo.trim() || !invoiceEmail.trim() || !address.trim()) {
+      alert('Lütfen tüm alanları doldurun.');
+      return false;
+    }
+    if (!/^\d{11}$/.test(tcKimlikNo.trim())) {
+      alert('TC Kimlik No 11 haneli ve sadece rakamlardan oluşmalıdır.');
+      return false;
+    }
+    if (!/^\S+@\S+\.\S+$/.test(invoiceEmail.trim())) {
+      alert('Geçerli bir fatura e-posta adresi girin.');
+      return false;
+    }
+    setSavingBillingInfo(true);
+    const { error } = await supabase
+      .from('billing_info')
+      .upsert({
+        student_email: user.email,
+        full_name: fullName.trim(),
+        tc_kimlik_no: tcKimlikNo.trim(),
+        invoice_email: invoiceEmail.trim(),
+        address: address.trim(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'student_email' });
+    setSavingBillingInfo(false);
+    if (error) {
+      alert('Kaydedilemedi: ' + error.message + '\n\n"billing_info" tablosu veritabanında henüz yoksa, önce onu oluşturmak gerekir.');
+      return false;
+    }
+    setMyBillingInfo({
+      student_email: user.email,
+      full_name: fullName.trim(),
+      tc_kimlik_no: tcKimlikNo.trim(),
+      invoice_email: invoiceEmail.trim(),
+      address: address.trim(),
+    });
+    if (!silent) alert('Fatura bilgileriniz kaydedildi.');
+    return true;
+  };
+
+  // ADMIN: tüm öğrencilerin girdiği fatura bilgilerini (RLS admin@yayinevi.com
+  // için ayrı bir SELECT politikasıyla tüm satırları görebiliyor) e-posta
+  // üzerinden aranabilir şekilde listeler.
+  const fetchAllBillingRecords = async (search) => {
+    setBillingRecordsLoading(true);
+    let query = supabase.from('billing_info').select('*').order('updated_at', { ascending: false });
+    if (search && search.trim()) {
+      query = query.ilike('student_email', `%${search.trim()}%`);
+    }
+    const { data, error } = await query;
+    setBillingRecordsLoading(false);
+    if (!error && data) {
+      setBillingRecords(data);
+    } else if (error) {
+      console.error('Fatura kayıtları okunamadı:', error);
+      setBillingRecords([]);
+    }
+  };
+
   // ==========================================
   // RENDER: YÖNETİCİ EKRANI
   // ==========================================
@@ -3331,6 +3481,12 @@ export default function App() {
                   {openReportsCount}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => { setShowBillingAdmin(true); fetchAllBillingRecords(billingSearch); }}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              🧾 Faturalar
             </button>
             <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
           </div>
@@ -3562,6 +3718,62 @@ export default function App() {
                     </div>
                   );
                 })}
+              </div>
+            )}
+          </div>
+        )}
+
+
+        {showBillingAdmin && (
+          <div style={{ marginBottom: '20px', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+              <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🧾 Fatura Bilgileri ({billingRecords.length})</h2>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  value={billingSearch}
+                  onChange={(e) => setBillingSearch(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') fetchAllBillingRecords(billingSearch); }}
+                  placeholder="E-posta ile ara..."
+                  style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                />
+                <button onClick={() => fetchAllBillingRecords(billingSearch)} style={{ padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Ara</button>
+                <button onClick={() => setShowBillingAdmin(false)} style={{ padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+              </div>
+            </div>
+
+            {billingRecordsLoading ? (
+              <p style={{ color: '#64748b' }}>Yükleniyor...</p>
+            ) : billingRecords.length === 0 ? (
+              <p style={{ color: '#64748b' }}>Kayıt bulunamadı. (Öğrenciler "Sınavlarım" sayfasından fatura bilgilerini kendileri girer.)</p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', borderBottom: '2px solid #e2e8f0' }}>
+                      <th style={{ padding: '8px' }}>Öğrenci E-posta</th>
+                      <th style={{ padding: '8px' }}>Ad Soyad</th>
+                      <th style={{ padding: '8px' }}>TC Kimlik No</th>
+                      <th style={{ padding: '8px' }}>Fatura E-posta</th>
+                      <th style={{ padding: '8px' }}>Adres</th>
+                      <th style={{ padding: '8px' }}>Son Güncelleme</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {billingRecords.map((rec) => (
+                      <tr key={rec.student_email} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '8px' }}>{rec.student_email}</td>
+                        <td style={{ padding: '8px' }}>{rec.full_name}</td>
+                        <td style={{ padding: '8px', fontFamily: 'monospace' }}>{rec.tc_kimlik_no}</td>
+                        <td style={{ padding: '8px' }}>{rec.invoice_email}</td>
+                        <td style={{ padding: '8px', maxWidth: '260px', whiteSpace: 'pre-wrap' }}>{rec.address}</td>
+                        <td style={{ padding: '8px', color: '#94a3b8', fontSize: '0.76rem' }}>
+                          {rec.updated_at ? new Date(rec.updated_at).toLocaleString('tr-TR') : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
@@ -5265,6 +5477,97 @@ export default function App() {
     );
   };
 
+  // ÖDEME ÖNCESİ ZORUNLU FATURA MODALI: showBillingGateModal true olduğunda
+  // (hasCompleteBillingInfo false iken ödeme başlatılmaya çalışıldığında)
+  // açılır. Form kaydedilince pendingPaymentAction neyse (tekli sınav ya da
+  // sepet) o ödeme akışı otomatik devam eder. Kapatma (✕) butonu YOK --
+  // bilerek: fatura bilgisi olmadan ödemeye izin vermiyoruz; öğrenci
+  // "Vazgeç" ile modalı kapatıp ödemeden tamamen vazgeçebilir ama fatura
+  // bilgisini atlayıp direkt ödemeye geçemez.
+  const renderBillingGateModal = () => showBillingGateModal && (
+    <div className="yt-cart-overlay" onClick={() => { setShowBillingGateModal(false); setPendingPaymentAction(null); }}>
+      <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+          <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Fatura Bilgileriniz Gerekli</h3>
+        </div>
+        <p style={{ color: 'var(--yt-graphite)', fontSize: '0.86rem', margin: '0 0 18px' }}>
+          Satın aldığınız içerik için size fatura kesebilmemiz için ödemeden önce
+          aşağıdaki bilgileri doldurmanız gerekiyor. Bu bilgiler yalnızca fatura
+          düzenlemek amacıyla kullanılır.
+        </p>
+        <div style={{ display: 'grid', gap: '12px', marginBottom: '16px' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>Ad Soyad</label>
+            <input
+              type="text"
+              value={billingDraft.fullName}
+              onChange={(e) => setBillingDraft(prev => ({ ...prev, fullName: e.target.value }))}
+              className="yt-input"
+              style={{ width: '100%', boxSizing: 'border-box' }}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>TC Kimlik No</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={11}
+              value={billingDraft.tcKimlikNo}
+              onChange={(e) => setBillingDraft(prev => ({ ...prev, tcKimlikNo: e.target.value.replace(/\D/g, '').slice(0, 11) }))}
+              className="yt-input"
+              style={{ width: '100%', boxSizing: 'border-box' }}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>Fatura E-posta Adresi</label>
+            <input
+              type="email"
+              value={billingDraft.invoiceEmail}
+              onChange={(e) => setBillingDraft(prev => ({ ...prev, invoiceEmail: e.target.value }))}
+              className="yt-input"
+              style={{ width: '100%', boxSizing: 'border-box' }}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>Adres</label>
+            <textarea
+              value={billingDraft.address}
+              onChange={(e) => setBillingDraft(prev => ({ ...prev, address: e.target.value }))}
+              rows={2}
+              className="yt-input"
+              style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }}
+            />
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button
+            onClick={() => { setShowBillingGateModal(false); setPendingPaymentAction(null); }}
+            className="yt-btn yt-btn-outline"
+            style={{ flex: 1 }}
+          >
+            Vazgeç
+          </button>
+          <button
+            onClick={async () => {
+              const ok = await saveMyBillingInfo(true);
+              if (!ok) return;
+              setShowBillingGateModal(false);
+              const action = pendingPaymentAction;
+              setPendingPaymentAction(null);
+              if (action?.type === 'single') proceedIyzicoPayment(action.exam);
+              else if (action?.type === 'cart') proceedCartCheckout();
+            }}
+            disabled={savingBillingInfo}
+            className="yt-btn yt-btn-buy"
+            style={{ flex: 1 }}
+          >
+            {savingBillingInfo ? 'Kaydediliyor...' : 'Kaydet ve Devam Et'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   const renderNotifDrawer = () => showStudentNotifs && (
     <div className="yt-cart-overlay" onClick={() => setShowStudentNotifs(false)}>
       <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()}>
@@ -5304,7 +5607,7 @@ export default function App() {
     <>
       {user && (
         <button
-          onClick={() => { setInspectingExamId(null); setActiveStudentExamId(null); setAccountTab('exams'); setShowAccountPage(true); setShowAccountMenu(false); }}
+          onClick={() => { setInspectingExamId(null); setActiveStudentExamId(null); setAccountTab('exams'); setShowAccountPage(true); setShowAccountMenu(false); fetchMyBillingInfo(); }}
           className="yt-btn yt-btn-ghost"
         >
           Sınavlarım
@@ -5491,10 +5794,70 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            <div className="yt-session-card" style={{ marginTop: '20px' }}>
+              <h3 className="yt-admin-section-title">Fatura Bilgilerim</h3>
+              <p style={{ color: 'var(--yt-graphite)', fontSize: '0.84rem', margin: '0 0 16px' }}>
+                Satın aldığınız içerikler için fatura kesilebilmesi amacıyla bu bilgileri
+                doldurmanız gerekiyor. Bilgileriniz yalnızca fatura düzenlemek için kullanılır.
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginBottom: '14px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>Ad Soyad</label>
+                  <input
+                    type="text"
+                    value={billingDraft.fullName}
+                    onChange={(e) => setBillingDraft(prev => ({ ...prev, fullName: e.target.value }))}
+                    className="yt-input"
+                    style={{ width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>TC Kimlik No</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={11}
+                    value={billingDraft.tcKimlikNo}
+                    onChange={(e) => setBillingDraft(prev => ({ ...prev, tcKimlikNo: e.target.value.replace(/\D/g, '').slice(0, 11) }))}
+                    className="yt-input"
+                    style={{ width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>Fatura E-posta Adresi</label>
+                  <input
+                    type="email"
+                    value={billingDraft.invoiceEmail}
+                    onChange={(e) => setBillingDraft(prev => ({ ...prev, invoiceEmail: e.target.value }))}
+                    className="yt-input"
+                    style={{ width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>Adres</label>
+                  <textarea
+                    value={billingDraft.address}
+                    onChange={(e) => setBillingDraft(prev => ({ ...prev, address: e.target.value }))}
+                    rows={2}
+                    className="yt-input"
+                    style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }}
+                  />
+                </div>
+              </div>
+              <button
+                onClick={() => saveMyBillingInfo(false)}
+                disabled={savingBillingInfo}
+                className="yt-btn yt-btn-primary"
+              >
+                {savingBillingInfo ? 'Kaydediliyor...' : (myBillingInfo ? 'Bilgilerimi Güncelle' : 'Kaydet')}
+              </button>
+            </div>
           </div>
         </div>
       <Footer />
       {renderCartDrawer()}
+      {renderBillingGateModal()}
       {renderNotifDrawer()}
       {renderAuthModal()}
       </div>
@@ -5985,6 +6348,7 @@ export default function App() {
           </main>
           <Footer />
           {renderCartDrawer()}
+      {renderBillingGateModal()}
           {renderNotifDrawer()}
           {renderAuthModal()}
         </div>
@@ -6383,6 +6747,7 @@ export default function App() {
 
           <Footer />
           {renderCartDrawer()}
+      {renderBillingGateModal()}
           {renderNotifDrawer()}
           {renderAuthModal()}
         </div>
@@ -7093,6 +7458,7 @@ export default function App() {
           </div>
         )}
       {renderCartDrawer()}
+      {renderBillingGateModal()}
       {renderNotifDrawer()}
       </div>
     );
