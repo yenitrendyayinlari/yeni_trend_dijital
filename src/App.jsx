@@ -2838,6 +2838,32 @@ export default function App() {
     return matches.slice(0, 1);
   };
 
+  // AYNI mantık ama KAZANIM (outcome_id) seviyesinde: bir konunun içinde
+  // birden fazla kazanım varsa (örn. "Anayasa, İnsan Hakları Hukuku"
+  // konusunun altında Yasama/Yürütme/Yargı kazanımları gibi) ve bu
+  // kazanımlardan HER BİRİNE ÖZEL, dar kapsamlı bir test varsa (ör. sadece
+  // "Yargı" sorularından oluşan bir test), bunu genel konu testi yerine
+  // (veya onunla birlikte) önerebilmek için kullanılır. findKonuTestleri
+  // sadece TEK bir (konu geneline en uygun) test döndürüyordu -- bu yüzden
+  // örn. Yasama/Yürütme/Yargı'nın hepsi aynı konunun altında olduğu için
+  // öneri motoru bunlardan sadece birini (rastgele en az soru sayılı olanı)
+  // gösterip diğer ikisini hiç önermiyordu. Bu fonksiyon çağrıldığı yerde
+  // HER kazanım için AYRI AYRI çalıştırılıp sonuçlar birleştirilir.
+  const findKazanimTestleri = (outcomeId, excludeExamId) => {
+    if (!outcomeId) return [];
+    const matches = exams
+      .filter((e) => {
+        if (!e.isPublished || e.id === excludeExamId || !e.topicMap) return false;
+        if (!examHasPlayableContent(e)) return false;
+        const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
+        if (entries.length === 0) return false;
+        const matchCount = entries.filter((t) => resolveEntryIds(t).outcomeId === outcomeId).length;
+        return (matchCount / entries.length) >= 0.8;
+      })
+      .sort((a, b) => (a.numPages || 0) - (b.numPages || 0));
+    return matches.slice(0, 1);
+  };
+
   // Bir öğrenci iyi/harika durumdaysa, aynı sınav türünden (ör. "deneme") VE
   // AYNI DERSE (artık ID ile, lessonCategoryId), henüz çözmediği TÜM
   // denemeleri buluyoruz.
@@ -6570,11 +6596,34 @@ export default function App() {
 
                             let ctaExams = [];
                             // "Riskli" konularda da (video/konu anlatımı önerisinin YANINDA)
-                            // aynı konuya özel bir test öneriyoruz -- "İyi" barem'indeki
-                            // TEK test / en az soru sayılı testten başlama mantığıyla birebir
-                            // aynı (findKonuTestleri zaten bunu yapıyor).
+                            // aynı konuya özel test(ler) öneriyoruz.
+                            // ÖNEMLİ: önce KAZANIM bazında deniyoruz -- bir konunun içinde
+                            // birden fazla kazanım varsa (örn. "Anayasa, İnsan Hakları
+                            // Hukuku" konusunun altında Yasama/Yürütme/Yargı gibi) ve
+                            // bunlardan bazılarına/hepsine özel dar kapsamlı testler varsa,
+                            // her biri İÇİN AYRI test göstermek istiyoruz -- eskiden sadece
+                            // konu genelinde TEK bir test seçilip diğer kazanımlara özel
+                            // testler hiç önerilmiyordu. Riskli/İyi olan HER kazanım için
+                            // findKazanimTestleri çalıştırıp sonuçları (aynı test iki kez
+                            // görünmesin diye tekilleştirerek) birleştiriyoruz. Hiçbir
+                            // kazanıma özel test bulunamazsa, eskisi gibi konu geneline en
+                            // uygun TEK teste (findKonuTestleri) düşüyoruz.
                             if (tavsiye.aksiyon === 'konuTesti' || tavsiye.aksiyon === 'video') {
-                              ctaExams = findKonuTestleri(konuEntry.topicId, activeStudentExam.id);
+                              const kazanimEntries = Object.values(konuEntry.kazanimlar)
+                                .filter((k) => k.tier === 'riskli' || k.tier === 'iyi');
+                              const seenIds = new Set();
+                              const perKazanimExams = [];
+                              kazanimEntries.forEach((k) => {
+                                findKazanimTestleri(k.outcomeId, activeStudentExam.id).forEach((ex) => {
+                                  if (!seenIds.has(ex.id)) {
+                                    seenIds.add(ex.id);
+                                    perKazanimExams.push(ex);
+                                  }
+                                });
+                              });
+                              ctaExams = perKazanimExams.length > 0
+                                ? perKazanimExams
+                                : findKonuTestleri(konuEntry.topicId, activeStudentExam.id);
                             } else if (tavsiye.aksiyon === 'deneme') {
                               ctaExams = findOnerilenDenemeler(activeStudentExam.id, activeStudentExam.examType, dersData.lessonCategoryId);
                             }
