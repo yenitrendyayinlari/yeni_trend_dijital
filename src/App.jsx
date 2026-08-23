@@ -2332,6 +2332,22 @@ export default function App() {
       return;
     }
 
+    // ÖNEMLİ: sınav şu an ücretsiz (isFree) olsa bile, öğrencinin buraya
+    // eriştiğini KALICI bir student_purchases kaydına dönüştürüyoruz.
+    // Sebep: bu satır olmadan, ücretsizken çözülen bir sınav daha sonra
+    // admin panelinden ücretli hale getirilirse, öğrencinin hiçbir satın
+    // alma kaydı olmadığı için (ücretsizken buna hiç ihtiyaç yoktu) bir
+    // dahaki girişinde "erişiminiz yok" duvarına çarpıyordu -- daha önce
+    // gerçekten çözmüş olmasına rağmen. Aynı güvenli sunucu uç noktasını
+    // (initializePayment) kullanıyoruz; sunucu güncel fiyatı (şu an 0)
+    // hesaplayıp bakiyeden hiçbir şey düşmeden "freeCheckout" olarak
+    // kaydı oluşturuyor -- handleIyzicoPayment'taki freeCheckout dalıyla
+    // birebir aynı mekanizma. Kullanıcıyı BEKLETMİYORUZ: arka planda
+    // (fire-and-forget) çalışır, sınava giriş anında hiçbir gecikme olmaz.
+    if (isFree && !isPurchased) {
+      registerFreeExamAccess(exam);
+    }
+
     // Yarım kalmış (bitirilmemiş) bir oturum varsa cevapları, süreyi ve sayfayı oradan geri yükle.
     const existingRes = studentResultsMap[exam.id];
     const hasUnfinishedSession = existingRes && !existingRes.is_finished && existingRes.answers && Object.keys(existingRes.answers).length > 0;
@@ -2360,6 +2376,35 @@ export default function App() {
       setStudentAnswers({});
       setStudentCurrentPage(1);
       setTimeLeft(exam.examType === 'deneme' ? exam.duration * 60 : 0);
+    }
+  };
+
+  // Ücretsiz bir sınava giren öğrenci için sunucuda KALICI bir satın alma
+  // kaydı oluşturur (bkz. startExam içindeki açıklama). Sessizce çalışır --
+  // hata olursa öğrencinin sınava girişini engellemez, sadece konsola
+  // yazar (bu turdaki erişimi zaten isFree kontrolü karşılıyor; burada
+  // amaç yalnızca GELECEKTEKİ erişimi güvenceye almak).
+  const registerFreeExamAccess = async (exam) => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) return;
+      initializePayment(
+        { examIds: [exam.id], items: [{ id: exam.id }] },
+        token,
+        (err, result) => {
+          if (err) {
+            console.error('Ücretsiz erişim kaydı oluşturulamadı:', err);
+            return;
+          }
+          if (result && result.freeCheckout) {
+            setStudentPurchases(prev => ({ ...prev, [exam.id]: true }));
+            if (typeof result.newBalance === 'number') setStudentBalance(result.newBalance);
+          }
+        }
+      );
+    } catch (err) {
+      console.error('Ücretsiz erişim kaydı oluşturulamadı:', err);
     }
   };
 
