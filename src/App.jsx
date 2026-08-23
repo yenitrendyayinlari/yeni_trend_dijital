@@ -133,6 +133,15 @@ export default function App() {
   // tek (global) katsayı. `pricing_settings` tablosunun TEK satırında
   // (id=1) tutulur.
   const [pricePerQuestion, setPricePerQuestion] = useState(0);
+  // pricePerQuestion'ın kendisi 0 olabilir -- hem "hiç ayarlanmadı" (varsayılan
+  // başlangıç durumu) hem de "admin BİLEREK 0 yazıp kaydetti" (örn. bugün tüm
+  // ürünleri ücretsiz yapmak istiyor) AYNI sayısal değere denk düşer. Bu ikisini
+  // ayırt etmek için ayrı bir bayrak tutuyoruz: veritabanında pricing_settings
+  // satırı gerçekten VARSA (fetchPricingSettings) ya da admin panelden az önce
+  // KAYDETTİYSE (savePricePerQuestion) true olur. Otomatik fiyat hesaplayan
+  // her yer artık "pricePerQuestion > 0" yerine bunu kontrol ediyor -- böylece
+  // 0 girip kaydetmek gerçekten "tüm fiyatları 0 yap" anlamına geliyor.
+  const [pricePerQuestionConfigured, setPricePerQuestionConfigured] = useState(false);
   const [showPricingSettings, setShowPricingSettings] = useState(false);
   const [pricingDraft, setPricingDraft] = useState('0');
   // Kategori Yönetimi artık sekmeler yerine iç içe (Sınav Türü > Ders Türü >
@@ -1034,8 +1043,12 @@ export default function App() {
       .select('price_per_question')
       .eq('id', 1)
       .maybeSingle();
-    if (!error && data) setPricePerQuestion(Number(data.price_per_question) || 0);
-    else if (error) console.error('Soru başı fiyat ayarı okunamadı:', error);
+    if (!error && data) {
+      setPricePerQuestion(Number(data.price_per_question) || 0);
+      setPricePerQuestionConfigured(true);
+    } else if (error) {
+      console.error('Soru başı fiyat ayarı okunamadı:', error);
+    }
   };
 
   const savePricePerQuestion = async (newValue) => {
@@ -1055,6 +1068,7 @@ export default function App() {
       return;
     }
     setPricePerQuestion(parsed);
+    setPricePerQuestionConfigured(true);
     setShowPricingSettings(false);
   };
 
@@ -1062,12 +1076,16 @@ export default function App() {
   // Fiyat VE Eski Fiyat'ı "soru sayısı x soru başı fiyat" olarak YENİDEN
   // hesaplayıp üzerine yazar -- daha önce girilmiş manuel bir indirim varsa
   // bile (admin ile konuşulup onaylanan davranış budur). Soru başı fiyat
-  // henüz ayarlanmamışsa (0), fiyatlara hiç dokunmuyoruz -- aksi halde
-  // hiçbir katsayı girilmemişken tüm fiyatlar sessizce 0'a düşerdi.
+  // HİÇ AYARLANMAMIŞSA (pricePerQuestionConfigured false), fiyatlara hiç
+  // dokunmuyoruz -- aksi halde daha admin panelden hiçbir katsayı
+  // girilmemişken tüm fiyatlar sessizce 0'a düşerdi. Ama admin BİLEREK 0
+  // girip kaydettiyse (pricePerQuestionConfigured true, pricePerQuestion 0),
+  // bunu geçerli bir hesaplama olarak uyguluyoruz -- yani "bugün her şeyi
+  // ücretsiz yap" isteniyorsa gerçekten 0'a çekiyoruz.
   const applyNumPagesWithAutoPrice = (examId, numPagesValue) => {
     const n = Number(numPagesValue) || 0;
     const exam = exams.find((e) => e.id === examId);
-    if (pricePerQuestion > 0) {
+    if (pricePerQuestionConfigured) {
       const computedPrice = Number((n * pricePerQuestion).toFixed(2));
       updateExamInDb(examId, { numPages: n, price: computedPrice, originalPrice: computedPrice });
       // Bu bir ALT TEST ise, üst paketin (ana ürün) fiyatını da -- tüm
@@ -1094,7 +1112,7 @@ export default function App() {
   // Daha önce elle girilmiş fiyatlar (₺0 bırakılmış "pakete bağlı" alt
   // testler dahil) üzerine yazılır.
   const recalculateAllExamPrices = async () => {
-    if (!(pricePerQuestion > 0)) {
+    if (!pricePerQuestionConfigured) {
       alert('Önce soru başı bir tutar girip kaydedin.');
       return;
     }
@@ -1798,7 +1816,7 @@ export default function App() {
         // Soru sayısı PDF'ten otomatik algılandığında da, manuel girişte
         // olduğu gibi, soru başı fiyat ayarlıysa Fiyat/Eski Fiyat'ı aynı
         // formülle yeniden hesaplıyoruz.
-        if (pricePerQuestion > 0) {
+        if (pricePerQuestionConfigured) {
           const computedPrice = Number((detectedPages * pricePerQuestion).toFixed(2));
           updates.price = computedPrice;
           updates.originalPrice = computedPrice;
@@ -2899,7 +2917,7 @@ export default function App() {
   const KONU_TIER_META = {
     riskli: { label: 'Riskli', color: '#E24B4A', bg: '#FBE4E2' },
     iyi: { label: 'İyi', color: '#5B9A34', bg: '#EDF6E4' },
-    harika: { label: 'Harika', color: '#2F7A3D', bg: '#E3F3E6' },
+    harika: { label: 'Harika', color: '#FFFFFF', bg: '#639922' },
     hedefDisi: { label: 'Hedefte Değil', color: '#FFFFFF', bg: '#111111' },
   };
 
@@ -4746,7 +4764,7 @@ export default function App() {
 
                         <div className="form-group" style={{ marginBottom: '10px' }}>
                           <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>
-                            Soru / Sayfa Sayısı <span style={{ fontWeight: 'normal', color: '#64748b' }}>(PDF yüklenince otomatik dolar{pricePerQuestion > 0 ? `, fiyat soru başı ₺${pricePerQuestion} üzerinden otomatik hesaplanır` : ''})</span>:
+                            Soru / Sayfa Sayısı <span style={{ fontWeight: 'normal', color: '#64748b' }}>(PDF yüklenince otomatik dolar{pricePerQuestionConfigured ? `, fiyat soru başı ₺${pricePerQuestion} üzerinden otomatik hesaplanır` : ''})</span>:
                           </label>
                           <input
                             type="number"
