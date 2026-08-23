@@ -81,16 +81,19 @@ export default async function handler(req, res) {
     }
 
     if (result.status === 'success' && result.paymentStatus === 'SUCCESS') {
-      const conversationId = result.conversationId;
-
-      // --- YENİ AKIŞ: conversationId, iyzipay-checkout.js'in oluşturduğu
-      // pending_checkouts kaydının id'si. Bu kayıttan e-postayı, içerik
-      // id'lerini ve (varsa) uygulanmış hediye bakiye tutarını GÜVENLE
-      // (tamamen sunucu tarafında üretilmiş bir kayıttan) okuyoruz.
+      // --- YENİ AKIŞ: iyzico'nun checkoutForm.retrieve uç noktası,
+      // conversationId'yi SADECE bu sorgu isteğine siz gönderirseniz geri
+      // döndürüyor -- CF-Initialize sırasında gönderdiğimiz conversationId'yi
+      // otomatik hatırlayıp yanıta eklemiyor (ve burada, retrieve isteğini
+      // atarken conversationId'yi zaten bilmiyoruz -- bulmaya çalıştığımız
+      // şey bu). Bu yüzden eşleştirmeyi, iyzico'checkoutFormInitialize.js'in
+      // token dönüşünde pending_checkouts kaydına yazdığımız 'iyzico_token'
+      // üzerinden yapıyoruz -- bu değer güvenilir şekilde her zaman elimizde
+      // (callback'e POST edilen 'token' ile birebir aynı).
       const { data: pending, error: pendingError } = await supabaseAdmin
         .from('pending_checkouts')
         .select('*')
-        .eq('id', conversationId)
+        .eq('iyzico_token', token)
         .maybeSingle();
 
       if (pendingError) {
@@ -143,6 +146,7 @@ export default async function handler(req, res) {
       // bulunamadıysa, bu ödeme bu özellik devreye girmeden ÖNCE başlatılmış
       // olabilir. O zaman conversationId doğrudan e-postaydı, basketId ise
       // içerik id listesiydi -- eski mantıkla devam ediyoruz.
+      const conversationId = result.conversationId;
       const studentEmail = conversationId;
       const examIds = (result.basketId || '').split(',').map((s) => s.trim()).filter(Boolean);
 
