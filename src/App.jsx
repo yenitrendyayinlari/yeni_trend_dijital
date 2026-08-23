@@ -1337,10 +1337,19 @@ export default function App() {
   // herkesin tarayıcısına (Network sekmesinden okunabilir şekilde) gider.
   const EXAM_PUBLIC_COLUMNS = 'id,name,duration,exam_type,category_exam_type,category_lesson,pdf_file,solution_pdf_file,sections,is_published,num_pages,price,original_price,is_parent,parent_id,sort_order,topic_map,campaign_ends_at,description,created_at';
 
+  // Hiç giriş yapmamış (anonim) ziyaretçiye gösterilen liste için ayrı bir
+  // sütun seti: solution_pdf_file burada YOK. Anonim bir ziyaretçinin zaten
+  // bitirdiği bir sınav olamaz, bu yüzden çözüm dosyasının yolunun ona
+  // gönderilmesinin hiçbir işlevsel faydası yok -- gereksiz bilgi sızıntısı.
+  // Giriş yapmış kullanıcı akışı ("Çözümü Gör" butonu solutionPdfFile'ın
+  // varlığına bakıyor) yukarıdaki EXAM_PUBLIC_COLUMNS'u kullanmaya devam
+  // ediyor, ona dokunmuyoruz.
+  const EXAM_ANONYMOUS_COLUMNS = 'id,name,duration,exam_type,category_exam_type,category_lesson,pdf_file,sections,is_published,num_pages,price,original_price,is_parent,parent_id,sort_order,topic_map,campaign_ends_at,description,created_at';
+
   const fetchPublicExams = async () => {
     const { data, error } = await supabase
       .from('exams')
-      .select(EXAM_PUBLIC_COLUMNS)
+      .select(EXAM_ANONYMOUS_COLUMNS)
       .eq('is_published', true)
       .order('created_at', { ascending: false });
 
