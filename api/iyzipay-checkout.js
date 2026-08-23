@@ -266,10 +266,29 @@ export default async function handler(req, res) {
   // ürün fiyatı (totalPrice) ve o siparişte kullanılan bakiye (balanceApplied)
   // ayrıca pending_checkouts kaydında saklandığı için muhasebe/rapor
   // amacıyla hâlâ eksiksiz olarak erişilebilir durumda.
-  iyzipay.checkoutFormInitialize.create(request, (err, result) => {
+  iyzipay.checkoutFormInitialize.create(request, async (err, result) => {
     if (err) {
       return res.status(500).json({ error: err.message });
     }
+
+    // ÖNEMLİ: iyzico'nun checkoutForm.retrieve uç noktası, conversationId'yi
+    // SADECE o sorgu isteğine siz kendiniz gönderirseniz yanıtta geri
+    // döndürüyor -- CF-Initialize'da gönderdiğimiz conversationId'yi
+    // otomatik olarak hatırlayıp retrieve yanıtına eklemiyor. Callback
+    // (iyzipay-callback.js) ise sorguyu SADECE elindeki 'token' ile
+    // yapabiliyor (conversationId henüz bilinmiyor -- bulmaya çalıştığımız
+    // şey zaten o). Bu yüzden pending_checkouts kaydını, callback'in
+    // güvenle eşleştirebilmesi için burada 'token' ile işaretliyoruz.
+    if (result.token) {
+      const { error: tokenSaveError } = await supabaseAdmin
+        .from('pending_checkouts')
+        .update({ iyzico_token: result.token })
+        .eq('id', pending.id);
+      if (tokenSaveError) {
+        console.error('Iyzico token kaydedilemedi:', tokenSaveError);
+      }
+    }
+
     res.status(200).json({ ...result, balanceApplied, payableAmount });
   });
 }
