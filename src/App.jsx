@@ -2835,7 +2835,7 @@ export default function App() {
     switch (konuEntry.tier) {
       case 'riskli':
         return {
-          mesaj: `${konuName} konusunda ciddi bir eksiğin var. Önce konu anlatımı/video ile temelden tekrar etmeni öneririz.`,
+          mesaj: `${konuName} konusunda ciddi bir eksiğin var. Önce konu anlatımı/video ile temelden tekrar etmeni öneririz. Daha sonra önerilen testi çözünüz.`,
           aksiyon: 'video',
         };
       case 'iyi':
@@ -2898,7 +2898,7 @@ export default function App() {
 
   const KONU_TIER_META = {
     riskli: { label: 'Riskli', color: '#E24B4A', bg: '#FBE4E2' },
-    iyi: { label: 'İyi', color: '#C2660C', bg: '#FCEBD9' },
+    iyi: { label: 'İyi', color: '#5B9A34', bg: '#EDF6E4' },
     harika: { label: 'Harika', color: '#2F7A3D', bg: '#E3F3E6' },
     hedefDisi: { label: 'Hedefte Değil', color: '#FFFFFF', bg: '#111111' },
   };
@@ -6511,7 +6511,11 @@ export default function App() {
                             const tavsiye = getKonuTavsiyesi(konuName, konuEntry);
 
                             let ctaExams = [];
-                            if (tavsiye.aksiyon === 'konuTesti') {
+                            // "Riskli" konularda da (video/konu anlatımı önerisinin YANINDA)
+                            // aynı konuya özel bir test öneriyoruz -- "İyi" barem'indeki
+                            // TEK test / en az soru sayılı testten başlama mantığıyla birebir
+                            // aynı (findKonuTestleri zaten bunu yapıyor).
+                            if (tavsiye.aksiyon === 'konuTesti' || tavsiye.aksiyon === 'video') {
                               ctaExams = findKonuTestleri(konuEntry.topicId, activeStudentExam.id);
                             } else if (tavsiye.aksiyon === 'deneme') {
                               ctaExams = findOnerilenDenemeler(activeStudentExam.id, activeStudentExam.examType, dersData.lessonCategoryId);
@@ -6555,7 +6559,7 @@ export default function App() {
                                   <div style={{ padding: '12px 14px', backgroundColor: '#FAFAF7', borderTop: '1px solid var(--yt-line)' }}>
                                     <p style={{ margin: '0 0 10px 0', fontSize: '0.82rem', color: 'var(--yt-ink)' }}>{tavsiye.mesaj}</p>
 
-                                    {(tavsiye.aksiyon === 'konuTesti' || tavsiye.aksiyon === 'deneme') && ctaExams.length > 0 && (
+                                    {(tavsiye.aksiyon === 'konuTesti' || tavsiye.aksiyon === 'deneme' || tavsiye.aksiyon === 'video') && ctaExams.length > 0 && (
                                       <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                         {ctaExams.map((ex) => renderOneriTestSatiri(ex))}
                                       </div>
