@@ -7,6 +7,14 @@ const iyzipay = new Iyzipay({
   uri: 'https://api.iyzipay.com'
 });
 
+// Iyzico 'YYYY-MM-DD HH:mm:ss' formatında tarih bekliyor. Supabase Auth'un
+// gerçek kayıt/son giriş tarihlerini bu formata çeviriyoruz.
+const formatIyzicoDate = (isoString) => {
+  const d = isoString ? new Date(isoString) : new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+};
+
 // Service Role Key ile oluşturulan bu istemci RLS kurallarını atlayabilir,
 // bu yüzden SADECE bu sunucu tarafı dosyada kullanılıyor, hiçbir zaman
 // frontend'e (src/ klasörüne) gönderilmiyor.
@@ -227,8 +235,8 @@ export default async function handler(req, res) {
       gsmNumber: '+905350000000',
       email,
       identityNumber: '74300864791',
-      lastLoginDate: '2026-06-01 12:43:35',
-      registrationDate: '2026-06-01 15:12:09',
+      lastLoginDate: formatIyzicoDate(userData.user.last_sign_in_at),
+      registrationDate: formatIyzicoDate(userData.user.created_at),
       registrationAddress: 'Türkiye',
       ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
       city: 'Ankara',
