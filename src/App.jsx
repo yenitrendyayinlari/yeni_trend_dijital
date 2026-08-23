@@ -2821,7 +2821,14 @@ export default function App() {
     const matches = exams
       .filter((e) => {
         if (!e.isPublished || e.id === excludeExamId || !e.topicMap) return false;
-        if (!examIsIndividuallyRecommendable(e)) return false;
+        // NOT: Burada kasıtlı olarak examIsIndividuallyRecommendable YERİNE
+        // examHasPlayableContent kullanıyoruz. Amacımız öğrenciyi satın
+        // almaya yönlendirmek -- öğrenci bu testin (veya üst paketinin)
+        // sahibi olmasa bile konuya en uygun testi önermeliyiz.
+        // renderOneriTestSatiri, sahip olunmayan ve tek başına satılmayan
+        // (parentId dolu, price=0) bir alt-test için doğru şekilde üst
+        // paketin fiyatını/satın alma linkini gösterir -- bkz. o fonksiyon.
+        if (!examHasPlayableContent(e)) return false;
         const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
         if (entries.length === 0) return false;
         const matchCount = entries.filter((t) => resolveEntryIds(t).topicId === topicId).length;
@@ -5150,11 +5157,22 @@ export default function App() {
     const owned = !!(studentPurchases[ex.id] || (ex.parentId && studentPurchases[ex.parentId]));
     // ÖNEMLİ (bug fix): price=0 sadece ÜST SEVİYE (paketsiz) sınavlarda
     // gerçekten "ücretsiz" demektir. Bir alt testte price=0, "tek başına
-    // satılmaz, sadece üst paketi satın alan erişir" demektir -- bu yüzden
-    // parentId varsa "free" sayılmaz (examIsIndividuallyRecommendable zaten
-    // bu durumdaki alt testleri, sahip olunmadıkça listeye hiç sokmuyor).
+    // satılmaz, sadece üst paketi satın alan erişir" demektir.
     const free = !ex.parentId && (!ex.price || ex.price <= 0);
-    const inCart = cartItems.includes(ex.id);
+    // Öneri motoru artık öğrencinin sahip olmadığı, tek başına satılamayan
+    // (parentId dolu + price=0) alt testleri de önerebiliyor -- amaç
+    // öğrenciyi satın almaya yönlendirmek. Bu durumda "Sepete Ekle" butonu,
+    // kendi (anlamsız ₺0) fiyatı yerine ÜST PAKETİN fiyatını göstermeli ve
+    // sepete üst paketi eklemeli -- öğrenci gerçekte üst paketi satın alarak
+    // bu alt teste erişebiliyor.
+    const needsParentForPurchase = !owned && !free && ex.parentId && (!ex.price || ex.price <= 0);
+    const parentExam = needsParentForPurchase ? exams.find((e) => e.id === ex.parentId) : null;
+    // Üst paket bulunamazsa (veri tutarsızlığı gibi beklenmedik bir durum)
+    // eski davranışa dönüyoruz -- hiç buton göstermemek yerine, en azından
+    // kendi fiyatıyla (varsa) göstermeye devam ediyoruz.
+    const purchaseTargetId = parentExam ? parentExam.id : ex.id;
+    const purchaseTargetPrice = parentExam ? parentExam.price : ex.price;
+    const inCart = cartItems.includes(purchaseTargetId);
     return (
       <div key={ex.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', border: '1px solid var(--yt-line)', borderRadius: '8px', backgroundColor: '#fff' }}>
         <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--yt-ink)' }}>
@@ -5173,9 +5191,9 @@ export default function App() {
           </button>
         ) : (
           <>
-            <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.76rem', fontWeight: 'bold', color: 'var(--yt-mustard-deep)' }}>₺{ex.price}</span>
+            <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.76rem', fontWeight: 'bold', color: 'var(--yt-mustard-deep)' }}>₺{purchaseTargetPrice}</span>
             <button
-              onClick={() => toggleCartItem(ex.id)}
+              onClick={() => toggleCartItem(purchaseTargetId)}
               className={`yt-add-cart-btn${inCart ? ' in-cart' : ''}`}
               style={{ fontSize: '0.74rem', padding: '5px 10px' }}
             >
