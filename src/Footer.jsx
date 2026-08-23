@@ -315,12 +315,13 @@ export default function Footer() {
         .yt-footer-etbis-link img { height: 40px; width: auto; display: block; }
         .yt-legal-body p { font-size: 0.86rem; color: var(--yt-graphite); line-height: 1.65; margin: 0 0 14px; }
         .yt-eco-badge {
-          display: flex; align-items: flex-start; gap: 6px; margin-top: 10px;
-          padding: 8px 10px; border-radius: 6px; background: #eef6ee;
+          display: flex; flex-direction: column; align-items: center; text-align: center;
+          gap: 6px; margin-top: 12px; max-width: 220px;
+          padding: 12px 14px; border-radius: 8px; background: #eef6ee;
           border: 1px solid #d7ead9;
         }
-        .yt-eco-badge svg { flex-shrink: 0; margin-top: 1px; }
-        .yt-eco-badge span { font-size: 0.76rem; color: #2f7a3d; line-height: 1.4; font-weight: 600; }
+        .yt-eco-badge svg { flex-shrink: 0; }
+        .yt-eco-badge p { font-size: 0.76rem; color: #2f7a3d; line-height: 1.5; font-weight: 600; margin: 0; }
         .yt-legal-body strong { color: var(--yt-ink); }
       `}</style>
 
@@ -334,11 +335,18 @@ export default function Footer() {
               <p>Dijital sınav ve soru bankası platformu. Sorularınızı çözün,
                 performansınızı takip edin.</p>
               <div className="yt-eco-badge">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                  <path d="M5 20c8-1 14-7 14-15-8 0-14 6-14 15Z" stroke="#2f7a3d" strokeWidth="1.8" strokeLinejoin="round" />
-                  <path d="M5 20c1.5-4 5-7 9-9" stroke="#2f7a3d" strokeWidth="1.8" strokeLinecap="round" />
+                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                  <path d="M12 4.5 9.5 8.5h2.2v3H14v-3h2.3L12 4.5Z" fill="#2f7a3d" />
+                  <path d="M6 19.5l-1.7-3 1.1-1.9 1.9 3.3-1.3 1.6Z" fill="#2f7a3d" />
+                  <path d="M18 19.5l1.7-3-1.1-1.9-1.9 3.3 1.3 1.6Z" fill="#2f7a3d" />
+                  <path d="M12 4.5c-3.5 0-6.4 1.8-8 4.5M20 9c-1.6-2.7-4.5-4.5-8-4.5M6 19.5H18M4.3 16.5c-.8-1.4-1.3-3-1.3-4.7M19.7 16.5c.8-1.4 1.3-3 1.3-4.7"
+                    stroke="#2f7a3d" strokeWidth="1.6" strokeLinecap="round" fill="none" />
                 </svg>
-                <span>Kağıt basmıyor, kargo göndermiyoruz -- %100 dijital olarak karbon ayak izimizi azaltıyoruz.</span>
+                <p>
+                  Kağıt kullanmıyoruz.<br />
+                  Kargo göndermiyoruz.<br />
+                  %100 dijital olarak karbon ayak izimizi azaltıyoruz.
+                </p>
               </div>
             </div>
 
