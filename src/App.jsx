@@ -6503,6 +6503,7 @@ export default function App() {
                   <button
                     type="button"
                     className="yt-hero-btn yt-hero-btn-primary"
+                    style={{ whiteSpace: 'normal', lineHeight: 1.3, textAlign: 'center' }}
                     onClick={() => {
                       // "Test İhtiyacını Belirle" -> ihtiyaç belirleme sınavı olarak
                       // ayrılan ürüne (id: 81) götürür. Sınav zaten bellekte
@@ -6519,7 +6520,8 @@ export default function App() {
                       }
                     }}
                   >
-                    Test İhtiyacını Belirle
+                    <span style={{ display: 'block' }}>KPSS Denemesi</span>
+                    <span style={{ display: 'block', fontWeight: 500, fontSize: '0.85em' }}>Hemen Katıl !</span>
                   </button>
                   <button
                     type="button"
