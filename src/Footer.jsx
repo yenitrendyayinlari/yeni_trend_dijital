@@ -60,7 +60,9 @@ const LEGAL_CONTENT = {
           MERSİS No: {COMPANY_MERSIS} · {COMPANY_TAX_OFFICE} {COMPANY_TAX_NO}</p>
         <p><strong>İşlenen Kişisel Veriler:</strong> Ad-soyad, e-posta adresi, hesap
           bilgileri, sipariş/ödeme işlem kayıtları, sınav performans ve kullanım
-          verileri, iletişim talepleriniz kapsamında paylaştığınız bilgiler.</p>
+          verileri, iletişim talepleriniz kapsamında paylaştığınız bilgiler; ayrıca
+          satın alma işleminiz için fatura düzenlenebilmesi amacıyla T.C. Kimlik
+          Numaranız, fatura e-posta adresiniz ve adresiniz.</p>
         <p><strong>İşleme Amaçları:</strong> Üyelik ve hesap yönetiminin sağlanması,
           satın alma ve ödeme süreçlerinin yürütülmesi, sınav/soru içeriklerine
           erişimin sağlanması, müşteri destek taleplerinin karşılanması, yasal
@@ -68,7 +70,17 @@ const LEGAL_CONTENT = {
         <p><strong>Hukuki Sebep:</strong> Kişisel verileriniz, bir sözleşmenin
           kurulması veya ifasıyla doğrudan ilgili olması, hukuki yükümlülüğün yerine
           getirilmesi ve açık rızanızın bulunduğu hâllerde KVKK m.5 ve m.6 kapsamında
-          işlenir.</p>
+          işlenir. T.C. Kimlik Numaranız özelinde hukuki sebep, 213 sayılı Vergi Usul
+          Kanunu uyarınca tarafımıza yüklenen fatura düzenleme yükümlülüğüdür.</p>
+        <p><strong>Fatura Bilgileri ve Saklama Süresi:</strong> Satın alma
+          işleminizi tamamlamadan önce sizden istenen Ad Soyad, T.C. Kimlik No,
+          fatura e-posta adresi ve adres bilgileri, YALNIZCA yasal fatura
+          düzenleme yükümlülüğümüzü yerine getirmek amacıyla toplanır; başka
+          hiçbir ticari veya pazarlama amacıyla kullanılmaz. Bu veriler, Vergi
+          Usul Kanunu'nun öngördüğü yasal saklama süresi boyunca saklanır ve bu
+          sürenin sonunda imha edilir. T.C. Kimlik Numaranızın doğruluğundan siz
+          sorumlusunuz; hatalı beyan edilen bilgilerden doğacak fatura/vergi
+          sorunlarından {COMPANY_NAME} sorumlu tutulamaz.</p>
         <p><strong>Aktarım:</strong> Ödeme süreçlerinin yürütülmesi amacıyla iyzico
           ve altyapı/barındırma hizmeti aldığımız Supabase gibi hizmet
           sağlayıcılarla, yalnızca hizmetin gerektirdiği ölçüde ve mevzuata uygun
@@ -91,6 +103,14 @@ const LEGAL_CONTENT = {
         <p><strong>Toplanan Bilgiler:</strong> Hesap oluştururken verdiğiniz ad,
           e-posta gibi bilgiler; site kullanımınıza ilişkin teknik veriler (çerezler,
           cihaz/tarayıcı bilgisi); satın alma ve sınav çözüm geçmişiniz.</p>
+        <p><strong>Fatura Bilgileri (T.C. Kimlik No):</strong> Satın aldığınız
+          içerikler için size fatura düzenleyebilmemiz amacıyla, ödemeyi
+          tamamlamadan önce Ad Soyad, T.C. Kimlik Numarası, fatura e-posta adresi
+          ve adres bilgilerinizi sizden istiyoruz. Bu bilgiler yalnızca yasal
+          fatura düzenleme yükümlülüğümüz için toplanır, işlenir ve mevzuatın
+          öngördüğü süre boyunca saklanır; başka hiçbir amaçla kullanılmaz veya
+          üçüncü taraflarla paylaşılmaz (fatura/muhasebe sürecinde hizmet
+          aldığımız e-fatura/e-arşiv entegratörü hariç).</p>
         <p><strong>Kullanım Amacı:</strong> Bilgileriniz yalnızca hizmetin sunulması,
           hesabınızın güvenliğinin sağlanması, size destek olunması ve yasal
           yükümlülüklerin yerine getirilmesi amacıyla kullanılır; pazarlama amacıyla
