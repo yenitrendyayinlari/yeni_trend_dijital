@@ -2565,25 +2565,18 @@ export default function App() {
   const proceedCartCheckout = async () => {
     const cartExams = exams.filter(e => cartItems.includes(e.id));
     if (cartExams.length === 0) return;
-    const cartTotal = cartExams.reduce((sum, e) => sum + (e.price || 0), 0);
 
-    // Not: Gerçek tutar her zaman sunucuda hesaplanır; burada sadece
-    // onay mesajını daha bilgilendirici göstermek için varolan bakiyeyi
-    // (studentBalance) kullanıyoruz.
-    const estimatedApplied = Math.min(studentBalance || 0, cartTotal);
-    const estimatedPayable = cartTotal - estimatedApplied;
-    const confirmMsg = estimatedApplied > 0
-      ? `Sepetinizdeki ${cartExams.length} içerik için toplam ₺${cartTotal.toLocaleString('tr-TR')}. ₺${estimatedApplied} bakiyenizden kullanılacak, kalan ₺${estimatedPayable} için iyzico ödeme formu açılacaktır. Onaylıyor musunuz?`
-      : `Sepetinizdeki ${cartExams.length} içerik için toplam ₺${cartTotal.toLocaleString('tr-TR')} tutarında ödeme yapılacak. Onaylıyor musunuz?`;
-    const confirmed = window.confirm(confirmMsg);
-    if (!confirmed) return;
-
-    // Not: price/email artık sunucuda (Authorization token'ı ve veritabanı
-    // üzerinden) doğrulanıyor, burada gönderilenler sadece referans amaçlı.
-    const paymentData = {
-      examIds: cartExams.map(e => e.id),
-      items: cartExams.map(e => ({ id: e.id }))
-    };
+    // GÜVENLİK AĞI: Arayüz artık ücretsiz (₺0) ürünleri sepete hiç eklemiyor
+    // (bkz. renderOneriTestSatiri'deki effectivelyFree düzeltmesi) -- ama
+    // sepette eski/bozuk bir state kalmışsa diye burada AYRICA ayıklıyoruz.
+    // SEBEP: sepette ₺50'lik bir ürünün yanında ₺0'lık bir ürün varken ödeme
+    // "Ödeme başlatılırken bir hata oluştu" ile başarısız oluyordu -- iyzico
+    // (veya sunucudaki ödeme fonksiyonu) sepette 0 tutarlı bir kalem olunca
+    // TÜM işlemi reddediyor. Çözüm: ücretsiz olanları normal ödeme isteğine
+    // HİÇ katmıyoruz, onları ayrı ve sorunsuz şekilde ücretsiz olarak
+    // kaydediyoruz; sadece gerçekten ücretli olanlar iyzico'ya gidiyor.
+    const payableExams = cartExams.filter(e => (e.price || 0) > 0);
+    const freeExams = cartExams.filter(e => !((e.price || 0) > 0));
 
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData?.session?.access_token;
@@ -2591,6 +2584,56 @@ export default function App() {
       alert("Oturumunuz bulunamadı, lütfen tekrar giriş yapın.");
       return;
     }
+
+    // Önce (varsa) ücretsiz ürünleri sessizce kaydet -- kullanıcıyı ekstra
+    // bir onay diyaloğuyla yormuyoruz, zaten ücretsiz oldukları belliydi.
+    if (freeExams.length > 0) {
+      await new Promise((resolve) => {
+        initializePayment(
+          { examIds: freeExams.map(e => e.id), items: freeExams.map(e => ({ id: e.id })) },
+          token,
+          (err, result) => {
+            if (!err && result && result.freeCheckout) {
+              setStudentPurchases(prev => {
+                const updated = { ...prev };
+                (result.purchasedExamIds || freeExams.map(e => e.id)).forEach(id => { updated[id] = true; });
+                return updated;
+              });
+              if (typeof result.newBalance === 'number') setStudentBalance(result.newBalance);
+            } else if (err) {
+              console.error('Ücretsiz ürün(ler) kaydedilemedi:', err);
+            }
+            resolve();
+          }
+        );
+      });
+      setCartItems(prev => prev.filter(id => !freeExams.some(e => e.id === id)));
+    }
+
+    if (payableExams.length === 0) {
+      if (freeExams.length > 0) alert('🎉 Ücretsiz içerik(ler) hesabınıza tanımlandı.');
+      return;
+    }
+
+    const cartTotal = payableExams.reduce((sum, e) => sum + (e.price || 0), 0);
+
+    // Not: Gerçek tutar her zaman sunucuda hesaplanır; burada sadece
+    // onay mesajını daha bilgilendirici göstermek için varolan bakiyeyi
+    // (studentBalance) kullanıyoruz.
+    const estimatedApplied = Math.min(studentBalance || 0, cartTotal);
+    const estimatedPayable = cartTotal - estimatedApplied;
+    const confirmMsg = estimatedApplied > 0
+      ? `Sepetinizdeki ${payableExams.length} içerik için toplam ₺${cartTotal.toLocaleString('tr-TR')}. ₺${estimatedApplied} bakiyenizden kullanılacak, kalan ₺${estimatedPayable} için iyzico ödeme formu açılacaktır. Onaylıyor musunuz?`
+      : `Sepetinizdeki ${payableExams.length} içerik için toplam ₺${cartTotal.toLocaleString('tr-TR')} tutarında ödeme yapılacak. Onaylıyor musunuz?`;
+    const confirmed = window.confirm(confirmMsg);
+    if (!confirmed) return;
+
+    // Not: price/email artık sunucuda (Authorization token'ı ve veritabanı
+    // üzerinden) doğrulanıyor, burada gönderilenler sadece referans amaçlı.
+    const paymentData = {
+      examIds: payableExams.map(e => e.id),
+      items: payableExams.map(e => ({ id: e.id }))
+    };
 
     initializePayment(paymentData, token, (err, result) => {
       if (err) {
@@ -2609,7 +2652,7 @@ export default function App() {
           return updated;
         });
         setStudentBalance(result.newBalance ?? 0);
-        setCartItems([]);
+        setCartItems(prev => prev.filter(id => !payableExams.some(e => e.id === id)));
         alert(`🎉 Ödeme bakiyenizden karşılandı! ₺${result.balanceApplied} bakiye kullanıldı. İçerikler hesabınıza tanımlandı.`);
         return;
       }
@@ -5410,6 +5453,14 @@ export default function App() {
     // kendi fiyatıyla (varsa) göstermeye devam ediyoruz.
     const purchaseTargetId = parentExam ? parentExam.id : ex.id;
     const purchaseTargetPrice = parentExam ? parentExam.price : ex.price;
+    // BUG FİX: `free` yukarıda SADECE ex'in KENDİ fiyatına bakarak
+    // hesaplanıyordu -- bir alt test üst pakete yönlendirildiğinde (yukarıki
+    // needsParentForPurchase dalı), üst paketin GÜNCEL fiyatı da (örn. o gün
+    // "Soru Başı Fiyat" 0'a çekildiği için) 0 olabiliyordu. Böyle bir durumda
+    // sistem hâlâ "ücretli" sanıp sepete ekletiyordu -- oysa gerçek satın
+    // alma hedefinin (purchaseTargetPrice) kendisi 0 ise, bu KESİNLİKLE
+    // ücretsizdir ve sepete hiç girmeden direkt çözülebilmelidir.
+    const effectivelyFree = free || !purchaseTargetPrice || purchaseTargetPrice <= 0;
     const inCart = cartItems.includes(purchaseTargetId);
     return (
       <div key={ex.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', border: '1px solid var(--yt-line)', borderRadius: '8px', backgroundColor: '#fff' }}>
@@ -5419,7 +5470,7 @@ export default function App() {
             <span style={{ color: 'var(--yt-graphite-soft)', fontWeight: 'normal' }}> · {ex.numPages} soru</span>
           )}
         </span>
-        {owned || free ? (
+        {owned || effectivelyFree ? (
           <button
             onClick={() => { setShowResults(false); startExam(ex); }}
             className="yt-btn yt-btn-primary"
