@@ -1568,15 +1568,31 @@ export default function App() {
   // Kazanım haritası güncellemesini ayrı tutuyoruz ki topic_map kolonu
   // henüz eklenmemişse diğer alanların kaydedilmesini etkilemesin.
   const updateTopicMapInDb = async (id, newTopicMap) => {
-    setExams((prev) => prev.map(ex => ex.id === id ? { ...ex, topicMap: newTopicMap } : ex));
+    // ÖNEMLİ (bug fix): Önceden burada state ÖNCE iyimser (kayıt başarılı
+    // olacakmış gibi) güncelleniyordu, kayıt gerçekten başarısız olsa bile
+    // ekranda geri alınmıyordu -- yani "✓ Kazanım" görünüp veritabanında
+    // aslında eksik/eski veri kalabiliyordu. Şimdi önce eski değeri saklayıp,
+    // kayıt BAŞARISIZ olursa ekranı o eski haline geri döndürüyoruz; başarılı
+    // olursa zaten yeni değerde kalır. Ayrıca çağıran tarafın (ör. "kopyalandı"
+    // mesajı) gerçek sonucu bilebilmesi için başarı/başarısızlık bilgisini
+    // (true/false) geri döndürüyoruz.
+    let previousTopicMap;
+    setExams((prev) => prev.map(ex => {
+      if (ex.id !== id) return ex;
+      previousTopicMap = ex.topicMap;
+      return { ...ex, topicMap: newTopicMap };
+    }));
     const { error } = await supabase
       .from('exams')
       .update({ topic_map: newTopicMap })
       .eq('id', id);
     if (error) {
       console.error("Kazanım haritası kaydedilemedi (topic_map kolonu eksik olabilir):", error);
-      alert("Kazanım haritası kaydedilemedi. Veritabanına 'topic_map' kolonu eklenmiş mi kontrol edin.");
+      setExams((prev) => prev.map(ex => ex.id === id ? { ...ex, topicMap: previousTopicMap } : ex));
+      alert("Kazanım haritası kaydedilemedi, değişiklik ekrana yansıtılmadı. Veritabanına 'topic_map' kolonu eklenmiş mi kontrol edin ve tekrar deneyin.");
+      return false;
     }
+    return true;
   };
 
   // ÖNEMLİ (bug fix): Kazanım tablosundaki tek bir satırı güncellerken
@@ -1591,9 +1607,11 @@ export default function App() {
   // güncelleme her zaman state'in O ANKİ en güncel halini (`prev`) kullanır,
   // bu yüzden hiçbir girdi kaybolmaz.
   const applyTopicMapPatch = (examId, patchFn, { persist = false } = {}) => {
+    let previousTopicMap;
     setExams((prev) => {
       const next = prev.map((ex) => {
         if (ex.id !== examId) return ex;
+        previousTopicMap = ex.topicMap || {};
         return { ...ex, topicMap: patchFn(ex.topicMap || {}) };
       });
       if (persist) {
@@ -1606,7 +1624,13 @@ export default function App() {
             .then(({ error }) => {
               if (error) {
                 console.error("Kazanım haritası kaydedilemedi (topic_map kolonu eksik olabilir):", error);
-                alert("Kazanım haritası kaydedilemedi. Veritabanına 'topic_map' kolonu eklenmiş mi kontrol edin.");
+                // ÖNEMLİ (bug fix): Kayıt başarısız olduysa ekranı bu
+                // değişiklikten ÖNCEKİ haline geri döndürüyoruz -- aksi halde
+                // ekranda "girilmiş" görünen ama veritabanına hiç yazılmamış
+                // bir satır kalır, bu da listede yanlışlıkla "✓ Kazanım" gibi
+                // görünmesine sebep olur.
+                setExams((p2) => p2.map((ex) => ex.id === examId ? { ...ex, topicMap: previousTopicMap } : ex));
+                alert("Kazanım haritası kaydedilemedi, bu değişiklik geri alındı. Lütfen tekrar deneyin.");
               }
             });
         }
@@ -1925,8 +1949,9 @@ export default function App() {
     for (let i = 1; i <= total; i++) {
       newTopicMap[i] = { ders: cleanDers, konu: cleanKonu, kazanim: cleanKazanim };
     }
-    updateTopicMapInDb(examId, newTopicMap);
-    alert(`✓ ${total} sorunun tamamına "${cleanDers} / ${cleanKonu} / ${cleanKazanim}" uygulandı.`);
+    updateTopicMapInDb(examId, newTopicMap).then((ok) => {
+      if (ok) alert(`✓ ${total} sorunun tamamına "${cleanDers} / ${cleanKonu} / ${cleanKazanim}" uygulandı.`);
+    });
   };
 
   // Aynı ürün altındaki (ör. "KPSS Tarih Son Tekrar" paketindeki 7 deneme
@@ -1956,8 +1981,9 @@ export default function App() {
       return;
     }
     const copiedTopicMap = JSON.parse(JSON.stringify(sourceExam.topicMap));
-    updateTopicMapInDb(targetExamId, copiedTopicMap);
-    alert(`✓ ${Object.keys(copiedTopicMap).length} sorunun kazanımı kopyalandı.`);
+    updateTopicMapInDb(targetExamId, copiedTopicMap).then((ok) => {
+      if (ok) alert(`✓ ${Object.keys(copiedTopicMap).length} sorunun kazanımı kopyalandı.`);
+    });
   };
 
   // Bir kazanım adının Kategori Yönetimi'ndeki master listeyle birebir
@@ -2082,8 +2108,9 @@ export default function App() {
           return;
         }
 
-        updateTopicMapInDb(examId, newTopicMap);
-        alert(`✓ ${count} soru için kazanım haritası yüklendi.`);
+        updateTopicMapInDb(examId, newTopicMap).then((ok) => {
+          if (ok) alert(`✓ ${count} soru için kazanım haritası yüklendi.`);
+        });
       } catch (err) {
         console.error(err);
         alert("Excel dosyası okunamadı: " + err.message);
