@@ -5561,7 +5561,12 @@ export default function App() {
   // sahip olunan/ücretsiz bir testse direkt "Çöz", değilse fiyat +
   // "Sepete Ekle" gösterir. Hem konu hem ders seviyesindeki öneri
   // listelerinde ortak kullanılıyor.
-  const renderOneriTestSatiri = (ex) => {
+  // Bir önerilen test için "sahiplik durumu"nu (ücretsiz mi, sahip mi,
+  // hangi kayda (kendi/üst paket) yönlendirilecek, fiyatı ne) tek yerden
+  // hesaplar -- hem satır görünümü (renderOneriTestSatiri) hem de kazanım
+  // satırının yanına gömülen kompakt buton (renderKazanimTestPill) AYNI
+  // mantığı kullansın diye ayrı bir fonksiyona çıkarıldı.
+  const resolveOneriTestDurumu = (ex) => {
     const owned = !!(studentPurchases[ex.id] || (ex.parentId && studentPurchases[ex.parentId]));
     // ÖNEMLİ (bug fix): price=0 sadece ÜST SEVİYE (paketsiz) sınavlarda
     // gerçekten "ücretsiz" demektir. Bir alt testte price=0, "tek başına
@@ -5589,6 +5594,11 @@ export default function App() {
     // ücretsizdir ve sepete hiç girmeden direkt çözülebilmelidir.
     const effectivelyFree = free || !purchaseTargetPrice || purchaseTargetPrice <= 0;
     const inCart = cartItems.includes(purchaseTargetId);
+    return { owned, effectivelyFree, purchaseTargetId, purchaseTargetPrice, inCart };
+  };
+
+  const renderOneriTestSatiri = (ex) => {
+    const { owned, effectivelyFree, purchaseTargetId, purchaseTargetPrice, inCart } = resolveOneriTestDurumu(ex);
     return (
       <div key={ex.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', border: '1px solid var(--yt-line)', borderRadius: '8px', backgroundColor: '#fff' }}>
         <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--yt-ink)' }}>
@@ -5618,6 +5628,36 @@ export default function App() {
           </>
         )}
       </div>
+    );
+  };
+
+  // Kazanım satırının (Ders Notu / Video pill'lerinin) YANINA gömülen
+  // kompakt test önerisi -- artık ayrı, uzayan bir liste olarak konu
+  // seviyesinde gösterilmiyor; her kazanım kendi eşleşen testini kendi
+  // satırında, aynı pill görünümüyle taşıyor.
+  const renderKazanimTestPill = (ex) => {
+    const { owned, effectivelyFree, purchaseTargetId, purchaseTargetPrice, inCart } = resolveOneriTestDurumu(ex);
+    if (owned || effectivelyFree) {
+      return (
+        <button
+          key={ex.id}
+          type="button"
+          onClick={() => { setShowResults(false); startExam(ex); }}
+          className="yt-resource-pill yt-resource-pill-dark"
+        >
+          ▶ {owned ? 'Çöz' : 'Ücretsiz Çöz'}{ex.numPages > 0 ? ` · ${ex.numPages} Soru` : ''}
+        </button>
+      );
+    }
+    return (
+      <button
+        key={ex.id}
+        type="button"
+        onClick={() => toggleCartItem(purchaseTargetId)}
+        className="yt-resource-pill"
+      >
+        {inCart ? '✓ Sepette' : `+ Sepete Ekle · ₺${purchaseTargetPrice}`}
+      </button>
     );
   };
 
@@ -7139,37 +7179,47 @@ export default function App() {
                             const kGreenWidth = getBaremGreenWidth(konuEntry.correct, konuEntry.total);
                             const tavsiye = getKonuTavsiyesi(konuName, konuEntry);
 
-                            let ctaExams = [];
-                            // "Riskli" konularda da (video/konu anlatımı önerisinin YANINDA)
-                            // aynı konuya özel test(ler) öneriyoruz.
-                            // ÖNEMLİ: önce KAZANIM bazında deniyoruz -- bir konunun içinde
-                            // birden fazla kazanım varsa (örn. "Anayasa, İnsan Hakları
-                            // Hukuku" konusunun altında Yasama/Yürütme/Yargı gibi) ve
-                            // bunlardan bazılarına/hepsine özel dar kapsamlı testler varsa,
-                            // her biri İÇİN AYRI test göstermek istiyoruz -- eskiden sadece
-                            // konu genelinde TEK bir test seçilip diğer kazanımlara özel
-                            // testler hiç önerilmiyordu. Riskli/İyi olan HER kazanım için
-                            // findKazanimTestleri çalıştırıp sonuçları (aynı test iki kez
-                            // görünmesin diye tekilleştirerek) birleştiriyoruz. Hiçbir
-                            // kazanıma özel test bulunamazsa, eskisi gibi konu geneline en
-                            // uygun TEK teste (findKonuTestleri) düşüyoruz.
+                            // Konu içindeki HER (riskli/iyi) kazanım için ayrı ayrı test
+                            // arıyoruz ve kazanım ADI -> eşleşen test(ler) şeklinde bir
+                            // harita kuruyoruz. Eskiden bunlar konunun EN ÜSTÜNDE, ayrı ve
+                            // uzayan bir liste olarak gösteriliyordu -- artık her testi
+                            // İLGİLİ KAZANIM SATIRINA, "Ders Notu" pill'inin yanına
+                            // gömüyoruz ki liste uzamasın ve hangi testin hangi eksiğe
+                            // karşılık geldiği net olsun.
+                            const kazanimTestMap = {};
+                            let anyKazanimTestFound = false;
                             if (tavsiye.aksiyon === 'konuTesti' || tavsiye.aksiyon === 'video') {
-                              const kazanimEntries = Object.values(konuEntry.kazanimlar)
-                                .filter((k) => k.tier === 'riskli' || k.tier === 'iyi');
                               const seenIds = new Set();
-                              const perKazanimExams = [];
-                              kazanimEntries.forEach((k) => {
-                                findKazanimTestleri(k.outcomeId, activeStudentExam.id).forEach((ex) => {
-                                  if (!seenIds.has(ex.id)) {
-                                    seenIds.add(ex.id);
-                                    perKazanimExams.push(ex);
-                                  }
-                                });
+                              Object.entries(konuEntry.kazanimlar).forEach(([kazanimAdi, k]) => {
+                                if (k.tier !== 'riskli' && k.tier !== 'iyi') return;
+                                const found = findKazanimTestleri(k.outcomeId, activeStudentExam.id)
+                                  .filter((ex) => !seenIds.has(ex.id));
+                                if (found.length > 0) {
+                                  found.forEach((ex) => seenIds.add(ex.id));
+                                  kazanimTestMap[kazanimAdi] = found;
+                                  anyKazanimTestFound = true;
+                                }
                               });
-                              ctaExams = perKazanimExams.length > 0
-                                ? perKazanimExams
-                                : findKonuTestleri(konuEntry.topicId, activeStudentExam.id);
-                            } else if (tavsiye.aksiyon === 'deneme') {
+                              // Hiçbir kazanıma özel test bulunamadıysa, eskisi gibi konu
+                              // geneline en uygun TEK teste düşüyoruz -- ama artık onu da
+                              // ilk (riskli/iyi) kazanımın satırına iliştiriyoruz, ayrı bir
+                              // üst liste olarak değil.
+                              if (!anyKazanimTestFound) {
+                                const fallback = findKonuTestleri(konuEntry.topicId, activeStudentExam.id);
+                                if (fallback.length > 0) {
+                                  const firstEligible = Object.entries(konuEntry.kazanimlar)
+                                    .find(([, k]) => k.tier === 'riskli' || k.tier === 'iyi');
+                                  if (firstEligible) kazanimTestMap[firstEligible[0]] = fallback;
+                                }
+                              }
+                            }
+
+                            // Ders seviyesindeki "yeni deneme" önerisi (aksiyon: 'deneme')
+                            // kazanım kırılımına bağlı değil (belirli bir konu/kazanımla
+                            // ilgili değil, tüm ders için yeni bir deneme sınavı önerisi),
+                            // o yüzden bu tek durumda eski üst-liste davranışı korunuyor.
+                            let ctaExams = [];
+                            if (tavsiye.aksiyon === 'deneme') {
                               ctaExams = findOnerilenDenemeler(activeStudentExam.id, activeStudentExam.examType, dersData.lessonCategoryId);
                             }
 
@@ -7211,7 +7261,12 @@ export default function App() {
                                   <div style={{ padding: '12px 14px', backgroundColor: '#FAFAF7', borderTop: '1px solid var(--yt-line)' }}>
                                     <p style={{ margin: '0 0 10px 0', fontSize: '0.82rem', color: 'var(--yt-ink)' }}>{tavsiye.mesaj}</p>
 
-                                    {(tavsiye.aksiyon === 'konuTesti' || tavsiye.aksiyon === 'deneme' || tavsiye.aksiyon === 'video') && ctaExams.length > 0 && (
+                                    {/* "deneme" aksiyonu (ders geneli için yeni bir deneme sınavı
+                                        önerisi) belirli bir kazanıma bağlı olmadığı için tek
+                                        istisna olarak eskisi gibi üstte, ayrı bir liste halinde
+                                        kalıyor. "konuTesti"/"video" aksiyonlarındaki testler artık
+                                        aşağıda, ilgili kazanım satırının yanında gösteriliyor. */}
+                                    {tavsiye.aksiyon === 'deneme' && ctaExams.length > 0 && (
                                       <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                         {ctaExams.map((ex) => renderOneriTestSatiri(ex))}
                                       </div>
@@ -7227,7 +7282,9 @@ export default function App() {
                                         const videoKey = `${konuKey}::${kazanim}`;
                                         const isVideoOpen = !!expandedVideoKazanim[videoKey];
                                         const embedUrl = hasVideo ? getYoutubeEmbedUrl(resource.video_url) : null;
+                                        const kazanimTests = kazanimTestMap[kazanim] || [];
                                         const showResources = k.tier === 'riskli' && (hasPdf || hasVideo);
+                                        const showAnyPill = showResources || kazanimTests.length > 0;
                                         return (
                                           <li key={kazanim} style={{ padding: '4px 0' }}>
                                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px', alignItems: 'center', gap: '10px' }}>
@@ -7242,9 +7299,9 @@ export default function App() {
                                               </div>
                                             </div>
 
-                                            {showResources && (
+                                            {showAnyPill && (
                                               <div style={{ marginTop: '5px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                                                {hasPdf && (
+                                                {showResources && hasPdf && (
                                                   <a
                                                     href={resource.pdf_url}
                                                     target="_blank"
@@ -7254,7 +7311,7 @@ export default function App() {
                                                     📄 Ders Notu
                                                   </a>
                                                 )}
-                                                {hasVideo && (
+                                                {showResources && hasVideo && (
                                                   <button
                                                     type="button"
                                                     onClick={() => setExpandedVideoKazanim((prev) => ({ ...prev, [videoKey]: !prev[videoKey] }))}
@@ -7263,6 +7320,7 @@ export default function App() {
                                                     {isVideoOpen ? '▲ Videoyu Kapat' : '🎥 Video Anlatım'}
                                                   </button>
                                                 )}
+                                                {kazanimTests.map((ex) => renderKazanimTestPill(ex))}
                                               </div>
                                             )}
 

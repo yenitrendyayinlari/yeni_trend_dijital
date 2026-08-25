@@ -374,6 +374,15 @@ p {
 }
 .yt-resource-pill:hover { background: var(--yt-mustard-bg); }
 
+/* "Ders Notu" pill'inin yanına konan, doğrudan aksiyon alan (Ücretsiz Çöz /
+   Sepete Ekle) dolu/koyu varyant -- normal pill'den ayrışsın diye. */
+.yt-resource-pill-dark {
+  border-color: var(--yt-ink);
+  background: var(--yt-ink);
+  color: var(--yt-paper-2);
+}
+.yt-resource-pill-dark:hover { background: var(--yt-ink-2); opacity: 0.95; }
+
 /* --- sort/filter bar --- */
 .yt-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
 .yt-select {
