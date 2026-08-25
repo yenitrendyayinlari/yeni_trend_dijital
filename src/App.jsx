@@ -10,6 +10,21 @@ import { SignupBonusManageButton } from './SignupBonus';
 import BalanceGiftModal from './BalanceGiftModal';
 import Footer from './Footer';
 
+// --- Meta (Facebook/Instagram) Pixel ---
+// Temel kod ve otomatik PageView, index.html'de. Burada sadece sitedeki
+// standart olayları (ViewContent, AddToCart, Purchase) tetikliyoruz.
+// `window.fbq` bulunmuyorsa (reklam engelleyici, pixel kodu henüz
+// yüklenmemiş vb.) sessizce hiçbir şey yapmaz -- siteyi asla bozmaz.
+const trackPixelEvent = (eventName, params) => {
+  try {
+    if (typeof window !== 'undefined' && typeof window.fbq === 'function') {
+      window.fbq('track', eventName, params);
+    }
+  } catch (e) {
+    // Pixel hatası kullanıcı deneyimini asla etkilememeli.
+  }
+};
+
 // Admin panelinde PDF yüklendiğinde sayfa sayısını (= soru sayısı, sistemde
 // her PDF sayfası bir soruya karşılık geliyor) tarayıcıda otomatik okumak
 // için PdfViewer.jsx'teki aynı kararlı CDN worker kurulumu kullanılıyor.
@@ -417,6 +432,17 @@ export default function App() {
     setPreviewTestIndex(0);
     const childIds = exams.filter(e => e.parentId === inspectingExamId).map(e => e.id);
     fetchProductReviews(inspectingExamId, childIds);
+
+    const viewedExam = exams.find(e => e.id === inspectingExamId);
+    if (viewedExam) {
+      trackPixelEvent('ViewContent', {
+        content_ids: [viewedExam.id],
+        content_name: viewedExam.name,
+        content_type: 'product',
+        value: viewedExam.price || 0,
+        currency: 'TRY'
+      });
+    }
   }, [inspectingExamId, exams.length]);
 
   useEffect(() => {
@@ -428,6 +454,28 @@ export default function App() {
 
     if (paymentStatus === 'success') {
       alert('✓ Ödemeniz başarıyla tamamlandı! Satın aldığınız içeriklere artık erişebilirsiniz.');
+
+      // İyzico'nun ödeme sayfasına gitmeden hemen önce sessionStorage'a
+      // yazdığımız bilgiyi burada okuyup Meta Pixel'in "Purchase" olayını
+      // SADECE ödeme gerçekten onaylanıp buraya geri dönüldüğünde ateşliyoruz
+      // (yönlendirme anında değil) -- böylece iptal edilen/başarısız olan
+      // ödemeler asla "satış" olarak sayılmaz. Bir kere okuyup hemen
+      // temizliyoruz ki sayfa yenilendiğinde tekrar tetiklenmesin.
+      try {
+        const pendingRaw = sessionStorage.getItem('yt_pending_pixel_purchase');
+        if (pendingRaw) {
+          sessionStorage.removeItem('yt_pending_pixel_purchase');
+          const pending = JSON.parse(pendingRaw);
+          trackPixelEvent('Purchase', {
+            content_ids: pending.content_ids,
+            content_name: pending.content_name,
+            content_type: 'product',
+            value: pending.value,
+            currency: pending.currency || 'TRY'
+          });
+        }
+      } catch (e) { /* sessionStorage/JSON hatası -- pixel olayı atlanır, sitenin akışı etkilenmez */ }
+
       if (user) {
         fetchUserPurchases(user.email).then((freshPurchases) => {
           // Az önce satın alınan içerikleri sepetten temizliyoruz (ödeme
@@ -439,10 +487,13 @@ export default function App() {
       }
     } else if (paymentStatus === 'cancelled') {
       // Kullanıcı iyzico'nun ödeme sayfasından vazgeçti -- sepeti olduğu gibi bırakıyoruz.
+      try { sessionStorage.removeItem('yt_pending_pixel_purchase'); } catch (e) {}
     } else if (paymentStatus === 'failed') {
       alert('Ödeme tamamlanamadı ya da iptal edildi.');
+      try { sessionStorage.removeItem('yt_pending_pixel_purchase'); } catch (e) {}
     } else {
       alert('Ödeme sırasında bir sorun oluştu. Lütfen tekrar deneyin ya da bizimle iletişime geçin.');
+      try { sessionStorage.removeItem('yt_pending_pixel_purchase'); } catch (e) {}
     }
 
     // "payment" parametresini temizleyip sayfa yenilendiğinde tekrar tetiklenmesini
@@ -2552,6 +2603,13 @@ export default function App() {
       if (result.freeCheckout) {
         setStudentPurchases(prev => ({ ...prev, [exam.id]: true }));
         setStudentBalance(result.newBalance ?? 0);
+        trackPixelEvent('Purchase', {
+          content_ids: [exam.id],
+          content_name: exam.name,
+          content_type: 'product',
+          value: exam.price || 0,
+          currency: 'TRY'
+        });
         alert(`🎉 Ödeme bakiyenizden karşılandı! ₺${result.balanceApplied} bakiye kullanıldı. İçerik hesabınıza tanımlandı.`);
         return;
       }
@@ -2560,6 +2618,17 @@ export default function App() {
         // Artık gömülü widget yerine iyzico'nun kendi barındırdığı ödeme
         // sayfasına tam sayfa yönlendirme yapıyoruz -- iframe/overlay
         // karmaşasına gerek kalmadı.
+        // Pixel'in "Purchase" olayını, ödeme GERÇEKTEN onaylanıp siteye geri
+        // dönüldüğünde (?payment=success) ateşleyebilmek için, o ana kadar
+        // hayatta kalması gereken bilgiyi burada geçici olarak saklıyoruz.
+        try {
+          sessionStorage.setItem('yt_pending_pixel_purchase', JSON.stringify({
+            content_ids: [exam.id],
+            content_name: exam.name,
+            value: estimatedPayable,
+            currency: 'TRY'
+          }));
+        } catch (e) { /* sessionStorage kapalıysa sessizce devam */ }
         window.location.href = result.paymentPageUrl;
       } else {
         alert("İşlem başarısız: " + (result.errorMessage || 'Ödeme sayfası oluşturulamadı.'));
@@ -2569,7 +2638,23 @@ export default function App() {
 
   // --- Sepet ---
   const toggleCartItem = (examId) => {
-    setCartItems(prev => prev.includes(examId) ? prev.filter(id => id !== examId) : [...prev, examId]);
+    setCartItems(prev => {
+      const alreadyIn = prev.includes(examId);
+      if (!alreadyIn) {
+        // Sadece EKLEME anında tetikliyoruz, sepetten çıkarmada değil.
+        const exam = exams.find(e => e.id === examId);
+        if (exam) {
+          trackPixelEvent('AddToCart', {
+            content_ids: [exam.id],
+            content_name: exam.name,
+            content_type: 'product',
+            value: exam.price || 0,
+            currency: 'TRY'
+          });
+        }
+      }
+      return alreadyIn ? prev.filter(id => id !== examId) : [...prev, examId];
+    });
   };
 
   const handleCartCheckout = async () => {
@@ -2680,6 +2765,12 @@ export default function App() {
         });
         setStudentBalance(result.newBalance ?? 0);
         setCartItems(prev => prev.filter(id => !payableExams.some(e => e.id === id)));
+        trackPixelEvent('Purchase', {
+          content_ids: payableExams.map(e => e.id),
+          content_type: 'product',
+          value: cartTotal,
+          currency: 'TRY'
+        });
         alert(`🎉 Ödeme bakiyenizden karşılandı! ₺${result.balanceApplied} bakiye kullanıldı. İçerikler hesabınıza tanımlandı.`);
         return;
       }
@@ -2689,6 +2780,15 @@ export default function App() {
         // iyzico'nun ödeme sayfasına yönlendiriyoruz. Sepet, ödeme
         // başarıyla bittiğinde ("?payment=success" ile geri dönüldüğünde)
         // temizlenecek.
+        // Pixel'in "Purchase" olayını ödeme onaylanıp geri dönüldüğünde
+        // ateşleyebilmek için gereken bilgiyi geçici olarak saklıyoruz.
+        try {
+          sessionStorage.setItem('yt_pending_pixel_purchase', JSON.stringify({
+            content_ids: payableExams.map(e => e.id),
+            value: estimatedPayable,
+            currency: 'TRY'
+          }));
+        } catch (e) { /* sessionStorage kapalıysa sessizce devam */ }
         window.location.href = result.paymentPageUrl;
       } else {
         alert("İşlem başarısız: " + (result.errorMessage || 'Ödeme sayfası oluşturulamadı.'));
