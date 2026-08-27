@@ -2449,8 +2449,16 @@ export default function App() {
     }
   };
 
+  // Giriş yapmadan da doğrudan başlatılabilecek "ücretsiz deneme" sınav(lar)ı.
+  // Pazarlama/sosyal medya linkleriyle paylaşılan ilk deneyimde üyelik
+  // sürtünmesini azaltmak için SADECE bu ID'ler için üyelik zorunluluğu
+  // atlanıyor -- diğer tüm sınavlar eskisi gibi giriş istemeye devam eder.
+  // İleride bu listeye başka sınav ID'leri eklenip çıkarılabilir.
+  const FREE_TRIAL_EXAM_IDS = [81];
+
   const startExam = (exam) => {
-    if (!user) {
+    const isFreeTrialExam = FREE_TRIAL_EXAM_IDS.includes(exam.id);
+    if (!user && !isFreeTrialExam) {
       alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
       setAuthMode('login');
       setShowAuthModal(true);
@@ -6408,7 +6416,7 @@ export default function App() {
                           ) : (
                             <button
                               onClick={() => {
-                                if (!user) {
+                                if (!user && !FREE_TRIAL_EXAM_IDS.includes(child.id)) {
                                   alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
                                   setAuthMode('login');
                                   setShowAuthModal(true);
@@ -6479,7 +6487,7 @@ export default function App() {
 
                           <button
                             onClick={() => {
-                              if (!user) {
+                              if (!user && !FREE_TRIAL_EXAM_IDS.includes(inspectExam.id)) {
                                 alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
                                 setAuthMode('login');
                                 setShowAuthModal(true);
