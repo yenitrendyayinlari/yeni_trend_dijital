@@ -253,6 +253,16 @@ export default function App() {
   const [showBillingGateModal, setShowBillingGateModal] = useState(false);
   const [pendingPaymentAction, setPendingPaymentAction] = useState(null);
 
+  // Giriş yapmadan (ücretsiz deneme sınavı için, bkz. FREE_TRIAL_EXAM_IDS)
+  // sınava başlayan bir ziyaretçi, sonucu görebilmek için sınavı BİTİRMEDEN
+  // ÖNCE hesap oluşturmak zorunda -- sunucudaki /api/finish-exam çağrısı zaten
+  // bir oturum (token) gerektiriyor. Bu bayrak, "hesap oluştur/giriş yap"
+  // modalı açıldıktan sonra kullanıcı GERÇEKTEN giriş yapınca sınavı otomatik
+  // olarak (elle tekrar "Bitir"e basmasına gerek kalmadan) bitirmemizi
+  // sağlıyor -- cevapları zaten yerel state'te (studentAnswers) durduğu için
+  // hiçbir şey kaybolmuyor.
+  const [pendingFinishAfterLogin, setPendingFinishAfterLogin] = useState(false);
+
   const [showAnnounceModal, setShowAnnounceModal] = useState(false);
   const [announceTitle, setAnnounceTitle] = useState('');
   const [announceMessage, setAnnounceMessage] = useState('');
@@ -1735,14 +1745,34 @@ export default function App() {
 
   
   useEffect(() => {
-    if (user && appMode === 'student' && activeStudentExam && !isExamFinished && !showResults && !isPaused) {
+    // ÖNEMLİ (bug fix): Bu koşul eskiden "user && ..." ile başlıyordu -- yani
+    // giriş yapmamış bir ziyaretçi (ücretsiz deneme sınavı, bkz.
+    // FREE_TRIAL_EXAM_IDS) sınava girdiğinde SÜRE HİÇ İŞLEMİYORDU, çünkü bu
+    // efekt tamamen atlanıyordu. Artık `user` şartı kaldırıldı ki anonim
+    // ziyaretçi de gerçek bir "deneme" (zamanlı) sınav deneyimi yaşasın.
+    if (appMode === 'student' && activeStudentExam && !isExamFinished && !showResults && !isPaused) {
       const timer = setInterval(() => {
         if (activeStudentExam.examType === 'deneme') {
           setTimeLeft((prev) => {
             if (prev <= 1) {
               clearInterval(timer);
-              saveAndFinishExam(0);
-              alert("Süre doldu! Sınavınız otomatik olarak tamamlanmıştır.");
+              if (!user) {
+                // Giriş yapmadan süresi dolan bir ziyaretçi -- doğrudan
+                // saveAndFinishExam çağırmıyoruz (sunucuda oturum token'ı
+                // olmadığı için "Oturumunuz bulunamadı" diye belirsiz bir
+                // uyarıyla öğrenciyi çıkışsız bırakırdı). Bunun yerine net
+                // bir mesajla hesap oluşturmasını istiyoruz; cevapları yerel
+                // state'te durduğu için kaybolmuyor, hesap oluşturur
+                // oluşturmaz (aşağıdaki pendingFinishAfterLogin efekti)
+                // sınav otomatik olarak bitirilip sonucu gösterilecek.
+                alert("Süre doldu! Sonucunu ve raporunu görebilmek için ücretsiz bir hesap oluşturman gerekiyor. Cevapların kaybolmadı.");
+                setPendingFinishAfterLogin(true);
+                setAuthMode('register');
+                setShowAuthModal(true);
+              } else {
+                saveAndFinishExam(0);
+                alert("Süre doldu! Sınavınız otomatik olarak tamamlanmıştır.");
+              }
               return 0;
             }
             return prev - 1;
@@ -2456,9 +2486,23 @@ export default function App() {
   // İleride bu listeye başka sınav ID'leri eklenip çıkarılabilir.
   const FREE_TRIAL_EXAM_IDS = ['81'];
 
+  // ÖNEMLİ: Bu kontrol TEK bir yerden yapılıyor ve hem sınavın KENDİ id'sine
+  // hem de (varsa) ÜST PAKETİNİN id'sine bakıyor. Sebep: aynı "ücretsiz
+  // deneme sınavını login'siz başlat" izni birden fazla yerde (startExam,
+  // paket içindeki alt-test butonu, tekli/standalone test butonu) AYRI AYRI
+  // kontrol ediliyordu -- id'lerden biri bu merkezi fonksiyonu kullanmayı
+  // unutursa (ya da sınav yapısı standalone'dan pakete/tam tersine
+  // değişirse) sessizce eski "giriş yap" davranışına geri dönebiliyordu.
+  // Artık HER YERDE bu tek fonksiyon çağrılıyor.
+  const isFreeTrialExam = (exam) => {
+    if (!exam) return false;
+    if (FREE_TRIAL_EXAM_IDS.includes(String(exam.id))) return true;
+    if (exam.parentId && FREE_TRIAL_EXAM_IDS.includes(String(exam.parentId))) return true;
+    return false;
+  };
+
   const startExam = (exam) => {
-    const isFreeTrialExam = FREE_TRIAL_EXAM_IDS.includes(String(exam.id));
-    if (!user && !isFreeTrialExam) {
+    if (!user && !isFreeTrialExam(exam)) {
       alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
       setAuthMode('login');
       setShowAuthModal(true);
@@ -3298,6 +3342,23 @@ export default function App() {
   };
 
   const finishExam = () => {
+    // Giriş yapmadan (ücretsiz deneme sınavı için) buraya kadar gelmiş bir
+    // ziyaretçi -- sonucu görebilmesi için artık hesap oluşturması gerekiyor.
+    // ÖNEMLİ: Bunu burada kibarca, cevaplarının kaybolmayacağını belirterek
+    // yapıyoruz. Bu kontrol olmadan doğrudan saveAndFinishExam çağrılsaydı,
+    // sunucu (/api/finish-exam) oturum token'ı bulamayıp "Oturumunuz
+    // bulunamadı" diye belirsiz bir uyarı verip öğrenciyi hiçbir çıkış yolu
+    // olmayan bir ekranda bırakırdı.
+    if (!user) {
+      const wantsAccount = window.confirm(
+        "Sonucunu ve kişiye özel raporunu görebilmek için ücretsiz bir hesap oluşturman gerekiyor. Cevapların kaybolmayacak -- hesap oluşturur oluşturmaz sınavın otomatik olarak bitirilip sonucun gösterilecek. Şimdi hesap oluşturmak ister misin?"
+      );
+      if (!wantsAccount) return;
+      setPendingFinishAfterLogin(true);
+      setAuthMode('register');
+      setShowAuthModal(true);
+      return;
+    }
     const confirmText = activeStudentExam.examType === 'deneme'
       ? "Sınavı bitirmek istediğinize emin misiniz? Bitirdikten sonra cevaplarınızı değiştiremezsiniz, sadece sonuçlarınızı görüntüleyebilirsiniz."
       : "Testi bitirmek istediğinize emin misiniz? Bitirdikten sonra cevaplarınızı değiştiremezsiniz, sadece sonuçlarınızı görüntüleyebilirsiniz.";
@@ -3305,6 +3366,16 @@ export default function App() {
       saveAndFinishExam(0);
     }
   };
+
+  // pendingFinishAfterLogin true iken kullanıcı GERÇEKTEN giriş/üyelik
+  // yapınca (user null'dan dolu hale gelince), sınavı elle "Bitir"e
+  // basmasına gerek kalmadan otomatik olarak bitiriyoruz.
+  useEffect(() => {
+    if (user && pendingFinishAfterLogin) {
+      setPendingFinishAfterLogin(false);
+      saveAndFinishExam(0);
+    }
+  }, [user]);
 
   // Öğrenci başına, bu sınav için izin verilen sıfırlama (baştan çözme) hakkı sayısı.
   const MAX_EXAM_RESETS = 1;
@@ -6416,7 +6487,7 @@ export default function App() {
                           ) : (
                             <button
                               onClick={() => {
-                                if (!user && !FREE_TRIAL_EXAM_IDS.includes(String(child.id))) {
+                                if (!user && !isFreeTrialExam(child)) {
                                   alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
                                   setAuthMode('login');
                                   setShowAuthModal(true);
@@ -6487,7 +6558,7 @@ export default function App() {
 
                           <button
                             onClick={() => {
-                              if (!user && !FREE_TRIAL_EXAM_IDS.includes(String(inspectExam.id))) {
+                              if (!user && !isFreeTrialExam(inspectExam)) {
                                 alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
                                 setAuthMode('login');
                                 setShowAuthModal(true);
