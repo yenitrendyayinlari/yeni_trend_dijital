@@ -77,10 +77,15 @@ export default async function handler(req, res) {
   // ÜCRETSİZ DENEME SINAVI (ör. sosyal medyadan gelen ?exam=81 linki):
   // Sadece FREE_TRIAL_EXAM_IDS listesindeki, yayınlanmış ve fiyatı 0
   // olan sınavlar için 'exam' türü PDF'e giriş yapmadan erişim veriyoruz.
-  // Bu blok yalnızca bu spesifik sınav(lar) için devreye girer -- başka
-  // hiçbir sınav (ücretsiz olanlar dahil) bu daldan geçmez, aşağıdaki
-  // normal giriş-zorunlu akışa düşmeye devam eder.
-  if (type === 'exam' && FREE_TRIAL_EXAM_IDS.includes(String(exam.id))) {
+  // ÖNEMLİ: App.jsx'teki aynı kontrolle birebir aynı mantık -- oynanan
+  // asıl test kendi id'sine sahip bir ALT test olabilir (parent_id, üst
+  // paketi gösterir). Bu yüzden hem exam.id hem exam.parent_id kontrol
+  // ediliyor. Bu blok yalnızca bu spesifik sınav(lar) için devreye girer
+  // -- başka hiçbir sınav (ücretsiz olanlar dahil) bu daldan geçmez,
+  // aşağıdaki normal giriş-zorunlu akışa düşmeye devam eder.
+  const isFreeTrialExam = FREE_TRIAL_EXAM_IDS.includes(String(exam.id))
+    || (exam.parent_id && FREE_TRIAL_EXAM_IDS.includes(String(exam.parent_id)));
+  if (type === 'exam' && isFreeTrialExam) {
     if (!exam.is_published) {
       return res.status(404).json({ error: 'Sınav bulunamadı' });
     }
