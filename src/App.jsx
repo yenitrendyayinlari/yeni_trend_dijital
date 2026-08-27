@@ -2454,10 +2454,10 @@ export default function App() {
   // sürtünmesini azaltmak için SADECE bu ID'ler için üyelik zorunluluğu
   // atlanıyor -- diğer tüm sınavlar eskisi gibi giriş istemeye devam eder.
   // İleride bu listeye başka sınav ID'leri eklenip çıkarılabilir.
-  const FREE_TRIAL_EXAM_IDS = [81];
+  const FREE_TRIAL_EXAM_IDS = ['81'];
 
   const startExam = (exam) => {
-    const isFreeTrialExam = FREE_TRIAL_EXAM_IDS.includes(exam.id);
+    const isFreeTrialExam = FREE_TRIAL_EXAM_IDS.includes(String(exam.id));
     if (!user && !isFreeTrialExam) {
       alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
       setAuthMode('login');
@@ -6416,7 +6416,7 @@ export default function App() {
                           ) : (
                             <button
                               onClick={() => {
-                                if (!user && !FREE_TRIAL_EXAM_IDS.includes(child.id)) {
+                                if (!user && !FREE_TRIAL_EXAM_IDS.includes(String(child.id))) {
                                   alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
                                   setAuthMode('login');
                                   setShowAuthModal(true);
@@ -6487,7 +6487,7 @@ export default function App() {
 
                           <button
                             onClick={() => {
-                              if (!user && !FREE_TRIAL_EXAM_IDS.includes(inspectExam.id)) {
+                              if (!user && !FREE_TRIAL_EXAM_IDS.includes(String(inspectExam.id))) {
                                 alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
                                 setAuthMode('login');
                                 setShowAuthModal(true);
