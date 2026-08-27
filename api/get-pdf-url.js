@@ -10,6 +10,12 @@ const supabaseAdmin = createClient(
 
 const BUCKET = 'exam-files';
 
+// SADECE bu sınav(lar) -- sosyal medyada paylaşılan ücretsiz deneme
+// kampanyası için -- giriş yapmadan çözülebiliyor (bkz. App.jsx'teki
+// aynı isimli FREE_TRIAL_EXAM_IDS sabiti). Başka HİÇBİR sınav bundan
+// etkilenmiyor; onlar için giriş zorunluluğu aşağıda aynen devam ediyor.
+const FREE_TRIAL_EXAM_IDS = ['81'];
+
 // exams tablosundaki pdf_file / solution_pdf_file sütunları, eski
 // kayıtlarda tam bir public URL olarak tutuluyor olabilir
 // (https://.../storage/v1/object/public/exam-files/dosya.pdf).
@@ -66,6 +72,36 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Dosya adresi oluşturulamadı' });
     }
     return res.status(200).json({ url: signed.signedUrl });
+  }
+
+  // ÜCRETSİZ DENEME SINAVI (ör. sosyal medyadan gelen ?exam=81 linki):
+  // Sadece FREE_TRIAL_EXAM_IDS listesindeki, yayınlanmış ve fiyatı 0
+  // olan sınavlar için 'exam' türü PDF'e giriş yapmadan erişim veriyoruz.
+  // Bu blok yalnızca bu spesifik sınav(lar) için devreye girer -- başka
+  // hiçbir sınav (ücretsiz olanlar dahil) bu daldan geçmez, aşağıdaki
+  // normal giriş-zorunlu akışa düşmeye devam eder.
+  if (type === 'exam' && FREE_TRIAL_EXAM_IDS.includes(String(exam.id))) {
+    if (!exam.is_published) {
+      return res.status(404).json({ error: 'Sınav bulunamadı' });
+    }
+    const isFree = !exam.price || exam.price <= 0;
+    if (isFree) {
+      const path = extractStoragePath(exam.pdf_file);
+      if (!path) return res.status(404).json({ error: 'PDF bulunamadı' });
+
+      const { data: signed, error: signError } = await supabaseAdmin
+        .storage.from(BUCKET)
+        .createSignedUrl(path, SIGNED_URL_TTL);
+
+      if (signError || !signed) {
+        return res.status(500).json({ error: 'Dosya adresi oluşturulamadı' });
+      }
+      return res.status(200).json({ url: signed.signedUrl });
+    }
+    // Fiyatı sonradan 0'ın üzerine çıkarılırsa (ör. lansman bitip normal
+    // fiyata dönerse), aşağıya düşüp normal giriş-zorunlu akışı izler --
+    // yani bu istisna kendiliğinden devre dışı kalır, ekstra bir şey
+    // yapmamıza gerek kalmaz.
   }
 
   // 'exam' ve 'solution' için giriş yapmış olmak şart.
