@@ -7777,6 +7777,7 @@ export default function App() {
       {renderCartDrawer()}
       {renderBillingGateModal()}
       {renderNotifDrawer()}
+      {renderAuthModal()}
       </div>
     );
   }
