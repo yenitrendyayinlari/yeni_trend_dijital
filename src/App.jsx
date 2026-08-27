@@ -2535,7 +2535,25 @@ export default function App() {
 
     // Yarım kalmış (bitirilmemiş) bir oturum varsa cevapları, süreyi ve sayfayı oradan geri yükle.
     const existingRes = studentResultsMap[exam.id];
-    const hasUnfinishedSession = existingRes && !existingRes.is_finished && existingRes.answers && Object.keys(existingRes.answers).length > 0;
+    let hasUnfinishedSession = existingRes && !existingRes.is_finished && existingRes.answers && Object.keys(existingRes.answers).length > 0;
+
+    // Giriş yapmamış ziyaretçi (ücretsiz deneme sınavı): sunucuda hiç
+    // kayıt olamayacağı için, bu tarayıcıda daha önce localStorage'a
+    // yazılmış bir ilerleme var mı diye bakıyoruz (bkz. saveProgress).
+    let guestLocalProgress = null;
+    if (!user) {
+      try {
+        const raw = localStorage.getItem(`yt_guest_progress_${exam.id}`);
+        if (raw) {
+          guestLocalProgress = JSON.parse(raw);
+          if (guestLocalProgress?.answers && Object.keys(guestLocalProgress.answers).length > 0) {
+            hasUnfinishedSession = true;
+          }
+        }
+      } catch (e) {
+        // localStorage okunamadıysa sıfırdan başlanır, sorun değil.
+      }
+    }
 
     setActiveStudentExamId(exam.id);
     setInspectingExamId(null);
@@ -2545,14 +2563,15 @@ export default function App() {
 
     if (hasUnfinishedSession) {
       // Daha önce başlanmış bir oturuma dönüyor, süre kaldığı yerden akmaya devam etsin.
+      const restoreFrom = existingRes || guestLocalProgress;
       setIsPaused(false);
       setExamStarted(true);
-      setStudentAnswers(existingRes.answers || {});
-      setStudentCurrentPage(existingRes.currentPage || 1);
+      setStudentAnswers(restoreFrom.answers || {});
+      setStudentCurrentPage(restoreFrom.currentPage || 1);
       if (exam.examType === 'deneme') {
-        setTimeLeft(existingRes.timeLeft != null ? existingRes.timeLeft : exam.duration * 60);
+        setTimeLeft(restoreFrom.timeLeft != null ? restoreFrom.timeLeft : exam.duration * 60);
       } else {
-        setTimeLeft(existingRes.timeLeft || 0);
+        setTimeLeft(restoreFrom.timeLeft || 0);
       }
     } else {
       // Sıfırdan başlıyor: soru ekranı gelsin ama öğrenci "Başla"ya basana kadar süre işlemesin.
@@ -2851,7 +2870,27 @@ export default function App() {
   // Sınav sırasında (henüz bitmemişken) her cevap işaretlemesinde ilerlemeyi kaydeder.
   // Böylece bağlantı kopsa/sayfa kapansa bile öğrenci kaldığı yerden devam edebilir.
   const saveProgress = async (updatedAnswers, currentTimeLeft, currentPage) => {
-    if (!user || !activeStudentExamId) return;
+    if (!activeStudentExamId) return;
+    if (!user) {
+      // Giriş yapmamış (ücretsiz deneme sınavını çözen) bir ziyaretçi --
+      // sunucuya kaydedemeyiz (student_email yok). Bu yüzden ilerlemeyi
+      // SADECE bu tarayıcıda, localStorage'da tutuyoruz -- "İçerik
+      // Listesine Dön" deyip geri geldiğinde işaretlemeler kaybolmasın
+      // diye. Hesap oluşturulup sınav gerçekten bitirildiğinde bu kayıt
+      // temizlenir (bkz. pendingFinishAfterLogin useEffect'i). Girişsiz
+      // başka hiçbir sınava erişilemediği için bu sadece o tek ücretsiz
+      // deneme sınavını etkiler, başka bir yeri değiştirmez.
+      try {
+        localStorage.setItem(`yt_guest_progress_${activeStudentExamId}`, JSON.stringify({
+          answers: updatedAnswers,
+          timeLeft: currentTimeLeft,
+          currentPage: currentPage
+        }));
+      } catch (e) {
+        // localStorage kapalıysa (gizli sekme kısıtlaması vb.) sessizce devam et.
+      }
+      return;
+    }
     try {
       const { error } = await supabase
         .from('student_exams')
@@ -3373,6 +3412,9 @@ export default function App() {
   useEffect(() => {
     if (user && pendingFinishAfterLogin) {
       setPendingFinishAfterLogin(false);
+      if (activeStudentExamId) {
+        try { localStorage.removeItem(`yt_guest_progress_${activeStudentExamId}`); } catch (e) {}
+      }
       saveAndFinishExam(0);
     }
   }, [user]);
