@@ -395,7 +395,20 @@ export default function App() {
 
     const found = exams.find(e => String(e.id) === examParam);
     if (found) {
-      setInspectingExamId(found.id);
+      if (isFreeTrialExam(found)) {
+        // Ücretsiz deneme sınavı paylaşım linki (?exam=81 vb.): ana
+        // sayfadaki "KPSS Denemesi / Hemen Katıl!" butonuyla BİREBİR AYNI
+        // çözümleme ve davranış -- ürün özet sayfasına hiç uğramadan,
+        // giriş istemeden doğrudan sınav çözme ekranını açıyoruz. Sosyal
+        // medyada paylaşılan linkin tıklama sonrası deneyimi, ana
+        // sayfadaki butonla tutarlı olsun diye (ekstra bir "Teste Başla"
+        // tıklaması istemeden) böyle kuruldu.
+        const children = exams.filter(e => e.parentId === found.id);
+        const playableExam = children.length > 0 ? children[0] : found;
+        startExam(playableExam);
+      } else {
+        setInspectingExamId(found.id);
+      }
     } else {
       // Geçersiz/silinmiş bir exam id'si paylaşılmışsa adres çubuğundaki
       // "exam" parametresini temizleyelim.
