@@ -6793,16 +6793,23 @@ export default function App() {
                     className="yt-hero-btn yt-hero-btn-primary"
                     style={{ whiteSpace: 'normal', lineHeight: 1.3, textAlign: 'center' }}
                     onClick={() => {
-                      // "Test İhtiyacını Belirle" -> ihtiyaç belirleme sınavı olarak
-                      // ayrılan ürüne (id: 81) götürür. Sınav zaten bellekte
-                      // yüklüyse (public/öğrenci listesi) uygulama içi geçiş
-                      // yaparız -- URL otomatik olarak ?exam=81 olur (bkz.
-                      // inspectingExamId <-> URL senkron efekti). Herhangi bir
-                      // sebeple henüz yüklenmemişse (ör. çok erken tıklanmışsa)
-                      // doğrudan paylaşım linkine yönlendiririz.
+                      // "KPSS Denemesi / Hemen Katıl!" -> ara sayfaya (sınav
+                      // özeti) uğramadan DOĞRUDAN sınav çözme ekranını açar.
+                      // id: 81, ihtiyaç belirleme/lansman sınavı için ayrılan
+                      // paket -- oynanan asıl içerik onun bir ALT testi
+                      // olabileceğinden (bkz. sınav özeti sayfasındaki
+                      // childExams mantığı), aynı çözümlemeyi burada da
+                      // yapıyoruz: alt testi varsa onu, yoksa (isStandalone)
+                      // sınavın kendisini başlatıyoruz. startExam zaten kendi
+                      // içinde giriş/erişim kontrolünü yapıyor, burada ekstra
+                      // bir şey yapmamıza gerek yok. Sınav bellekte henüz
+                      // yüklenmemişse (ör. çok erken tıklanmışsa) doğrudan
+                      // paylaşım linkine yönlendiririz.
                       const targetExam = exams.find(e => String(e.id) === '81');
                       if (targetExam) {
-                        setInspectingExamId(targetExam.id);
+                        const children = exams.filter(e => e.parentId === targetExam.id);
+                        const playableExam = children.length > 0 ? children[0] : targetExam;
+                        startExam(playableExam);
                       } else {
                         window.location.href = 'https://sualink.com/?exam=81';
                       }
