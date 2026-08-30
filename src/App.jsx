@@ -7135,7 +7135,7 @@ export default function App() {
     const myActiveRating = studentResultsMap[activeStudentExamId]?.rating || 0;
 
     return (
-      <div className="yt-shell" style={{ maxWidth: '1300px', margin: '0 auto', padding: focusMode ? '12px' : '24px' }}>
+      <div className="yt-shell" style={{ maxWidth: '1600px', margin: '0 auto', padding: focusMode ? '12px' : '24px' }}>
         {!focusMode && (
           <header className="yt-header" style={{ marginBottom: '20px' }}>
             <div className="yt-header-inner">
