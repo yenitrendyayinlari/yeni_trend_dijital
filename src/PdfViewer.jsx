@@ -41,11 +41,29 @@ export default function PdfViewer({ file, pageNumber, onDocumentLoadSuccess }) {
     };
   }, []);
 
-  const renderPage = async () => {
+  // Bir konteyner genişliği "gerçekçi" mi, yoksa tarayıcı henüz grid/sütun
+  // yerleşimini oturtmadan mı ölçülmüş, onu ayırt etmek için bir alt sınır.
+  // Gerçek bir soru kutusu bundan asla dar olmaz; bu değerin altı, ilk
+  // açılışta (component daha yeni yerleşmişken) yakalanmış hatalı bir
+  // ölçüm olduğuna işaret eder.
+  const MIN_SANE_WIDTH = 150;
+
+  const renderPage = async (attemptsLeft = 6) => {
     const pdfDoc = pdfDocRef.current;
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!pdfDoc || !canvas || !container) return;
+
+    // Tarayıcı henüz sayfayı tam yerleştirmediyse (özellikle İLK açılışta),
+    // container.clientWidth olması gerekenden çok daha küçük bir değer
+    // döndürebiliyor -- bu da PDF'in minicik ve bulanık görünmesine yol
+    // açıyordu. Böyle mantıksız bir ölçüm yakalarsak, hemen o küçük
+    // boyutla çizmek yerine kısa bir gecikmeyle tekrar ölçüyoruz; tarayıcı
+    // birkaç deneme içinde (toplam ~250ms) mutlaka yerleşimini tamamlar.
+    if (container.clientWidth < MIN_SANE_WIDTH && attemptsLeft > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return renderPage(attemptsLeft - 1);
+    }
 
     try {
       const page = await pdfDoc.getPage(pageNumber);
