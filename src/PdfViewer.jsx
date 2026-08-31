@@ -48,7 +48,31 @@ export default function PdfViewer({ file, pageNumber, onDocumentLoadSuccess }) {
   // ölçüm olduğuna işaret eder.
   const MIN_SANE_WIDTH = 150;
 
+  // İki farklı yer (belge yüklendiğinde ve konteyner genişliği
+  // değiştiğinde) aynı canvas'a çizim yapmaya çalışabiliyor. İkisi
+  // neredeyse aynı anda tetiklenirse (özellikle ilk açılışta), biri
+  // canvas'ı yeni boyutla temizlerken diğeri hâlâ ESKİ ölçümle çiziyor
+  // olabilir -- işte "minik/bozuk görünme" hatasının asıl sebebi buydu.
+  // Bunu önlemek için her çizim isteğine bir sıra numarası veriyoruz;
+  // bir istek beklerken (await noktalarında) kendinden DAHA YENİ bir
+  // istek başlamışsa, kendini sessizce iptal ediyor.
+  const renderIdRef = useRef(0);
+  // pdf.js'in kendi çizim görevini (render task) tutuyoruz ki yeni bir
+  // istek geldiğinde ESKİ çizimi fiziksel olarak durdurabilelim -- sadece
+  // sonucunu görmezden gelmek yetmez, aynı canvas'a aynı anda iki çizimin
+  // dokunmasını (ve birbirinin üstüne yarım yamalak yazmasını) engellemek
+  // için görevi gerçekten iptal etmemiz gerekiyor.
+  const renderTaskRef = useRef(null);
+
   const renderPage = async (attemptsLeft = 6) => {
+    const myRenderId = ++renderIdRef.current;
+
+    // Devam eden bir çizim varsa hemen durdur.
+    if (renderTaskRef.current) {
+      try { renderTaskRef.current.cancel(); } catch (_) { /* zaten bitmiş olabilir */ }
+      renderTaskRef.current = null;
+    }
+
     const pdfDoc = pdfDocRef.current;
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -62,11 +86,15 @@ export default function PdfViewer({ file, pageNumber, onDocumentLoadSuccess }) {
     // birkaç deneme içinde (toplam ~250ms) mutlaka yerleşimini tamamlar.
     if (container.clientWidth < MIN_SANE_WIDTH && attemptsLeft > 0) {
       await new Promise((resolve) => setTimeout(resolve, 40));
+      if (renderIdRef.current !== myRenderId) return; // daha yeni bir istek başladı, vazgeç
       return renderPage(attemptsLeft - 1);
     }
+    if (renderIdRef.current !== myRenderId) return;
 
     try {
       const page = await pdfDoc.getPage(pageNumber);
+      if (renderIdRef.current !== myRenderId) return; // daha yeni bir istek başladı, vazgeç
+
       const baseViewport = page.getViewport({ scale: 1 });
 
       // İç dolgu (padding) payını düşüp gerçek kullanılabilir genişliği
@@ -80,16 +108,21 @@ export default function PdfViewer({ file, pageNumber, onDocumentLoadSuccess }) {
       const pixelRatio = window.devicePixelRatio || 1;
       const renderViewport = page.getViewport({ scale: displayScale * pixelRatio });
 
+      if (renderIdRef.current !== myRenderId) return; // canvas'a dokunmadan hemen önce son kontrol
+
       canvas.width = renderViewport.width;
       canvas.height = renderViewport.height;
       canvas.style.width = `${baseViewport.width * displayScale}px`;
       canvas.style.height = `${baseViewport.height * displayScale}px`;
 
       const context = canvas.getContext('2d');
-      await page.render({
+      const renderTask = page.render({
         canvasContext: context,
         viewport: renderViewport
-      }).promise;
+      });
+      renderTaskRef.current = renderTask;
+      await renderTask.promise;
+      if (renderTaskRef.current === renderTask) renderTaskRef.current = null;
     } catch (err) {
       if (err.name !== 'RenderingCancelledException' && err.message !== 'Worker was destroyed') {
         console.error('PDF sayfa render hatası:', err);
