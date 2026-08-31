@@ -99,6 +99,19 @@ p {
   padding: 16px 24px;
   flex-wrap: wrap;
 }
+@media (max-width: 640px) {
+  /* Dar ekranlarda (telefon) çok sayıda buton alt alta yığılıp gereksiz
+     yer kaplıyordu -- boşlukları/dolguyu daraltıp, bakiye kutusunun ve
+     hesap e-postasının taşabilecek genişlikte metnini kısaltıyoruz. */
+  .yt-header-inner {
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .yt-header-inner .yt-btn {
+    padding: 7px 10px;
+    font-size: 0.78rem;
+  }
+}
 .yt-brand {
   display: flex;
   align-items: center;
