@@ -7746,7 +7746,7 @@ export default function App() {
               })()}
             </div>
 
-            {showResults && activeStudentExam.solutionPdfFile && (
+            {showResults && (
               <button onClick={() => setViewingSolutionQ(v => !v)} className={`yt-btn yt-btn-correct${viewingSolutionQ ? ' active' : ''}`} style={{ width: '100%', marginBottom: '10px' }}>
                 {viewingSolutionQ ? '✕ Çözümü Gizle' : `${getDisplayQuestionLabel(activeStudentExam, studentCurrentPage).number}. Çözümü Gör`}
               </button>
@@ -7761,10 +7761,13 @@ export default function App() {
 
         </div>
 
-        {(showResults && viewingSolutionQ) && activeStudentExam.solutionPdfFile && (
+        {(showResults && viewingSolutionQ) && (
           <div ref={solutionRef} className="yt-session-card" style={{ marginTop: '20px', borderColor: 'var(--yt-correct)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--yt-correct)', padding: '10px 14px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', color: '#fff', fontSize: '0.88rem' }}>
-              <span>{getDisplayQuestionLabel(activeStudentExam, studentCurrentPage).number}. Soru Çözümü Aşağıda</span>
+              <span>
+                {getDisplayQuestionLabel(activeStudentExam, studentCurrentPage).number}.{' '}
+                {activeStudentExam.solutionPdfFile ? 'Soru Çözümü Aşağıda' : 'Sorunun Doğru Cevabı'}
+              </span>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 {reportedQuestions[reportKey(activeStudentExamId, studentCurrentPage)] ? (
                   <button disabled style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: 'rgba(255,255,255,0.18)', color: '#fff', fontSize: '0.78rem', fontWeight: 'bold', cursor: 'not-allowed' }}>
@@ -7778,7 +7781,40 @@ export default function App() {
                 <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: 'rgba(0,0,0,0.2)', color: '#fff', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}>Kapat</button>
               </div>
             </div>
-            <SecurePdfViewer examId={activeStudentExamId} type="solution" pageNumber={studentCurrentPage} />
+
+            {activeStudentExam.solutionPdfFile ? (
+              <SecurePdfViewer examId={activeStudentExamId} type="solution" pageNumber={studentCurrentPage} />
+            ) : (
+              // Bu paket için açıklamalı çözüm PDF'i yüklenmemiş -- ama
+              // cevap anahtarı her zaman elimizde olduğu için (puanlama
+              // zaten ona dayanıyor), en azından doğru şıkkı ve
+              // öğrencinin kendi cevabını burada gösterebiliyoruz.
+              (() => {
+                const correctAns = activeStudentExam.answerKey[studentCurrentPage];
+                const studentAns = studentAnswers[studentCurrentPage];
+                const pillStyle = (bg) => ({
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: '30px', height: '30px', borderRadius: '50%', backgroundColor: bg,
+                  color: '#fff', fontWeight: 'bold', fontSize: '0.95rem', marginLeft: '8px'
+                });
+                return (
+                  <div style={{ padding: '18px 16px', fontSize: '0.95rem', color: '#1e293b' }}>
+                    <div style={{ marginBottom: '12px', display: 'flex', alignItems: 'center' }}>
+                      <strong>Doğru cevap:</strong>
+                      <span style={pillStyle('var(--yt-correct)')}>{correctAns || '—'}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                      <strong>Senin cevabın:</strong>
+                      {studentAns ? (
+                        <span style={pillStyle(studentAns === correctAns ? 'var(--yt-correct)' : 'var(--yt-wrong)')}>{studentAns}</span>
+                      ) : (
+                        <span style={{ marginLeft: '8px', color: '#94a3b8', fontStyle: 'italic' }}>Boş bırakıldı</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()
+            )}
           </div>
         )}
 

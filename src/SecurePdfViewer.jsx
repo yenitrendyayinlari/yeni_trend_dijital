@@ -76,7 +76,7 @@ export default function SecurePdfViewer({ examId, type, pageNumber, onDocumentLo
   }
 
   if (!signedUrl) {
-    return <div style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>PDF yükleniyor...</div>;
+    return <div style={{ textAlign: 'center', padding: '40px', color: '#64748b' }}>Sorular yükleniyor...</div>;
   }
 
   return <PdfViewer file={signedUrl} pageNumber={pageNumber} onDocumentLoadSuccess={onDocumentLoadSuccess} />;
