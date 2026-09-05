@@ -6396,10 +6396,10 @@ export default function App() {
                 <div>
                   <div style={{ fontSize: '0.78rem', color: 'var(--yt-graphite)', marginBottom: '4px', fontFamily: 'var(--yt-font-mono)' }}>SINAV FİYATI</div>
                   <div className="yt-price" style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
-                    {isPaid ? (
+                    {(isPaid || (inspectExam.originalPrice && inspectExam.originalPrice > 0)) ? (
                       <>
                         <span className="now" style={{ fontSize: '1.5rem' }}>
-                          ₺{inspectExam.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          ₺{(inspectExam.price || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </span>
                         {inspectExam.originalPrice && inspectExam.originalPrice > inspectExam.price ? (
                           <span className="old">
@@ -6729,8 +6729,8 @@ export default function App() {
                     return (
                       <div key={re.id} className="yt-related-card-v2" onClick={() => setInspectingExamId(re.id)}>
                         <div className={`yt-related-tile tone-${tileTone}`}>
-                          {reIsFree && <span className="yt-related-badge free">ÜCRETSİZ</span>}
-                          {!reIsFree && reOnCampaign && <span className="yt-related-badge sale">İNDİRİMDE</span>}
+                          {(reIsFree && !(re.originalPrice > 0)) && <span className="yt-related-badge free">ÜCRETSİZ</span>}
+                          {reOnCampaign && <span className="yt-related-badge sale">İNDİRİMDE</span>}
                           <div className="yt-related-rating">
                             <span className="stars">{'★'.repeat(Math.round(Number(reRating.average.replace(',', '.')))).padEnd(5, '☆')}</span>
                             <span>{reRating.average} ({reRating.count})</span>
@@ -6740,13 +6740,13 @@ export default function App() {
                           <div className="yt-related-name">{re.name || 'İsimsiz İçerik'}</div>
                           <div className="yt-related-meta">{reQuestions} soru{reChildren.length > 0 ? ` · ${reChildren.length} test` : ''}</div>
                           <div className="yt-related-price">
-                            {reIsFree ? (
-                              <span className="free">Ücretsiz</span>
-                            ) : (
+                            {(!reIsFree || (re.originalPrice && re.originalPrice > 0)) ? (
                               <>
-                                {reOnCampaign && <span className="old">₺{re.originalPrice}</span>}
-                                <span className="now">₺{re.price}</span>
+                                {re.originalPrice && re.originalPrice > re.price ? <span className="old">₺{re.originalPrice}</span> : null}
+                                <span className="now">₺{re.price || 0}</span>
                               </>
+                            ) : (
+                              <span className="free">Ücretsiz</span>
                             )}
                           </div>
                         </div>
@@ -7124,12 +7124,12 @@ export default function App() {
 
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
                         <div className="yt-price">
-                          {isPaid ? (
+                          {(isPaid || (exam.originalPrice && exam.originalPrice > 0)) ? (
                             <>
                               {exam.originalPrice && exam.originalPrice > exam.price ? (
                                 <span className="old">₺{exam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                               ) : null}
-                              <span className="now">₺{exam.price.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              <span className="now">₺{(exam.price || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                             </>
                           ) : (
                             <span className="free">Ücretsiz</span>
