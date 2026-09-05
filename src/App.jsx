@@ -159,6 +159,10 @@ export default function App() {
   const [pricePerQuestionConfigured, setPricePerQuestionConfigured] = useState(false);
   const [showPricingSettings, setShowPricingSettings] = useState(false);
   const [pricingDraft, setPricingDraft] = useState('0');
+  // Tüm ürünlere tek seferde toplu indirim uygulamak için (bkz.
+  // applyDiscountToAllExams) -- kalıcı bir ayar değil, sadece o an
+  // girilen yüzdeyi tutan geçici bir alan.
+  const [discountDraft, setDiscountDraft] = useState('');
   // Kategori Yönetimi artık sekmeler yerine iç içe (Sınav Türü > Ders Türü >
   // Konu > Kazanım) açılır/kapanır bir akordiyon ağacı olarak gösteriliyor.
   // Her seviyenin kendi "hangi kayıtlar açık" haritası var (id -> boolean).
@@ -1182,7 +1186,7 @@ export default function App() {
     const n = Number(numPagesValue) || 0;
     const exam = exams.find((e) => e.id === examId);
     if (pricePerQuestionConfigured) {
-      const computedPrice = Number((n * pricePerQuestion).toFixed(2));
+      const computedPrice = Math.round(n * pricePerQuestion);
       updateExamInDb(examId, { numPages: n, price: computedPrice, originalPrice: computedPrice });
       // Bu bir ALT TEST ise, üst paketin (ana ürün) fiyatını da -- tüm
       // kardeş testlerin YENİ toplam soru sayısına göre -- hemen
@@ -1191,7 +1195,7 @@ export default function App() {
       if (exam && exam.parentId) {
         const siblings = exams.filter((c) => c.parentId === exam.parentId);
         const newTotal = siblings.reduce((sum, c) => sum + (c.id === examId ? n : (c.numPages || 0)), 0);
-        const parentPrice = Number((newTotal * pricePerQuestion).toFixed(2));
+        const parentPrice = Math.round(newTotal * pricePerQuestion);
         updateExamInDb(exam.parentId, { price: parentPrice, originalPrice: parentPrice });
       }
     } else {
@@ -1241,14 +1245,43 @@ export default function App() {
     );
     if (!confirmed) return;
     for (const ex of childTargets) {
-      const computedPrice = Number(((ex.numPages || 0) * pricePerQuestion).toFixed(2));
+      const computedPrice = Math.round((ex.numPages || 0) * pricePerQuestion);
       await updateExamInDb(ex.id, { price: computedPrice, originalPrice: computedPrice });
     }
     for (const { exam, totalQuestions } of parentTargets) {
-      const computedPrice = Number((totalQuestions * pricePerQuestion).toFixed(2));
+      const computedPrice = Math.round(totalQuestions * pricePerQuestion);
       await updateExamInDb(exam.id, { price: computedPrice, originalPrice: computedPrice });
     }
     alert(`✓ ${totalCount} test/paketin fiyatı güncellendi.`);
+  };
+
+  // "Soru Başı Fiyat" penceresindeki indirim bölümü için: sistemdeki TÜM
+  // test/paketlerin Fiyat'ını, kendi Eski Fiyat'ı (originalPrice, yani
+  // referans/indirimsiz fiyat) üzerinden girilen yüzde kadar düşürür.
+  // Eski Fiyat'a hiç dokunmuyoruz -- o listede üstü çizili görünen
+  // referans fiyat olarak kalmaya devam eder, sadece satış fiyatı
+  // (Fiyat) iner. İndirimi kaldırmak/sıfırlamak isterseniz %0 girip
+  // tekrar uygulamanız yeterli (Fiyat, Eski Fiyat'a eşitlenir).
+  const applyDiscountToAllExams = async () => {
+    const pct = Number(discountDraft);
+    if (Number.isNaN(pct) || pct < 0 || pct > 100) {
+      alert('Geçerli bir indirim yüzdesi girin (0-100 arası).');
+      return;
+    }
+    const targets = exams.filter((e) => (e.originalPrice || 0) > 0);
+    if (targets.length === 0) {
+      alert('Eski Fiyat (referans fiyat) girilmiş hiçbir test/paket bulunamadı.');
+      return;
+    }
+    const confirmed = window.confirm(
+      `${targets.length} test/paketin Fiyat'ı, kendi Eski Fiyat'ı üzerinden %${pct} indirimle yeniden hesaplanacak (Eski Fiyat değişmeyecek). Devam edilsin mi?`
+    );
+    if (!confirmed) return;
+    for (const ex of targets) {
+      const discountedPrice = Math.round(ex.originalPrice * (1 - pct / 100));
+      await updateExamInDb(ex.id, { price: discountedPrice });
+    }
+    alert(`✓ ${targets.length} test/paketin fiyatına %${pct} indirim uygulandı.`);
   };
 
   const checkUserRoleAndSetMode = (currentUser) => {
@@ -3841,6 +3874,32 @@ export default function App() {
                 </button>
                 <p style={{ margin: '6px 0 0 0', fontSize: '0.72rem', color: '#94a3b8' }}>
                   Sistemde soru sayısı girilmiş TÜM test/paketlerin fiyatını, yukarıdaki güncel tutara göre yeniden hesaplar -- daha önce hiç dokunulmamış eski kayıtları da kapsar. Fiyatı sonradan artırırsanız/azaltırsanız da bunu kullanabilirsiniz.
+                </p>
+              </div>
+
+              <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
+                <label style={{ fontSize: '0.8rem', color: '#475569', display: 'block', marginBottom: '4px' }}>🏷️ Tüm Ürünlere Toplu İndirim (%)</label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    placeholder="örn. 20"
+                    value={discountDraft}
+                    onChange={(e) => setDiscountDraft(e.target.value)}
+                    style={{ flex: 1, padding: '8px 10px', border: '1px solid #e2e8f0', borderRadius: '6px', boxSizing: 'border-box', fontSize: '0.9rem' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={applyDiscountToAllExams}
+                    style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', backgroundColor: '#dc2626', color: '#fff', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.84rem', whiteSpace: 'nowrap' }}
+                  >
+                    Uygula
+                  </button>
+                </div>
+                <p style={{ margin: '6px 0 0 0', fontSize: '0.72rem', color: '#94a3b8' }}>
+                  Her test/paketin Fiyat'ını, kendi Eski Fiyat'ı (referans fiyat) üzerinden bu yüzde kadar indirimli olarak yeniden hesaplar -- Eski Fiyat değişmez, sadece Fiyat düşer. İndirimi kaldırmak için %0 girip tekrar uygulayın.
                 </p>
               </div>
             </div>
