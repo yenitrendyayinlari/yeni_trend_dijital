@@ -249,17 +249,32 @@ export default function App() {
   const [billingRecordsLoading, setBillingRecordsLoading] = useState(false);
   const [billingSearch, setBillingSearch] = useState('');
 
-  // Soru Havuzu (Faz 2 -- Excel'den Toplu Test Yükle'nin aynısı, ama hedefi
-  // "bir sınav/paket" DEĞİL, bağımsız question_pool tablosu. Her satır kendi
-  // PDF'i olan TEK bir soru -- artık her PDF zaten 1 sayfa/1 soru olduğu için
-  // (InDesign'dan "Create Separate PDF Files" ile bölünmüş), sayfa sayısı
-  // okuma/tahmin etme gibi bir adıma hiç gerek yok.
+  // Soru Havuzu -- Excel'den Toplu Test Yükle'nin sadeleştirilmiş hali:
+  // hedefi bir sınav/paket DEĞİL, bağımsız question_pool tablosu. Excel'de
+  // BİLEREK Ders/Konu/Kazanım YOK (metin eşleştirmesi yazım hatasına açık,
+  // "karmaşaya sebep olur") -- sadece dosya eşleştirmesi + doğru cevap var.
+  // Ders/Konu/Kazanım, yükledikten sonra dropdown'la (Tek Kazanım Uygula ya
+  // da satır satır) atanıyor -- tıpkı mevcut Kazanım Haritası ekranınızdaki
+  // gibi, metne değil ID'ye bağlı.
   const [showPoolImport, setShowPoolImport] = useState(false);
-  const [poolExcelRows, setPoolExcelRows] = useState([]); // [{soruPdfName, cozumPdfName, ders, konu, kazanim, cevap, kaynakEtiketi}]
+  const [poolExcelRows, setPoolExcelRows] = useState([]); // [{soruPdfName, cozumPdfName, cevap}]
   const [poolPdfFiles, setPoolPdfFiles] = useState(new Map()); // dosya adı (küçük harf) -> File
   const [poolImporting, setPoolImporting] = useState(false);
   const [poolImportProgress, setPoolImportProgress] = useState({ current: 0, total: 0 });
   const [poolImportErrors, setPoolImportErrors] = useState([]);
+
+  // Havuz Kazanım Ataması: outcome_id'si NULL olan (henüz etiketlenmemiş)
+  // havuz soruları ve bunları etiketlemek için kullanılan "Tek Kazanım
+  // Uygula" alanları.
+  const [poolUntagged, setPoolUntagged] = useState([]);
+  const [poolTaggingLoading, setPoolTaggingLoading] = useState(false);
+  const [quickPoolDers, setQuickPoolDers] = useState('');
+  const [quickPoolKonu, setQuickPoolKonu] = useState('');
+  const [quickPoolKazanim, setQuickPoolKazanim] = useState('');
+  const [showNewTopicInputPool, setShowNewTopicInputPool] = useState(false);
+  const [newTopicNamePool, setNewTopicNamePool] = useState('');
+  const [showNewOutcomeInputPool, setShowNewOutcomeInputPool] = useState(false);
+  const [newOutcomeNamePool, setNewOutcomeNamePool] = useState('');
   // Ödeme öncesi ZORUNLU fatura bilgisi adımı: öğrenci fatura bilgisini
   // henüz girmemişse, ödemeye (iyzico'ya veya bakiye ile ücretsiz karşılamaya)
   // geçmeden ÖNCE bu bilgiyi istiyoruz -- aksi halde ödeme tamamlanıp fatura
@@ -2173,10 +2188,13 @@ export default function App() {
   };
 
   // Soru Havuzu Excel Şablonu -- her satır TEK bir soru. Sütun sırası:
-  // 1. Soru PDF (dosya adı), 2. Çözüm PDF (dosya adı, opsiyonel), 3. Ders,
-  // 4. Konu, 5. Kazanım, 6. Doğru Cevap (A-E), 7. Kaynak Etiketi (opsiyonel).
+  // 1. Soru PDF (dosya adı), 2. Çözüm PDF (dosya adı, opsiyonel),
+  // 3. Doğru Cevap (A-E). Ders/Konu/Kazanım BİLEREK Excel'de YOK -- metin
+  // eşleştirmesi (yazım hatasına açık) yerine, yükledikten sonra dropdown'la
+  // (Tek Kazanım Uygula ya da satır satır seçerek) atanıyor, tıpkı mevcut
+  // Kazanım Haritası ekranınızdaki gibi.
   const downloadPoolImportTemplate = () => {
-    const rows = [['Soru PDF (dosya adı)', 'Çözüm PDF (dosya adı, opsiyonel)', 'Ders', 'Konu', 'Kazanım', 'Doğru Cevap (A-E)', 'Kaynak Etiketi (opsiyonel)']];
+    const rows = [['Soru PDF (dosya adı)', 'Çözüm PDF (dosya adı, opsiyonel)', 'Doğru Cevap (A-E)']];
     const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Soru Havuzu');
@@ -2202,15 +2220,11 @@ export default function App() {
           parsed.push({
             soruPdfName,
             cozumPdfName: String(row[1] || '').trim(),
-            ders: String(row[2] || '').trim(),
-            konu: String(row[3] || '').trim(),
-            kazanim: String(row[4] || '').trim(),
-            cevap: String(row[5] || '').trim().toUpperCase(),
-            kaynakEtiketi: String(row[6] || '').trim(),
+            cevap: String(row[2] || '').trim().toUpperCase(),
           });
         }
         if (parsed.length === 0) {
-          alert('Excel dosyasında geçerli satır bulunamadı. Sütun sırasının Soru PDF / Çözüm PDF / Ders / Konu / Kazanım / Doğru Cevap / Kaynak Etiketi olduğundan emin olun.');
+          alert('Excel dosyasında geçerli satır bulunamadı. Sütun sırasının Soru PDF / Çözüm PDF / Doğru Cevap olduğundan emin olun.');
           return;
         }
         setPoolExcelRows(parsed);
@@ -2229,12 +2243,12 @@ export default function App() {
   };
 
   // Havuza toplu yükleme: her satır BAĞIMSIZ bir question_pool kaydı
-  // oluşturur -- hiçbir "sınav/paket"e bağlanmaz. Ders/Konu/Kazanım,
-  // Kategori Yönetimi'ndeki master listeyle BİREBİR eşleşmek zorunda
-  // (topicMap Excel yüklemesindeki resolveEntryIds ile aynı mantık) --
-  // aksi halde o soru öneri motoru tarafından hiç görülemez. Sayfa sayısı
-  // okumaya hiç gerek yok çünkü her PDF zaten tam olarak 1 sayfa/1 soru
-  // (InDesign'dan "Create Separate PDF Files" ile bölünmüş dosyalar).
+  // oluşturur, hiçbir sınav/pakete bağlanmaz. Ders/Konu/Kazanım BOŞ
+  // (null) olarak eklenir -- bunlar aşağıdaki "Etiketlenmemiş Sorular"
+  // bölümünden (dropdown ile, metin eşleştirmesi olmadan) atanır. Sayfa
+  // sayısı okumaya hiç gerek yok çünkü her PDF zaten tam olarak 1 sayfa/
+  // 1 soru (InDesign'dan "Create Separate PDF Files" ile bölünmüş
+  // dosyalar).
   const runPoolImport = async () => {
     if (poolExcelRows.length === 0) return;
 
@@ -2250,30 +2264,12 @@ export default function App() {
       const rowLabel = row.soruPdfName || `Satır ${i + 1}`;
 
       try {
-        // 1) Ders/Konu/Kazanım'ı Kategori Yönetimi'ndeki master listeyle
-        // BİREBİR eşleştir (topicMap Excel yüklemesiyle aynı kural).
-        const lesson = lessonCategories.find((lc) => lc.name === row.ders);
-        const topic = lesson ? topics.find((t) => t.name === row.konu && t.lesson_category_id === lesson.id) : null;
-        const outcome = topic ? learningOutcomes.find((o) => o.name === row.kazanim && o.topic_id === topic.id) : null;
-
-        if (!lesson) {
-          errors.push(`${rowLabel}: Ders Türü "${row.ders}" bulunamadı.${suggestClosestName(lessonCategories, row.ders)}`);
-          continue;
-        }
-        if (!topic) {
-          errors.push(`${rowLabel}: "${lesson.name}" ders türünde "${row.konu}" adında bir Konu bulunamadı.${suggestClosestName(topics.filter((t) => t.lesson_category_id === lesson.id), row.konu)}`);
-          continue;
-        }
-        if (!outcome) {
-          errors.push(`${rowLabel}: "${topic.name}" konusunda "${row.kazanim}" adında bir Kazanım bulunamadı.${suggestClosestName(learningOutcomes.filter((o) => o.topic_id === topic.id), row.kazanim)}`);
-          continue;
-        }
         if (!['A', 'B', 'C', 'D', 'E'].includes(row.cevap)) {
           errors.push(`${rowLabel}: Doğru cevap "${row.cevap}" geçersiz -- A, B, C, D ya da E olmalı.`);
           continue;
         }
 
-        // 2) Soru PDF'ini eşleştir ve yükle (zorunlu).
+        // 1) Soru PDF'ini eşleştir ve yükle (zorunlu).
         const soruFile = poolPdfFiles.get(row.soruPdfName.toLowerCase());
         if (!soruFile) {
           errors.push(`${rowLabel}: "${row.soruPdfName}" adlı dosya seçilenler arasında bulunamadı.`);
@@ -2284,7 +2280,7 @@ export default function App() {
         const { error: soruUpErr } = await supabase.storage.from('exam-files').upload(soruStorageName, soruFile);
         if (soruUpErr) throw new Error('Soru PDF yüklenemedi: ' + soruUpErr.message);
 
-        // 3) Çözüm PDF'i (opsiyonel) eşleştir ve yükle.
+        // 2) Çözüm PDF'i (opsiyonel) eşleştir ve yükle.
         let cozumStorageName = null;
         if (row.cozumPdfName) {
           const cozumFile = poolPdfFiles.get(row.cozumPdfName.toLowerCase());
@@ -2301,15 +2297,11 @@ export default function App() {
           }
         }
 
-        // 4) question_pool kaydını oluştur.
+        // 3) question_pool kaydını oluştur -- Ders/Konu/Kazanım BOŞ.
         const { error: insertErr } = await supabase.from('question_pool').insert([{
           pdf_file: soruStorageName,
           solution_pdf_file: cozumStorageName,
           correct_answer: row.cevap,
-          lesson_category_id: lesson.id,
-          topic_id: topic.id,
-          outcome_id: outcome.id,
-          source_label: row.kaynakEtiketi || null,
         }]);
         if (insertErr) throw new Error('Havuz kaydı oluşturulamadı: ' + insertErr.message);
       } catch (err) {
@@ -2321,13 +2313,83 @@ export default function App() {
     setPoolImporting(false);
 
     if (errors.length === 0) {
-      alert(`✓ ${poolExcelRows.length} soru havuza eklendi.`);
-      setShowPoolImport(false);
+      alert(`✓ ${poolExcelRows.length} soru havuza eklendi. Şimdi aşağıdan Ders/Konu/Kazanım atayabilirsiniz.`);
       setPoolExcelRows([]);
       setPoolPdfFiles(new Map());
     } else {
       alert(`${poolExcelRows.length - errors.length}/${poolExcelRows.length} soru havuza eklendi. ${errors.length} satırda sorun oldu -- listeyi kontrol edin.`);
     }
+    fetchUnlabeledPoolQuestions();
+  };
+
+  // --- Havuz Kazanım Ataması ---
+  // Ders/Konu/Kazanım'ı hiç girilmemiş (outcome_id NULL) havuz sorularını
+  // getirir.
+  const fetchUnlabeledPoolQuestions = async () => {
+    setPoolTaggingLoading(true);
+    const { data, error } = await supabase
+      .from('question_pool')
+      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, source_label, created_at')
+      .is('outcome_id', null)
+      .order('created_at', { ascending: false });
+    setPoolTaggingLoading(false);
+    if (!error && data) {
+      setPoolUntagged(data);
+    } else if (error) {
+      console.error('Etiketlenmemiş havuz soruları okunamadı:', error);
+    }
+  };
+
+  // "⚡ Tek Kazanım Uygula" -- şu an listede görünen (etiketlenmemiş) TÜM
+  // havuz sorularına aynı Ders/Konu/Kazanım'ı bir kerede uygular. Ders/
+  // Konu/Kazanım isimleri zaten dropdown'dan (master listeden) geldiği
+  // için burada bir metin-eşleştirme riski yok.
+  const applyQuickKazanimToPool = async (dersName, konuName, kazanimName) => {
+    const ders = lessonCategories.find((lc) => lc.name === dersName);
+    const konu = ders && topics.find((t) => t.name === konuName && t.lesson_category_id === ders.id);
+    const kazanim = konu && learningOutcomes.find((lo) => lo.name === kazanimName && lo.topic_id === konu.id);
+    if (!ders || !konu || !kazanim) {
+      alert('Ders, Konu ve Kazanım alanlarını doldurun.');
+      return;
+    }
+    if (poolUntagged.length === 0) {
+      alert('Etiketlenecek soru yok.');
+      return;
+    }
+    const ids = poolUntagged.map((r) => r.id);
+    const { error } = await supabase
+      .from('question_pool')
+      .update({ lesson_category_id: ders.id, topic_id: konu.id, outcome_id: kazanim.id })
+      .in('id', ids);
+    if (error) {
+      alert('Uygulanamadı: ' + error.message);
+      return;
+    }
+    alert(`✓ ${ids.length} sorunun tamamına "${ders.name} / ${konu.name} / ${kazanim.name}" uygulandı.`);
+    setPoolUntagged([]);
+  };
+
+  // Satır satır etiketleme: her dropdown değişikliği ANINDA o havuz
+  // satırına yazılır -- Kazanım seçilince satır artık "etiketlenmemiş"
+  // olmaktan çıktığı için listeden kaldırılır.
+  const updatePoolRowDers = async (rowId, dersName) => {
+    const ders = lessonCategories.find((lc) => lc.name === dersName);
+    await supabase.from('question_pool').update({ lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null }).eq('id', rowId);
+    setPoolUntagged((prev) => prev.map((r) => r.id === rowId ? { ...r, lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null } : r));
+  };
+
+  const updatePoolRowKonu = async (rowId, dersId, konuName) => {
+    const konu = topics.find((t) => t.name === konuName && t.lesson_category_id === dersId);
+    await supabase.from('question_pool').update({ topic_id: konu ? konu.id : null, outcome_id: null }).eq('id', rowId);
+    setPoolUntagged((prev) => prev.map((r) => r.id === rowId ? { ...r, topic_id: konu ? konu.id : null, outcome_id: null } : r));
+  };
+
+  const updatePoolRowKazanim = async (rowId, topicId, kazanimName) => {
+    const kazanim = learningOutcomes.find((lo) => lo.name === kazanimName && lo.topic_id === topicId);
+    if (!kazanim) return;
+    await supabase.from('question_pool').update({ outcome_id: kazanim.id }).eq('id', rowId);
+    // Kazanım atandı -- bu satır artık "etiketlenmemiş" değil, listeden çıkar.
+    setPoolUntagged((prev) => prev.filter((r) => r.id !== rowId));
   };
 
 
@@ -3996,7 +4058,7 @@ export default function App() {
               🧾 Faturalar
             </button>
             <button
-              onClick={() => setShowPoolImport(true)}
+              onClick={() => { setShowPoolImport(true); fetchUnlabeledPoolQuestions(); }}
               style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
             >
               🗂️ Soru Havuzu
@@ -4733,18 +4795,21 @@ export default function App() {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '820px', maxWidth: '100%', maxHeight: '84vh', display: 'flex', flexDirection: 'column' }}
+              style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '920px', maxWidth: '100%', maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🗂️ Soru Havuzuna Yükle</h2>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🗂️ Soru Havuzu</h2>
                 {!poolImporting && (
                   <button onClick={() => { setShowPoolImport(false); setPoolExcelRows([]); setPoolPdfFiles(new Map()); setPoolImportErrors([]); }} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
                 )}
               </div>
 
+              {/* --- 1) YÜKLEME BÖLÜMÜ --- */}
+              <h3 style={{ fontSize: '0.95rem', margin: '6px 0 8px' }}>Havuza Soru Yükle</h3>
               <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
-                Sütun sırası: 1. Soru PDF (dosya adı), 2. Çözüm PDF (dosya adı, opsiyonel), 3. Ders, 4. Konu, 5. Kazanım, 6. Doğru Cevap (A-E), 7. Kaynak Etiketi (opsiyonel).
-                İlk satır başlık kabul edilir. Her PDF zaten TEK bir soru (1 sayfa) olmalı -- InDesign'da "Create Separate PDF Files" ile böldüğünüz dosyalar. Bu ekranda eklenen sorular hiçbir sınava/pakete bağlanmaz, sadece havuza girer -- daha sonra "Havuzdan Oluştur" ile testlere/denemelere dönüştürülür.
+                Sütun sırası: 1. Soru PDF (dosya adı), 2. Çözüm PDF (dosya adı, opsiyonel), 3. Doğru Cevap (A-E).
+                İlk satır başlık kabul edilir. Her PDF zaten TEK bir soru (1 sayfa) olmalı -- InDesign'da "Create Separate PDF Files" ile böldüğünüz dosyalar.
+                Ders/Konu/Kazanım burada YOK -- yükledikten sonra aşağıdaki "Etiketlenmemiş Sorular" bölümünden dropdown ile atanır.
               </div>
 
               <button
@@ -4769,13 +4834,12 @@ export default function App() {
               </div>
 
               {poolExcelRows.length > 0 && (
-                <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #f1f5f9', borderRadius: '8px' }}>
+                <div style={{ overflowY: 'auto', maxHeight: '220px', border: '1px solid #f1f5f9', borderRadius: '8px', marginBottom: '10px' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
                     <thead>
                       <tr style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
                         <th style={{ textAlign: 'left', padding: '6px 8px' }}>Soru PDF</th>
                         <th style={{ textAlign: 'left', padding: '6px 8px' }}>Çözüm PDF</th>
-                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Ders / Konu / Kazanım</th>
                         <th style={{ textAlign: 'left', padding: '6px 8px' }}>Cevap</th>
                       </tr>
                     </thead>
@@ -4792,7 +4856,6 @@ export default function App() {
                             <td style={{ padding: '5px 8px', color: cozumOk ? '#16a34a' : '#dc2626' }}>
                               {row.cozumPdfName ? (cozumOk ? '✓ ' : '✗ ') + row.cozumPdfName : '—'}
                             </td>
-                            <td style={{ padding: '5px 8px', color: '#334155' }}>{row.ders} / {row.konu} / {row.kazanim}</td>
                             <td style={{ padding: '5px 8px', fontFamily: 'monospace', color: cevapOk ? '#16a34a' : '#dc2626' }}>{row.cevap || '—'}</td>
                           </tr>
                         );
@@ -4803,14 +4866,14 @@ export default function App() {
               )}
 
               {poolImportErrors.length > 0 && (
-                <div style={{ marginTop: '10px', padding: '10px', backgroundColor: '#fef2f2', borderRadius: '6px', maxHeight: '120px', overflowY: 'auto' }}>
+                <div style={{ marginBottom: '10px', padding: '10px', backgroundColor: '#fef2f2', borderRadius: '6px', maxHeight: '120px', overflowY: 'auto' }}>
                   {poolImportErrors.map((err, i) => (
                     <div key={i} style={{ fontSize: '0.74rem', color: '#dc2626' }}>{err}</div>
                   ))}
                 </div>
               )}
 
-              <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '10px' }}>
+              <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '10px' }}>
                 {poolImporting && (
                   <span style={{ fontSize: '0.82rem', color: '#334155' }}>
                     {poolImportProgress.current} / {poolImportProgress.total} işleniyor...
@@ -4825,6 +4888,187 @@ export default function App() {
                   {poolImporting ? 'Yükleniyor...' : `${poolExcelRows.length || ''} Soruyu Havuza Ekle`}
                 </button>
               </div>
+
+              {/* --- 2) ETİKETLEME BÖLÜMÜ --- */}
+              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '16px' }}>
+                <h3 style={{ fontSize: '0.95rem', margin: '0 0 10px' }}>
+                  Etiketlenmemiş Sorular {poolUntagged.length > 0 && `(${poolUntagged.length})`}
+                </h3>
+
+                {poolTaggingLoading ? (
+                  <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Yükleniyor...</p>
+                ) : poolUntagged.length === 0 ? (
+                  <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Etiketlenmeyi bekleyen soru yok -- havuzdaki her soruya Ders/Konu/Kazanım atanmış.</p>
+                ) : (
+                  <>
+                    {/* ⚡ Tek Kazanım Uygula -- listedeki TÜM sorular aynı kazanımdansa (ki genelde aynı anda yüklenenler öyledir). */}
+                    <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px', marginBottom: '14px' }}>
+                      <div style={{ fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '8px' }}>⚡ Tek Kazanım Uygula (bu grubun tüm soruları aynı konuysa)</div>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                        <select
+                          value={quickPoolDers}
+                          onChange={(e) => { setQuickPoolDers(e.target.value); setQuickPoolKonu(''); setQuickPoolKazanim(''); }}
+                          style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
+                        >
+                          <option value="">Ders Türü Seçin</option>
+                          {lessonCategories.map((lc) => <option key={lc.id} value={lc.name}>{lc.name}</option>)}
+                        </select>
+
+                        <select
+                          value={quickPoolKonu}
+                          onChange={(e) => { setQuickPoolKonu(e.target.value); setQuickPoolKazanim(''); }}
+                          disabled={!quickPoolDers}
+                          style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
+                        >
+                          <option value="">{quickPoolDers ? 'Konu Seçin' : 'Önce Ders Türü seçin'}</option>
+                          {quickPoolDers && topics
+                            .filter((t) => {
+                              const ders = lessonCategories.find((lc) => lc.name === quickPoolDers);
+                              return ders && t.lesson_category_id === ders.id;
+                            })
+                            .map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                        </select>
+                        {quickPoolDers && !showNewTopicInputPool && (
+                          <button type="button" onClick={() => setShowNewTopicInputPool(true)} style={{ fontSize: '0.72rem', padding: '5px 8px', borderRadius: '6px', border: '1px dashed #94a3b8', backgroundColor: '#fff', cursor: 'pointer' }}>+ Yeni Konu</button>
+                        )}
+                        {showNewTopicInputPool && (
+                          <>
+                            <input
+                              type="text"
+                              value={newTopicNamePool}
+                              onChange={(e) => setNewTopicNamePool(e.target.value)}
+                              placeholder="Yeni konu adı"
+                              style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const ders = lessonCategories.find((lc) => lc.name === quickPoolDers);
+                                if (!ders || !newTopicNamePool.trim()) return;
+                                addTopicForLessonCategoryId(ders.id, newTopicNamePool.trim(), (created) => {
+                                  setQuickPoolKonu(created.name);
+                                  setShowNewTopicInputPool(false);
+                                  setNewTopicNamePool('');
+                                });
+                              }}
+                              style={{ fontSize: '0.72rem', padding: '5px 8px', borderRadius: '6px', border: '1px solid #16a34a', color: '#16a34a', backgroundColor: '#fff', cursor: 'pointer' }}
+                            >Ekle</button>
+                          </>
+                        )}
+
+                        <select
+                          value={quickPoolKazanim}
+                          onChange={(e) => setQuickPoolKazanim(e.target.value)}
+                          disabled={!quickPoolKonu}
+                          style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
+                        >
+                          <option value="">{quickPoolKonu ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
+                          {quickPoolKonu && learningOutcomes
+                            .filter((lo) => {
+                              const konu = topics.find((t) => t.name === quickPoolKonu);
+                              return konu && lo.topic_id === konu.id;
+                            })
+                            .map((lo) => <option key={lo.id} value={lo.name}>{lo.name}</option>)}
+                        </select>
+                        {quickPoolKonu && !showNewOutcomeInputPool && (
+                          <button type="button" onClick={() => setShowNewOutcomeInputPool(true)} style={{ fontSize: '0.72rem', padding: '5px 8px', borderRadius: '6px', border: '1px dashed #94a3b8', backgroundColor: '#fff', cursor: 'pointer' }}>+ Yeni Kazanım</button>
+                        )}
+                        {showNewOutcomeInputPool && (
+                          <>
+                            <input
+                              type="text"
+                              value={newOutcomeNamePool}
+                              onChange={(e) => setNewOutcomeNamePool(e.target.value)}
+                              placeholder="Yeni kazanım adı"
+                              style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const konu = topics.find((t) => t.name === quickPoolKonu);
+                                if (!konu || !newOutcomeNamePool.trim()) return;
+                                handleAddLearningOutcome(konu.id, newOutcomeNamePool.trim(), (created) => {
+                                  setQuickPoolKazanim(created.name);
+                                  setShowNewOutcomeInputPool(false);
+                                  setNewOutcomeNamePool('');
+                                });
+                              }}
+                              style={{ fontSize: '0.72rem', padding: '5px 8px', borderRadius: '6px', border: '1px solid #16a34a', color: '#16a34a', backgroundColor: '#fff', cursor: 'pointer' }}
+                            >Ekle</button>
+                          </>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => applyQuickKazanimToPool(quickPoolDers, quickPoolKonu, quickPoolKazanim)}
+                          disabled={!quickPoolDers || !quickPoolKonu || !quickPoolKazanim}
+                          className="yt-btn yt-btn-primary"
+                          style={{ fontSize: '0.78rem', padding: '6px 12px', opacity: (!quickPoolDers || !quickPoolKonu || !quickPoolKazanim) ? 0.5 : 1 }}
+                        >
+                          Tümüne Uygula ({poolUntagged.length})
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Satır satır -- karışık bir grup yüklendiyse (aynı anda birden fazla kazanıma ait sorular varsa) her satır kendi Ders/Konu/Kazanım'ını dropdown'dan seçer. */}
+                    <div style={{ overflowY: 'auto', maxHeight: '320px', border: '1px solid #f1f5f9', borderRadius: '8px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                        <thead>
+                          <tr style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Soru</th>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Ders</th>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Konu</th>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Kazanım</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {poolUntagged.map((row) => {
+                            const rowDers = lessonCategories.find((lc) => lc.id === row.lesson_category_id);
+                            const rowKonu = topics.find((t) => t.id === row.topic_id);
+                            return (
+                              <tr key={row.id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                                <td style={{ padding: '5px 8px', color: '#334155' }}>#{row.id}{row.source_label ? ` (${row.source_label})` : ''}</td>
+                                <td style={{ padding: '5px 8px' }}>
+                                  <select
+                                    value={rowDers ? rowDers.name : ''}
+                                    onChange={(e) => updatePoolRowDers(row.id, e.target.value)}
+                                    style={{ padding: '4px 6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.76rem' }}
+                                  >
+                                    <option value="">Ders Seçin</option>
+                                    {lessonCategories.map((lc) => <option key={lc.id} value={lc.name}>{lc.name}</option>)}
+                                  </select>
+                                </td>
+                                <td style={{ padding: '5px 8px' }}>
+                                  <select
+                                    value={rowKonu ? rowKonu.name : ''}
+                                    onChange={(e) => updatePoolRowKonu(row.id, row.lesson_category_id, e.target.value)}
+                                    disabled={!row.lesson_category_id}
+                                    style={{ padding: '4px 6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.76rem' }}
+                                  >
+                                    <option value="">{row.lesson_category_id ? 'Konu Seçin' : 'Önce Ders seçin'}</option>
+                                    {topics.filter((t) => t.lesson_category_id === row.lesson_category_id).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                                  </select>
+                                </td>
+                                <td style={{ padding: '5px 8px' }}>
+                                  <select
+                                    value=""
+                                    onChange={(e) => updatePoolRowKazanim(row.id, row.topic_id, e.target.value)}
+                                    disabled={!row.topic_id}
+                                    style={{ padding: '4px 6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.76rem' }}
+                                  >
+                                    <option value="">{row.topic_id ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
+                                    {learningOutcomes.filter((lo) => lo.topic_id === row.topic_id).map((lo) => <option key={lo.id} value={lo.name}>{lo.name}</option>)}
+                                  </select>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -4835,6 +5079,7 @@ export default function App() {
             ⏳ İşlem yapılıyor, lütfen bekleyin...
           </div>
         )}
+
 
         {!adminActiveExam && !isCreatingExam ? (
           <div>
