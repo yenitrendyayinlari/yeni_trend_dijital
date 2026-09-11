@@ -248,6 +248,18 @@ export default function App() {
   const [billingRecords, setBillingRecords] = useState([]);
   const [billingRecordsLoading, setBillingRecordsLoading] = useState(false);
   const [billingSearch, setBillingSearch] = useState('');
+
+  // Soru Havuzu (Faz 2 -- Excel'den Toplu Test Yükle'nin aynısı, ama hedefi
+  // "bir sınav/paket" DEĞİL, bağımsız question_pool tablosu. Her satır kendi
+  // PDF'i olan TEK bir soru -- artık her PDF zaten 1 sayfa/1 soru olduğu için
+  // (InDesign'dan "Create Separate PDF Files" ile bölünmüş), sayfa sayısı
+  // okuma/tahmin etme gibi bir adıma hiç gerek yok.
+  const [showPoolImport, setShowPoolImport] = useState(false);
+  const [poolExcelRows, setPoolExcelRows] = useState([]); // [{soruPdfName, cozumPdfName, ders, konu, kazanim, cevap, kaynakEtiketi}]
+  const [poolPdfFiles, setPoolPdfFiles] = useState(new Map()); // dosya adı (küçük harf) -> File
+  const [poolImporting, setPoolImporting] = useState(false);
+  const [poolImportProgress, setPoolImportProgress] = useState({ current: 0, total: 0 });
+  const [poolImportErrors, setPoolImportErrors] = useState([]);
   // Ödeme öncesi ZORUNLU fatura bilgisi adımı: öğrenci fatura bilgisini
   // henüz girmemişse, ödemeye (iyzico'ya veya bakiye ile ücretsiz karşılamaya)
   // geçmeden ÖNCE bu bilgiyi istiyoruz -- aksi halde ödeme tamamlanıp fatura
@@ -2160,6 +2172,164 @@ export default function App() {
     XLSX.writeFile(wb, 'toplu-test-yukleme-sablonu.xlsx');
   };
 
+  // Soru Havuzu Excel Şablonu -- her satır TEK bir soru. Sütun sırası:
+  // 1. Soru PDF (dosya adı), 2. Çözüm PDF (dosya adı, opsiyonel), 3. Ders,
+  // 4. Konu, 5. Kazanım, 6. Doğru Cevap (A-E), 7. Kaynak Etiketi (opsiyonel).
+  const downloadPoolImportTemplate = () => {
+    const rows = [['Soru PDF (dosya adı)', 'Çözüm PDF (dosya adı, opsiyonel)', 'Ders', 'Konu', 'Kazanım', 'Doğru Cevap (A-E)', 'Kaynak Etiketi (opsiyonel)']];
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Soru Havuzu');
+    XLSX.writeFile(wb, 'soru-havuzu-yukleme-sablonu.xlsx');
+  };
+
+  const handlePoolExcelSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        const parsed = [];
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row || row.length === 0) continue;
+          const soruPdfName = String(row[0] || '').trim();
+          if (!soruPdfName) continue;
+          parsed.push({
+            soruPdfName,
+            cozumPdfName: String(row[1] || '').trim(),
+            ders: String(row[2] || '').trim(),
+            konu: String(row[3] || '').trim(),
+            kazanim: String(row[4] || '').trim(),
+            cevap: String(row[5] || '').trim().toUpperCase(),
+            kaynakEtiketi: String(row[6] || '').trim(),
+          });
+        }
+        if (parsed.length === 0) {
+          alert('Excel dosyasında geçerli satır bulunamadı. Sütun sırasının Soru PDF / Çözüm PDF / Ders / Konu / Kazanım / Doğru Cevap / Kaynak Etiketi olduğundan emin olun.');
+          return;
+        }
+        setPoolExcelRows(parsed);
+      } catch (err) {
+        alert('Excel dosyası okunamadı: ' + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handlePoolPdfSelect = (e) => {
+    const files = Array.from(e.target.files || []);
+    const map = new Map();
+    files.forEach((f) => map.set(f.name.toLowerCase(), f));
+    setPoolPdfFiles(map);
+  };
+
+  // Havuza toplu yükleme: her satır BAĞIMSIZ bir question_pool kaydı
+  // oluşturur -- hiçbir "sınav/paket"e bağlanmaz. Ders/Konu/Kazanım,
+  // Kategori Yönetimi'ndeki master listeyle BİREBİR eşleşmek zorunda
+  // (topicMap Excel yüklemesindeki resolveEntryIds ile aynı mantık) --
+  // aksi halde o soru öneri motoru tarafından hiç görülemez. Sayfa sayısı
+  // okumaya hiç gerek yok çünkü her PDF zaten tam olarak 1 sayfa/1 soru
+  // (InDesign'dan "Create Separate PDF Files" ile bölünmüş dosyalar).
+  const runPoolImport = async () => {
+    if (poolExcelRows.length === 0) return;
+
+    setPoolImporting(true);
+    setPoolImportErrors([]);
+    setPoolImportProgress({ current: 0, total: poolExcelRows.length });
+
+    const errors = [];
+
+    for (let i = 0; i < poolExcelRows.length; i++) {
+      const row = poolExcelRows[i];
+      setPoolImportProgress({ current: i + 1, total: poolExcelRows.length });
+      const rowLabel = row.soruPdfName || `Satır ${i + 1}`;
+
+      try {
+        // 1) Ders/Konu/Kazanım'ı Kategori Yönetimi'ndeki master listeyle
+        // BİREBİR eşleştir (topicMap Excel yüklemesiyle aynı kural).
+        const lesson = lessonCategories.find((lc) => lc.name === row.ders);
+        const topic = lesson ? topics.find((t) => t.name === row.konu && t.lesson_category_id === lesson.id) : null;
+        const outcome = topic ? learningOutcomes.find((o) => o.name === row.kazanim && o.topic_id === topic.id) : null;
+
+        if (!lesson) {
+          errors.push(`${rowLabel}: Ders Türü "${row.ders}" bulunamadı.${suggestClosestName(lessonCategories, row.ders)}`);
+          continue;
+        }
+        if (!topic) {
+          errors.push(`${rowLabel}: "${lesson.name}" ders türünde "${row.konu}" adında bir Konu bulunamadı.${suggestClosestName(topics.filter((t) => t.lesson_category_id === lesson.id), row.konu)}`);
+          continue;
+        }
+        if (!outcome) {
+          errors.push(`${rowLabel}: "${topic.name}" konusunda "${row.kazanim}" adında bir Kazanım bulunamadı.${suggestClosestName(learningOutcomes.filter((o) => o.topic_id === topic.id), row.kazanim)}`);
+          continue;
+        }
+        if (!['A', 'B', 'C', 'D', 'E'].includes(row.cevap)) {
+          errors.push(`${rowLabel}: Doğru cevap "${row.cevap}" geçersiz -- A, B, C, D ya da E olmalı.`);
+          continue;
+        }
+
+        // 2) Soru PDF'ini eşleştir ve yükle (zorunlu).
+        const soruFile = poolPdfFiles.get(row.soruPdfName.toLowerCase());
+        if (!soruFile) {
+          errors.push(`${rowLabel}: "${row.soruPdfName}" adlı dosya seçilenler arasında bulunamadı.`);
+          continue;
+        }
+        const soruExt = soruFile.name.split('.').pop();
+        const soruStorageName = `pool_${Math.random().toString(36).substring(2)}_${Date.now()}.${soruExt}`;
+        const { error: soruUpErr } = await supabase.storage.from('exam-files').upload(soruStorageName, soruFile);
+        if (soruUpErr) throw new Error('Soru PDF yüklenemedi: ' + soruUpErr.message);
+
+        // 3) Çözüm PDF'i (opsiyonel) eşleştir ve yükle.
+        let cozumStorageName = null;
+        if (row.cozumPdfName) {
+          const cozumFile = poolPdfFiles.get(row.cozumPdfName.toLowerCase());
+          if (!cozumFile) {
+            errors.push(`${rowLabel}: "${row.cozumPdfName}" adlı çözüm dosyası seçilenler arasında bulunamadı (soru yine de havuza eklendi).`);
+          } else {
+            const cozumExt = cozumFile.name.split('.').pop();
+            cozumStorageName = `pool_sol_${Math.random().toString(36).substring(2)}_${Date.now()}.${cozumExt}`;
+            const { error: cozumUpErr } = await supabase.storage.from('exam-files').upload(cozumStorageName, cozumFile);
+            if (cozumUpErr) {
+              errors.push(`${rowLabel}: Çözüm PDF yüklenemedi: ${cozumUpErr.message} (soru yine de havuza eklendi).`);
+              cozumStorageName = null;
+            }
+          }
+        }
+
+        // 4) question_pool kaydını oluştur.
+        const { error: insertErr } = await supabase.from('question_pool').insert([{
+          pdf_file: soruStorageName,
+          solution_pdf_file: cozumStorageName,
+          correct_answer: row.cevap,
+          lesson_category_id: lesson.id,
+          topic_id: topic.id,
+          outcome_id: outcome.id,
+          source_label: row.kaynakEtiketi || null,
+        }]);
+        if (insertErr) throw new Error('Havuz kaydı oluşturulamadı: ' + insertErr.message);
+      } catch (err) {
+        errors.push(`${rowLabel}: ${err.message}`);
+      }
+    }
+
+    setPoolImportErrors(errors);
+    setPoolImporting(false);
+
+    if (errors.length === 0) {
+      alert(`✓ ${poolExcelRows.length} soru havuza eklendi.`);
+      setShowPoolImport(false);
+      setPoolExcelRows([]);
+      setPoolPdfFiles(new Map());
+    } else {
+      alert(`${poolExcelRows.length - errors.length}/${poolExcelRows.length} soru havuza eklendi. ${errors.length} satırda sorun oldu -- listeyi kontrol edin.`);
+    }
+  };
+
 
   const handleTopicMapUpload = (examId, e) => {
     const file = e.target.files[0];
@@ -3825,6 +3995,12 @@ export default function App() {
             >
               🧾 Faturalar
             </button>
+            <button
+              onClick={() => setShowPoolImport(true)}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              🗂️ Soru Havuzu
+            </button>
             <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
           </div>
         </header>
@@ -4543,6 +4719,110 @@ export default function App() {
                   style={{ opacity: (bulkImporting || bulkExcelRows.length === 0) ? 0.5 : 1 }}
                 >
                   {bulkImporting ? 'Yükleniyor...' : `${bulkExcelRows.length || ''} Testi İçe Aktar`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+
+        {showPoolImport && (
+          <div
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+            onClick={() => { if (!poolImporting) setShowPoolImport(false); }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '820px', maxWidth: '100%', maxHeight: '84vh', display: 'flex', flexDirection: 'column' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🗂️ Soru Havuzuna Yükle</h2>
+                {!poolImporting && (
+                  <button onClick={() => { setShowPoolImport(false); setPoolExcelRows([]); setPoolPdfFiles(new Map()); setPoolImportErrors([]); }} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+                )}
+              </div>
+
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
+                Sütun sırası: 1. Soru PDF (dosya adı), 2. Çözüm PDF (dosya adı, opsiyonel), 3. Ders, 4. Konu, 5. Kazanım, 6. Doğru Cevap (A-E), 7. Kaynak Etiketi (opsiyonel).
+                İlk satır başlık kabul edilir. Her PDF zaten TEK bir soru (1 sayfa) olmalı -- InDesign'da "Create Separate PDF Files" ile böldüğünüz dosyalar. Bu ekranda eklenen sorular hiçbir sınava/pakete bağlanmaz, sadece havuza girer -- daha sonra "Havuzdan Oluştur" ile testlere/denemelere dönüştürülür.
+              </div>
+
+              <button
+                type="button"
+                onClick={downloadPoolImportTemplate}
+                style={{ alignSelf: 'flex-start', marginBottom: '14px', padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', color: '#334155', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}
+              >
+                📥 Boş Excel Şablonu İndir
+              </button>
+
+              <div style={{ display: 'flex', gap: '16px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                <div style={{ flex: '1 1 300px' }}>
+                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>1. Excel Dosyası</label>
+                  <input type="file" accept=".xlsx,.xls" onChange={handlePoolExcelSelect} disabled={poolImporting} style={{ fontSize: '0.8rem', width: '100%' }} />
+                  {poolExcelRows.length > 0 && <div style={{ fontSize: '0.76rem', color: '#16a34a', marginTop: '4px' }}>✓ {poolExcelRows.length} satır okundu.</div>}
+                </div>
+                <div style={{ flex: '1 1 300px' }}>
+                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>2. PDF Dosyaları (soru + çözüm, hepsi bir arada)</label>
+                  <input type="file" accept="application/pdf" multiple onChange={handlePoolPdfSelect} disabled={poolImporting} style={{ fontSize: '0.8rem', width: '100%' }} />
+                  {poolPdfFiles.size > 0 && <div style={{ fontSize: '0.76rem', color: '#16a34a', marginTop: '4px' }}>✓ {poolPdfFiles.size} dosya seçildi.</div>}
+                </div>
+              </div>
+
+              {poolExcelRows.length > 0 && (
+                <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #f1f5f9', borderRadius: '8px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Soru PDF</th>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Çözüm PDF</th>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Ders / Konu / Kazanım</th>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Cevap</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {poolExcelRows.map((row, i) => {
+                        const soruOk = row.soruPdfName && poolPdfFiles.has(row.soruPdfName.toLowerCase());
+                        const cozumOk = !row.cozumPdfName || poolPdfFiles.has(row.cozumPdfName.toLowerCase());
+                        const cevapOk = ['A', 'B', 'C', 'D', 'E'].includes(row.cevap);
+                        return (
+                          <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
+                            <td style={{ padding: '5px 8px', color: soruOk ? '#16a34a' : '#dc2626' }}>
+                              {row.soruPdfName ? (soruOk ? '✓ ' : '✗ ') + row.soruPdfName : '—'}
+                            </td>
+                            <td style={{ padding: '5px 8px', color: cozumOk ? '#16a34a' : '#dc2626' }}>
+                              {row.cozumPdfName ? (cozumOk ? '✓ ' : '✗ ') + row.cozumPdfName : '—'}
+                            </td>
+                            <td style={{ padding: '5px 8px', color: '#334155' }}>{row.ders} / {row.konu} / {row.kazanim}</td>
+                            <td style={{ padding: '5px 8px', fontFamily: 'monospace', color: cevapOk ? '#16a34a' : '#dc2626' }}>{row.cevap || '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {poolImportErrors.length > 0 && (
+                <div style={{ marginTop: '10px', padding: '10px', backgroundColor: '#fef2f2', borderRadius: '6px', maxHeight: '120px', overflowY: 'auto' }}>
+                  {poolImportErrors.map((err, i) => (
+                    <div key={i} style={{ fontSize: '0.74rem', color: '#dc2626' }}>{err}</div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '10px' }}>
+                {poolImporting && (
+                  <span style={{ fontSize: '0.82rem', color: '#334155' }}>
+                    {poolImportProgress.current} / {poolImportProgress.total} işleniyor...
+                  </span>
+                )}
+                <button
+                  onClick={runPoolImport}
+                  disabled={poolImporting || poolExcelRows.length === 0}
+                  className="yt-btn yt-btn-primary"
+                  style={{ opacity: (poolImporting || poolExcelRows.length === 0) ? 0.5 : 1 }}
+                >
+                  {poolImporting ? 'Yükleniyor...' : `${poolExcelRows.length || ''} Soruyu Havuza Ekle`}
                 </button>
               </div>
             </div>
