@@ -39,7 +39,57 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { examId, type } = req.body || {};
+  const { examId, poolId, type } = req.body || {};
+
+  // --- SORU HAVUZU (question_pool) DALI ---
+  // Bu tamamen ayrı bir dal: Soru Havuzu SADECE admin panelinden (İçerik
+  // Ayarları'ndaki gibi bir "İncele/Düzenle" ekranından) kullanılıyor.
+  // Öğrenci tarafında hiç gösterilmiyor, hiçbir satın alma/ücretsiz kontrolü
+  // yok -- sadece "bu admin@yayinevi.com mu" kontrolü var. Mevcut exam
+  // mantığına hiç dokunmuyor, tamamen kendi başına.
+  if (poolId) {
+    if (!['pool-question', 'pool-solution'].includes(type)) {
+      return res.status(400).json({ error: 'Geçersiz istek' });
+    }
+
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) {
+      return res.status(401).json({ error: 'Bu içeriği görmek için giriş yapmalısınız.' });
+    }
+
+    const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
+    if (userError || !userData?.user?.email || userData.user.email !== 'admin@yayinevi.com') {
+      return res.status(403).json({ error: 'Bu içeriğe erişim yetkiniz yok.' });
+    }
+
+    const { data: poolRow, error: poolError } = await supabaseAdmin
+      .from('question_pool')
+      .select('id, pdf_file, solution_pdf_file')
+      .eq('id', poolId)
+      .single();
+
+    if (poolError || !poolRow) {
+      return res.status(404).json({ error: 'Havuz sorusu bulunamadı' });
+    }
+
+    const poolSourceValue = type === 'pool-solution' ? poolRow.solution_pdf_file : poolRow.pdf_file;
+    const poolPath = extractStoragePath(poolSourceValue);
+    if (!poolPath) {
+      return res.status(404).json({ error: 'PDF bulunamadı' });
+    }
+
+    const { data: poolSigned, error: poolSignError } = await supabaseAdmin
+      .storage.from(BUCKET)
+      .createSignedUrl(poolPath, SIGNED_URL_TTL);
+
+    if (poolSignError || !poolSigned) {
+      return res.status(500).json({ error: 'Dosya adresi oluşturulamadı' });
+    }
+    return res.status(200).json({ url: poolSigned.signedUrl });
+  }
+  // --- SORU HAVUZU DALI SONU ---
+
   if (!examId || !['exam', 'solution', 'exam-preview'].includes(type)) {
     return res.status(400).json({ error: 'Geçersiz istek' });
   }
