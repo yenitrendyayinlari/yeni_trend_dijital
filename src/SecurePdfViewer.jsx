@@ -9,14 +9,17 @@ import { supabase } from './supabase';
 // sayfa değiştirmede tekrar tekrar istek atılmasını engeller.
 const urlCache = {};
 
-export default function SecurePdfViewer({ examId, type, pageNumber, onDocumentLoadSuccess }) {
+export default function SecurePdfViewer({ examId, poolId, type, pageNumber, onDocumentLoadSuccess }) {
   const [signedUrl, setSignedUrl] = useState(null);
   const [error, setError] = useState(null);
   const requestedKeyRef = useRef(null);
 
   useEffect(() => {
-    if (!examId || !type) return;
-    const cacheKey = `${type}:${examId}`;
+    // poolId varsa Soru Havuzu modundayız -- examId yerine poolId
+    // kullanılır (bkz. get-pdf-url.js'teki ayrı "SORU HAVUZU" dalı).
+    const idKey = poolId || examId;
+    if (!idKey || !type) return;
+    const cacheKey = `${type}:${idKey}`;
 
     const cached = urlCache[cacheKey];
     if (cached && cached.expiresAt > Date.now()) {
@@ -39,10 +42,11 @@ export default function SecurePdfViewer({ examId, type, pageNumber, onDocumentLo
           if (token) headers.Authorization = `Bearer ${token}`;
         }
 
+        const requestBody = poolId ? { poolId, type } : { examId, type };
         const resp = await fetch('/api/get-pdf-url', {
           method: 'POST',
           headers,
-          body: JSON.stringify({ examId, type })
+          body: JSON.stringify(requestBody)
         });
         const result = await resp.json();
 
@@ -69,7 +73,8 @@ export default function SecurePdfViewer({ examId, type, pageNumber, onDocumentLo
 
     fetchUrl();
     return () => { cancelled = true; };
-  }, [examId, type]);
+  }, [examId, poolId, type]);
+
 
   if (error) {
     return <div style={{ textAlign: 'center', padding: '40px', color: '#dc2626' }}>{error}</div>;
