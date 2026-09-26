@@ -258,6 +258,7 @@ export default function App() {
   // gibi, metne değil ID'ye bağlı.
   const [showPoolImport, setShowPoolImport] = useState(false);
   const [poolExcelRows, setPoolExcelRows] = useState([]); // [{soruPdfName, cozumPdfName, cevap}]
+  const [poolGroupName, setPoolGroupName] = useState(''); // Kullanıcının verdiği yükleme grubu adı (ör. "Biyoloji Kitabı 1")
   const [poolPdfFiles, setPoolPdfFiles] = useState(new Map()); // dosya adı (küçük harf) -> File
   const [poolImporting, setPoolImporting] = useState(false);
   const [poolImportProgress, setPoolImportProgress] = useState({ current: 0, total: 0 });
@@ -266,7 +267,15 @@ export default function App() {
   // Havuz Kazanım Ataması: outcome_id'si NULL olan (henüz etiketlenmemiş)
   // havuz soruları ve bunları etiketlemek için kullanılan "Tek Kazanım
   // Uygula" alanları.
+  // ÖNEMLİ: Farklı yükleme oturumlarındaki (ör. 492 soruluk bir grup + daha
+  // sonra ayrı bir günde yüklenen 100 soruluk başka bir grup) etiketsiz
+  // sorular birbirine KARIŞMASIN diye, her yükleme kendi upload_batch_id'siyle
+  // etiketleniyor. Etiketleme ekranı artık TÜM etiketsiz soruları tek listede
+  // göstermek yerine, önce "hangi yükleme grubu" diye soruyor -- "Tümüne
+  // Uygula" sadece SEÇİLİ gruba uygulanıyor, başka gruplara asla dokunmuyor.
   const [poolUntagged, setPoolUntagged] = useState([]);
+  const [poolBatches, setPoolBatches] = useState([]); // [{batch_id, count, created_at}]
+  const [selectedPoolBatch, setSelectedPoolBatch] = useState(null);
   const [poolTaggingLoading, setPoolTaggingLoading] = useState(false);
   const [quickPoolDers, setQuickPoolDers] = useState('');
   const [quickPoolKonu, setQuickPoolKonu] = useState('');
@@ -275,6 +284,23 @@ export default function App() {
   const [newTopicNamePool, setNewTopicNamePool] = useState('');
   const [showNewOutcomeInputPool, setShowNewOutcomeInputPool] = useState(false);
   const [newOutcomeNamePool, setNewOutcomeNamePool] = useState('');
+
+  // --- Havuz Listesi + Detay Paneli ---
+  // Ayrı bir ekran: havuzdaki (etiketli/etiketsiz FARK ETMEKSİZİN) TÜM
+  // soruları listeleyip, bir soruya tıklayınca -- İçerik Ayarları
+  // ekranınızdaki gibi -- solda gerçek PDF önizlemesi, sağda düzenlenebilir
+  // alanlar (Ders/Konu/Kazanım, Doğru Cevap, PDF değiştirme) ve "hangi
+  // testlerde kullanıldı" bilgisini gösteren bir panel açılır.
+  const [showPoolBrowser, setShowPoolBrowser] = useState(false);
+  const [poolBrowserLoading, setPoolBrowserLoading] = useState(false);
+  const [poolBrowserRows, setPoolBrowserRows] = useState([]);
+  const [poolBrowserFilterTag, setPoolBrowserFilterTag] = useState('all'); // all | tagged | untagged
+  const [poolBrowserSearch, setPoolBrowserSearch] = useState('');
+  const [selectedPoolQuestionId, setSelectedPoolQuestionId] = useState(null);
+  const [poolDetailUsage, setPoolDetailUsage] = useState([]);
+  const [poolDetailUsageLoading, setPoolDetailUsageLoading] = useState(false);
+  const [poolDetailUploading, setPoolDetailUploading] = useState(false);
+
   // Ödeme öncesi ZORUNLU fatura bilgisi adımı: öğrenci fatura bilgisini
   // henüz girmemişse, ödemeye (iyzico'ya veya bakiye ile ücretsiz karşılamaya)
   // geçmeden ÖNCE bu bilgiyi istiyoruz -- aksi halde ödeme tamamlanıp fatura
@@ -2251,12 +2277,22 @@ export default function App() {
   // dosyalar).
   const runPoolImport = async () => {
     if (poolExcelRows.length === 0) return;
+    if (!poolGroupName.trim()) {
+      alert('Lütfen bu yükleme için bir Grup Adı girin (ör. "Biyoloji Kitabı 1") -- etiketleme ekranında bu grubu bu isimle bulacaksınız.');
+      return;
+    }
 
     setPoolImporting(true);
     setPoolImportErrors([]);
     setPoolImportProgress({ current: 0, total: poolExcelRows.length });
 
     const errors = [];
+    // Bu içe aktarmanın TAMAMI, admin'in kendi verdiği grup adına (metin)
+    // girer -- böylece daha sonra başka bir oturumda yüklenecek farklı bir
+    // grupla karışmaz, etiketleme ekranında isimle seçilebilir. Aynı ismi
+    // tekrar kullanırsanız (ör. aynı gruba sonradan soru eklerken) bilerek
+    // aynı gruba dahil olur.
+    const batchId = poolGroupName.trim();
 
     for (let i = 0; i < poolExcelRows.length; i++) {
       const row = poolExcelRows[i];
@@ -2302,6 +2338,7 @@ export default function App() {
           pdf_file: soruStorageName,
           solution_pdf_file: cozumStorageName,
           correct_answer: row.cevap,
+          upload_batch_id: batchId,
         }]);
         if (insertErr) throw new Error('Havuz kaydı oluşturulamadı: ' + insertErr.message);
       } catch (err) {
@@ -2313,25 +2350,58 @@ export default function App() {
     setPoolImporting(false);
 
     if (errors.length === 0) {
-      alert(`✓ ${poolExcelRows.length} soru havuza eklendi. Şimdi aşağıdan Ders/Konu/Kazanım atayabilirsiniz.`);
+      alert(`✓ ${poolExcelRows.length} soru "${poolGroupName}" grubuna eklendi. Şimdi aşağıdan Ders/Konu/Kazanım atayabilirsiniz.`);
       setPoolExcelRows([]);
       setPoolPdfFiles(new Map());
+      setPoolGroupName('');
     } else {
       alert(`${poolExcelRows.length - errors.length}/${poolExcelRows.length} soru havuza eklendi. ${errors.length} satırda sorun oldu -- listeyi kontrol edin.`);
     }
-    fetchUnlabeledPoolQuestions();
+    // Yeni yüklenen grubu otomatik seçip doğrudan etiketleme ekranına
+    // düşürüyoruz -- admin ekstra bir tıklama yapmadan devam edebilsin.
+    await fetchPoolBatches();
+    setSelectedPoolBatch(batchId);
   };
 
   // --- Havuz Kazanım Ataması ---
-  // Ders/Konu/Kazanım'ı hiç girilmemiş (outcome_id NULL) havuz sorularını
-  // getirir.
-  const fetchUnlabeledPoolQuestions = async () => {
+  // Etiketsiz (outcome_id NULL) soruları YÜKLEME GRUBUNA göre gruplar --
+  // her grup kendi upload_batch_id'siyle ayrı ayrı listelenir, böylece
+  // farklı oturumlarda yüklenen gruplar birbirine karışmaz.
+  const fetchPoolBatches = async () => {
     setPoolTaggingLoading(true);
     const { data, error } = await supabase
       .from('question_pool')
-      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, source_label, created_at')
+      .select('upload_batch_id, created_at')
       .is('outcome_id', null)
       .order('created_at', { ascending: false });
+    setPoolTaggingLoading(false);
+    if (error) {
+      console.error('Yükleme grupları okunamadı:', error);
+      return;
+    }
+    const grouped = new Map();
+    (data || []).forEach((row) => {
+      const key = row.upload_batch_id || 'grupsuz';
+      if (!grouped.has(key)) {
+        grouped.set(key, { batch_id: row.upload_batch_id, count: 0, created_at: row.created_at });
+      }
+      grouped.get(key).count++;
+    });
+    setPoolBatches(Array.from(grouped.values()));
+  };
+
+  // SADECE seçili yükleme grubundaki (batchId) etiketsiz soruları getirir --
+  // diğer gruplara hiç dokunmaz.
+  const fetchUnlabeledPoolQuestions = async (batchId) => {
+    if (!batchId) { setPoolUntagged([]); return; }
+    setPoolTaggingLoading(true);
+    let query = supabase
+      .from('question_pool')
+      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, source_label, created_at, upload_batch_id')
+      .is('outcome_id', null)
+      .order('created_at', { ascending: false });
+    query = batchId === 'grupsuz' ? query.is('upload_batch_id', null) : query.eq('upload_batch_id', batchId);
+    const { data, error } = await query;
     setPoolTaggingLoading(false);
     if (!error && data) {
       setPoolUntagged(data);
@@ -2367,6 +2437,8 @@ export default function App() {
     }
     alert(`✓ ${ids.length} sorunun tamamına "${ders.name} / ${konu.name} / ${kazanim.name}" uygulandı.`);
     setPoolUntagged([]);
+    setSelectedPoolBatch(null);
+    fetchPoolBatches();
   };
 
   // Satır satır etiketleme: her dropdown değişikliği ANINDA o havuz
@@ -2389,7 +2461,106 @@ export default function App() {
     if (!kazanim) return;
     await supabase.from('question_pool').update({ outcome_id: kazanim.id }).eq('id', rowId);
     // Kazanım atandı -- bu satır artık "etiketlenmemiş" değil, listeden çıkar.
-    setPoolUntagged((prev) => prev.filter((r) => r.id !== rowId));
+    setPoolUntagged((prev) => {
+      const updated = prev.filter((r) => r.id !== rowId);
+      // Bu, seçili gruptaki SON soruysa, grup listesini de tazeleyip
+      // grup seçimini sıfırlıyoruz -- artık tamamen etiketlenmiş bir grup
+      // için "0 soru" gösteren eski bir buton kalmasın.
+      if (updated.length === 0) {
+        fetchPoolBatches();
+        setSelectedPoolBatch(null);
+      }
+      return updated;
+    });
+  };
+
+  // --- Havuz Listesi + Detay Paneli ---
+
+  const fetchPoolBrowserRows = async () => {
+    setPoolBrowserLoading(true);
+    let query = supabase
+      .from('question_pool')
+      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, upload_batch_id, used_count, created_at')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (poolBrowserFilterTag === 'tagged') query = query.not('outcome_id', 'is', null);
+    if (poolBrowserFilterTag === 'untagged') query = query.is('outcome_id', null);
+    if (poolBrowserSearch.trim()) query = query.ilike('upload_batch_id', `%${poolBrowserSearch.trim()}%`);
+    const { data, error } = await query;
+    setPoolBrowserLoading(false);
+    if (!error && data) {
+      setPoolBrowserRows(data);
+    } else if (error) {
+      console.error('Havuz listesi okunamadı:', error);
+    }
+  };
+
+  // Bir soruya tıklayınca detay panelini açar -- "hangi testlerde kullanıldı"
+  // bilgisini de question_pool_usage + exams üzerinden çeker (bkz. daha
+  // önce kurduğumuz question_pool_usage tablosu -- şu an henüz hiçbir yerden
+  // buraya kayıt düşürülmüyor, "Havuzdan Oluştur" adımında dolduracağız,
+  // ama tablo ve bu sorgu şimdiden hazır).
+  const openPoolQuestionDetail = async (id) => {
+    setSelectedPoolQuestionId(id);
+    setPoolDetailUsageLoading(true);
+    const { data, error } = await supabase
+      .from('question_pool_usage')
+      .select('id, used_at, exams(id, name)')
+      .eq('pool_question_id', id);
+    setPoolDetailUsageLoading(false);
+    if (!error && data) {
+      setPoolDetailUsage(data);
+    } else {
+      setPoolDetailUsage([]);
+    }
+  };
+
+  // Detaydaki Ders/Konu/Kazanım/Cevap değişiklikleri -- etiketleme
+  // ekranındaki gibi ANINDA kaydedilir, ama bu sefer poolUntagged listesine
+  // değil, poolBrowserRows'a (genel listeye) yazıyoruz -- çünkü burası
+  // zaten etiketlenmiş bir soruyu DÜZELTMEK için de kullanılıyor.
+  const updatePoolDetailField = async (fields) => {
+    if (!selectedPoolQuestionId) return;
+    await supabase.from('question_pool').update(fields).eq('id', selectedPoolQuestionId);
+    setPoolBrowserRows((prev) => prev.map((r) => r.id === selectedPoolQuestionId ? { ...r, ...fields } : r));
+  };
+
+  const handlePoolDetailDersChange = (dersName) => {
+    const ders = lessonCategories.find((lc) => lc.name === dersName);
+    updatePoolDetailField({ lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null });
+  };
+  const handlePoolDetailKonuChange = (dersId, konuName) => {
+    const konu = topics.find((t) => t.name === konuName && t.lesson_category_id === dersId);
+    updatePoolDetailField({ topic_id: konu ? konu.id : null, outcome_id: null });
+  };
+  const handlePoolDetailKazanimChange = (topicId, kazanimName) => {
+    const kazanim = learningOutcomes.find((lo) => lo.name === kazanimName && lo.topic_id === topicId);
+    if (!kazanim) return;
+    updatePoolDetailField({ outcome_id: kazanim.id });
+  };
+  const handlePoolDetailCevapChange = (cevap) => {
+    updatePoolDetailField({ correct_answer: cevap });
+  };
+
+  // Soru/Çözüm PDF'ini DEĞİŞTİRME -- İçerik Ayarları ekranındaki
+  // handleExamPdfUploadForExam ile aynı desen: yeni dosyayı storage'a
+  // yükler, question_pool satırındaki dosya adını günceller. Eski dosya
+  // storage'da kalır (silinmez) -- kazara yanlış dosya seçilirse diye
+  // güvenli taraf.
+  const handlePoolDetailPdfReplace = async (field, e) => {
+    const file = e.target.files[0];
+    if (!file || !selectedPoolQuestionId) return;
+    setPoolDetailUploading(true);
+    const ext = file.name.split('.').pop();
+    const prefix = field === 'solution_pdf_file' ? 'pool_sol' : 'pool';
+    const storageName = `${prefix}_${Math.random().toString(36).substring(2)}_${Date.now()}.${ext}`;
+    const { error: upErr } = await supabase.storage.from('exam-files').upload(storageName, file);
+    setPoolDetailUploading(false);
+    if (upErr) {
+      alert('PDF yüklenemedi: ' + upErr.message);
+      return;
+    }
+    await updatePoolDetailField({ [field]: storageName });
   };
 
 
@@ -4058,10 +4229,16 @@ export default function App() {
               🧾 Faturalar
             </button>
             <button
-              onClick={() => { setShowPoolImport(true); fetchUnlabeledPoolQuestions(); }}
+              onClick={() => { setShowPoolImport(true); setSelectedPoolBatch(null); setPoolUntagged([]); fetchPoolBatches(); }}
               style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
             >
               🗂️ Soru Havuzu
+            </button>
+            <button
+              onClick={() => { setShowPoolBrowser(true); setSelectedPoolQuestionId(null); fetchPoolBrowserRows(); }}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              📋 Havuz Listesi
             </button>
             <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
           </div>
@@ -4812,6 +4989,19 @@ export default function App() {
                 Ders/Konu/Kazanım burada YOK -- yükledikten sonra aşağıdaki "Etiketlenmemiş Sorular" bölümünden dropdown ile atanır.
               </div>
 
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Grup Adı <span style={{ fontWeight: 'normal', color: '#64748b' }}>(bu yüklemeyi daha sonra bu isimle bulacaksınız -- ör. "Biyoloji Kitabı 1")</span></label>
+                <input
+                  type="text"
+                  value={poolGroupName}
+                  onChange={(e) => setPoolGroupName(e.target.value)}
+                  disabled={poolImporting}
+                  placeholder="Örn. Biyoloji Kitabı 1"
+                  className="yt-input"
+                  style={{ width: '100%', maxWidth: '360px', boxSizing: 'border-box' }}
+                />
+              </div>
+
               <button
                 type="button"
                 onClick={downloadPoolImportTemplate}
@@ -4881,9 +5071,9 @@ export default function App() {
                 )}
                 <button
                   onClick={runPoolImport}
-                  disabled={poolImporting || poolExcelRows.length === 0}
+                  disabled={poolImporting || poolExcelRows.length === 0 || !poolGroupName.trim()}
                   className="yt-btn yt-btn-primary"
-                  style={{ opacity: (poolImporting || poolExcelRows.length === 0) ? 0.5 : 1 }}
+                  style={{ opacity: (poolImporting || poolExcelRows.length === 0 || !poolGroupName.trim()) ? 0.5 : 1 }}
                 >
                   {poolImporting ? 'Yükleniyor...' : `${poolExcelRows.length || ''} Soruyu Havuza Ekle`}
                 </button>
@@ -4891,17 +5081,50 @@ export default function App() {
 
               {/* --- 2) ETİKETLEME BÖLÜMÜ --- */}
               <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '16px' }}>
-                <h3 style={{ fontSize: '0.95rem', margin: '0 0 10px' }}>
-                  Etiketlenmemiş Sorular {poolUntagged.length > 0 && `(${poolUntagged.length})`}
-                </h3>
+                <h3 style={{ fontSize: '0.95rem', margin: '0 0 10px' }}>Etiketlenmemiş Sorular</h3>
+
+                {/* Yükleme grubu seçici -- farklı oturumlarda yüklenmiş etiketsiz
+                    gruplar birbirine KARIŞMASIN diye, önce hangi grubu
+                    etiketleyeceğinizi seçiyorsunuz. "Tümüne Uygula" ve satır
+                    satır tablo SADECE aşağıda seçtiğiniz gruba uygulanır. */}
+                {poolTaggingLoading && poolBatches.length === 0 ? (
+                  <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Yükleniyor...</p>
+                ) : poolBatches.length === 0 ? (
+                  <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Etiketlenmeyi bekleyen soru yok -- havuzdaki her soruya Ders/Konu/Kazanım atanmış.</p>
+                ) : (
+                  <div style={{ marginBottom: '14px' }}>
+                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>
+                      Hangi yükleme grubunu etiketlemek istiyorsunuz?
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      {poolBatches.map((b) => (
+                        <button
+                          key={b.batch_id || 'grupsuz'}
+                          type="button"
+                          onClick={() => { setSelectedPoolBatch(b.batch_id || 'grupsuz'); fetchUnlabeledPoolQuestions(b.batch_id || 'grupsuz'); }}
+                          style={{
+                            padding: '8px 14px', borderRadius: '8px', cursor: 'pointer', fontSize: '0.8rem',
+                            border: selectedPoolBatch === (b.batch_id || 'grupsuz') ? '2px solid #0f172a' : '1px solid #cbd5e1',
+                            backgroundColor: selectedPoolBatch === (b.batch_id || 'grupsuz') ? '#f1f5f9' : '#fff',
+                            fontWeight: selectedPoolBatch === (b.batch_id || 'grupsuz') ? 'bold' : 'normal',
+                          }}
+                        >
+                          {b.batch_id || 'İsimsiz Grup'} · {b.count} soru <span style={{ opacity: 0.6, fontSize: '0.72rem' }}>({new Date(b.created_at).toLocaleDateString('tr-TR')})</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {poolTaggingLoading ? (
                   <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Yükleniyor...</p>
+                ) : !selectedPoolBatch ? (
+                  poolBatches.length > 0 && <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Etiketlemek için yukarıdan bir grup seçin.</p>
                 ) : poolUntagged.length === 0 ? (
-                  <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Etiketlenmeyi bekleyen soru yok -- havuzdaki her soruya Ders/Konu/Kazanım atanmış.</p>
+                  <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Bu grupta etiketlenmeyi bekleyen soru kalmadı.</p>
                 ) : (
                   <>
-                    {/* ⚡ Tek Kazanım Uygula -- listedeki TÜM sorular aynı kazanımdansa (ki genelde aynı anda yüklenenler öyledir). */}
+                    {/* ⚡ Tek Kazanım Uygula -- SEÇİLİ GRUPTAKİ tüm sorular aynı kazanımdansa. */}
                     <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px', marginBottom: '14px' }}>
                       <div style={{ fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '8px' }}>⚡ Tek Kazanım Uygula (bu grubun tüm soruları aynı konuysa)</div>
                       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -5072,6 +5295,224 @@ export default function App() {
             </div>
           </div>
         )}
+
+
+        {showPoolBrowser && (
+          <div
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+            onClick={() => setShowPoolBrowser(false)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '1040px', maxWidth: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>📋 Havuz Listesi</h2>
+                <button onClick={() => setShowPoolBrowser(false)} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+              </div>
+
+              {!selectedPoolQuestionId ? (
+                <>
+                  <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <select
+                      value={poolBrowserFilterTag}
+                      onChange={(e) => setPoolBrowserFilterTag(e.target.value)}
+                      style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.82rem' }}
+                    >
+                      <option value="all">Hepsi</option>
+                      <option value="tagged">Sadece Etiketli</option>
+                      <option value="untagged">Sadece Etiketsiz</option>
+                    </select>
+                    <input
+                      type="text"
+                      value={poolBrowserSearch}
+                      onChange={(e) => setPoolBrowserSearch(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') fetchPoolBrowserRows(); }}
+                      placeholder="Grup adina gore ara..."
+                      style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.82rem' }}
+                    />
+                    <button onClick={fetchPoolBrowserRows} className="yt-btn yt-btn-primary" style={{ fontSize: '0.8rem', padding: '7px 14px' }}>Ara / Yenile</button>
+                    <span style={{ fontSize: '0.78rem', color: '#64748b', marginLeft: 'auto' }}>{poolBrowserRows.length} soru gosteriliyor (en fazla 500)</span>
+                  </div>
+
+                  {poolBrowserLoading ? (
+                    <p style={{ color: '#64748b' }}>Yukleniyor...</p>
+                  ) : poolBrowserRows.length === 0 ? (
+                    <p style={{ color: '#64748b' }}>Kriterlere uyan soru bulunamadi.</p>
+                  ) : (
+                    <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #f1f5f9', borderRadius: '8px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                        <thead>
+                          <tr style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
+                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>ID</th>
+                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>Ders / Konu / Kazanim</th>
+                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>Cevap</th>
+                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>Kullanim</th>
+                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>Grup</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {poolBrowserRows.map((row) => {
+                            const ders = lessonCategories.find((lc) => lc.id === row.lesson_category_id);
+                            const konu = topics.find((t) => t.id === row.topic_id);
+                            const kazanim = learningOutcomes.find((lo) => lo.id === row.outcome_id);
+                            return (
+                              <tr
+                                key={row.id}
+                                onClick={() => openPoolQuestionDetail(row.id)}
+                                style={{ borderTop: '1px solid #f1f5f9', cursor: 'pointer' }}
+                                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8fafc'}
+                                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                              >
+                                <td style={{ padding: '6px 10px', color: '#64748b' }}>#{row.id}</td>
+                                <td style={{ padding: '6px 10px' }}>
+                                  {kazanim ? (
+                                    <span style={{ color: '#334155' }}>{ders?.name} / {konu?.name} / {kazanim.name}</span>
+                                  ) : (
+                                    <span style={{ color: '#dc2626', fontWeight: 'bold' }}>Etiketsiz</span>
+                                  )}
+                                </td>
+                                <td style={{ padding: '6px 10px', fontFamily: 'monospace' }}>{row.correct_answer || '—'}</td>
+                                <td style={{ padding: '6px 10px' }}>{row.used_count || 0}</td>
+                                <td style={{ padding: '6px 10px', color: '#64748b' }}>{row.upload_batch_id || '—'}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              ) : (
+                (() => {
+                  const idx = poolBrowserRows.findIndex((r) => r.id === selectedPoolQuestionId);
+                  const row = poolBrowserRows[idx];
+                  if (!row) return <p style={{ color: '#64748b' }}>Soru bulunamadi.</p>;
+                  const ders = lessonCategories.find((lc) => lc.id === row.lesson_category_id);
+                  const konu = topics.find((t) => t.id === row.topic_id);
+                  const goTo = (newIdx) => {
+                    if (newIdx < 0 || newIdx >= poolBrowserRows.length) return;
+                    openPoolQuestionDetail(poolBrowserRows[newIdx].id);
+                  };
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: '20px', alignItems: 'start' }}>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPoolQuestionId(null)}
+                          style={{ marginBottom: '10px', padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer', fontSize: '0.8rem' }}
+                        >
+                          ◀ Listeye Don
+                        </button>
+                        <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px' }}>
+                          <SecurePdfViewer poolId={row.id} type="pool-question" pageNumber={1} />
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                            <button
+                              type="button"
+                              onClick={() => goTo(idx - 1)}
+                              disabled={idx <= 0}
+                              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: idx <= 0 ? 'not-allowed' : 'pointer', opacity: idx <= 0 ? 0.4 : 1, fontWeight: 'bold' }}
+                            >
+                              ◀ Onceki Soru
+                            </button>
+                            <span style={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#334155' }}>{idx + 1} / {poolBrowserRows.length}</span>
+                            <button
+                              type="button"
+                              onClick={() => goTo(idx + 1)}
+                              disabled={idx >= poolBrowserRows.length - 1}
+                              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: idx >= poolBrowserRows.length - 1 ? 'not-allowed' : 'pointer', opacity: idx >= poolBrowserRows.length - 1 ? 0.4 : 1, fontWeight: 'bold' }}
+                            >
+                              Sonraki Soru ▶
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        <h3 style={{ margin: '0 0 4px', fontSize: '1rem' }}>#{row.id}</h3>
+                        <p style={{ margin: '0 0 14px', fontSize: '0.76rem', color: '#94a3b8' }}>Grup: {row.upload_batch_id || '—'} · Kullanim: {row.used_count || 0}</p>
+
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Ders</label>
+                        <select
+                          value={ders ? ders.name : ''}
+                          onChange={(e) => handlePoolDetailDersChange(e.target.value)}
+                          className="yt-input"
+                          style={{ width: '100%', marginBottom: '10px' }}
+                        >
+                          <option value="">Ders Secin</option>
+                          {lessonCategories.map((lc) => <option key={lc.id} value={lc.name}>{lc.name}</option>)}
+                        </select>
+
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Konu</label>
+                        <select
+                          value={konu ? konu.name : ''}
+                          onChange={(e) => handlePoolDetailKonuChange(row.lesson_category_id, e.target.value)}
+                          disabled={!row.lesson_category_id}
+                          className="yt-input"
+                          style={{ width: '100%', marginBottom: '10px' }}
+                        >
+                          <option value="">{row.lesson_category_id ? 'Konu Secin' : 'Once Ders secin'}</option>
+                          {topics.filter((t) => t.lesson_category_id === row.lesson_category_id).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                        </select>
+
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Kazanim</label>
+                        <select
+                          value={learningOutcomes.find((lo) => lo.id === row.outcome_id)?.name || ''}
+                          onChange={(e) => handlePoolDetailKazanimChange(row.topic_id, e.target.value)}
+                          disabled={!row.topic_id}
+                          className="yt-input"
+                          style={{ width: '100%', marginBottom: '10px' }}
+                        >
+                          <option value="">{row.topic_id ? 'Kazanim Secin' : 'Once Konu secin'}</option>
+                          {learningOutcomes.filter((lo) => lo.topic_id === row.topic_id).map((lo) => <option key={lo.id} value={lo.name}>{lo.name}</option>)}
+                        </select>
+
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Dogru Cevap</label>
+                        <select
+                          value={row.correct_answer || ''}
+                          onChange={(e) => handlePoolDetailCevapChange(e.target.value)}
+                          className="yt-input"
+                          style={{ width: '100%', marginBottom: '16px' }}
+                        >
+                          <option value="">Secin</option>
+                          {['A', 'B', 'C', 'D', 'E'].map((c) => <option key={c} value={c}>{c}</option>)}
+                        </select>
+
+                        <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '14px', marginBottom: '14px' }}>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>Soru PDF'i</label>
+                          <input type="file" accept="application/pdf" onChange={(e) => handlePoolDetailPdfReplace('pdf_file', e)} disabled={poolDetailUploading} style={{ fontSize: '0.78rem' }} />
+                          {poolDetailUploading && <div style={{ fontSize: '0.74rem', color: '#64748b', marginTop: '4px' }}>Yukleniyor...</div>}
+
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', margin: '12px 0 6px' }}>Cozum PDF'i {row.solution_pdf_file ? '' : '(yok)'}</label>
+                          <input type="file" accept="application/pdf" onChange={(e) => handlePoolDetailPdfReplace('solution_pdf_file', e)} disabled={poolDetailUploading} style={{ fontSize: '0.78rem' }} />
+                        </div>
+
+                        <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '14px' }}>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>Kullanildigi Testler</label>
+                          {poolDetailUsageLoading ? (
+                            <p style={{ fontSize: '0.78rem', color: '#64748b' }}>Yukleniyor...</p>
+                          ) : poolDetailUsage.length === 0 ? (
+                            <p style={{ fontSize: '0.78rem', color: '#16a34a' }}>Bu soru henuz hicbir testte kullanilmadi -- duzeltmeler risksiz.</p>
+                          ) : (
+                            <div style={{ fontSize: '0.78rem', color: '#92400e', backgroundColor: '#fffbeb', padding: '10px', borderRadius: '6px' }}>
+                              <p style={{ margin: '0 0 6px' }}>⚠️ Bu soru su testlerde kullanildi. Buradaki duzeltme o testleri OTOMATIK duzeltmez, gerekirse oraya da gitmeniz gerekir:</p>
+                              <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                                {poolDetailUsage.map((u) => (
+                                  <li key={u.id}>{u.exams?.name || `Sinav #${u.exams?.id || '?'}`}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
+            </div>
+          </div>
+        )}
+
 
 
         {authLoading && (
