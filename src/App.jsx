@@ -295,7 +295,9 @@ export default function App() {
   const [poolBrowserLoading, setPoolBrowserLoading] = useState(false);
   const [poolBrowserRows, setPoolBrowserRows] = useState([]);
   const [poolBrowserFilterTag, setPoolBrowserFilterTag] = useState('all'); // all | tagged | untagged
-  const [poolBrowserSearch, setPoolBrowserSearch] = useState('');
+  const [poolBrowserGroups, setPoolBrowserGroups] = useState([]); // [{key, count}] -- key: grup adı ya da '__none__' (isimsiz)
+  const [poolBrowserGroup, setPoolBrowserGroup] = useState(''); // '' = tüm gruplar
+  const [poolPdfVersions, setPoolPdfVersions] = useState({}); // PDF değiştirilince önizleme önbelleğini atlatmak için
   const [selectedPoolQuestionId, setSelectedPoolQuestionId] = useState(null);
   const [poolDetailUsage, setPoolDetailUsage] = useState([]);
   const [poolDetailUsageLoading, setPoolDetailUsageLoading] = useState(false);
@@ -2476,16 +2478,19 @@ export default function App() {
 
   // --- Havuz Listesi + Detay Paneli ---
 
-  const fetchPoolBrowserRows = async () => {
+  const fetchPoolBrowserRows = async (overrides = {}) => {
+    const tagFilter = overrides.tag !== undefined ? overrides.tag : poolBrowserFilterTag;
+    const groupFilter = overrides.group !== undefined ? overrides.group : poolBrowserGroup;
     setPoolBrowserLoading(true);
     let query = supabase
       .from('question_pool')
       .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, upload_batch_id, used_count, created_at')
-      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
       .limit(500);
-    if (poolBrowserFilterTag === 'tagged') query = query.not('outcome_id', 'is', null);
-    if (poolBrowserFilterTag === 'untagged') query = query.is('outcome_id', null);
-    if (poolBrowserSearch.trim()) query = query.ilike('upload_batch_id', `%${poolBrowserSearch.trim()}%`);
+    if (tagFilter === 'tagged') query = query.not('outcome_id', 'is', null);
+    if (tagFilter === 'untagged') query = query.is('outcome_id', null);
+    if (groupFilter === '__none__') query = query.is('upload_batch_id', null);
+    else if (groupFilter) query = query.eq('upload_batch_id', groupFilter);
     const { data, error } = await query;
     setPoolBrowserLoading(false);
     if (!error && data) {
@@ -2525,6 +2530,105 @@ export default function App() {
     setPoolBrowserRows((prev) => prev.map((r) => r.id === selectedPoolQuestionId ? { ...r, ...fields } : r));
   };
 
+  const fetchPoolBrowserGroups = async () => {
+    const counts = new Map();
+    const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir -- sayfalayarak hepsini sayıyoruz
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await supabase
+        .from('question_pool')
+        .select('upload_batch_id')
+        .order('id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) { console.error('Havuz grupları okunamadı:', error); break; }
+      (data || []).forEach((r) => {
+        const key = r.upload_batch_id || '__none__';
+        counts.set(key, (counts.get(key) || 0) + 1);
+      });
+      if (!data || data.length < pageSize) break;
+    }
+    setPoolBrowserGroups(Array.from(counts.entries()).map(([key, count]) => ({ key, count })));
+  };
+
+  // Silinen soruların PDF dosyalarını depodan da temizler. Veritabanı kaydı
+  // zaten silinmiş olduğu için burada bir hata olursa (ör. depo silme izni
+  // yoksa) işlem yarım kalmaz -- sadece dosyalar depoda artık olarak kalır.
+  // Kaç dosyanın silinemediğini döndürür.
+  const removePoolStorageFiles = async (paths) => {
+    const clean = paths.filter(Boolean);
+    let failed = 0;
+    for (let i = 0; i < clean.length; i += 100) {
+      const chunk = clean.slice(i, i + 100);
+      const { data, error } = await supabase.storage.from('exam-files').remove(chunk);
+      failed += error ? chunk.length : Math.max(0, chunk.length - (data ? data.length : 0));
+    }
+    return failed;
+  };
+
+  // Detay panelindeki "Sil ✕": tek bir soruyu (ve çözüm PDF'ini) havuzdan siler,
+  // ardından listedeki bir sonraki (yoksa bir önceki) soruya geçer.
+  const deletePoolQuestion = async () => {
+    const id = selectedPoolQuestionId;
+    const idx = poolBrowserRows.findIndex((r) => r.id === id);
+    const row = poolBrowserRows[idx];
+    if (!row) return;
+    const usedNote = poolDetailUsage.length > 0
+      ? `\n\nDikkat: Bu soru ${poolDetailUsage.length} testte kullanılmış. O testlerdeki kopyalar etkilenmez, ama kullanım kaydı silinir.`
+      : '';
+    if (!window.confirm(`#${id} numaralı soru (ve çözüm PDF'i) havuzdan KALICI olarak silinecek. Bu işlem geri alınamaz.${usedNote}\n\nDevam edilsin mi?`)) return;
+
+    const { error, count } = await supabase.from('question_pool').delete({ count: 'exact' }).eq('id', id);
+    if (error) { alert('Silinemedi: ' + error.message); return; }
+    if (!count) { alert('Soru silinemedi (yetki sorunu olabilir -- question_pool için silme izni gerekiyor).'); return; }
+    await removePoolStorageFiles([row.pdf_file, row.solution_pdf_file]);
+
+    const remaining = poolBrowserRows.filter((r) => r.id !== id);
+    setPoolBrowserRows(remaining);
+    if (remaining.length === 0) {
+      setSelectedPoolQuestionId(null);
+    } else {
+      openPoolQuestionDetail(remaining[Math.min(idx, remaining.length - 1)].id);
+    }
+    fetchPoolBrowserGroups();
+  };
+
+  // Listedeki "Bu Grubu Tümden Sil": seçili gruptaki BÜTÜN soruları siler
+  // (ekranda görünen 500'le sınırlı değil -- grubun gerçek toplamı silinir).
+  const deletePoolGroup = async () => {
+    const key = poolBrowserGroup;
+    if (!key) return;
+    const info = poolBrowserGroups.find((g) => g.key === key);
+    const label = key === '__none__' ? 'İsimsiz Grup' : key;
+    const total = info ? info.count : 0;
+    if (!window.confirm(`"${label}" grubundaki ${total} sorunun TAMAMI (soru ve çözüm PDF dosyalarıyla birlikte) havuzdan KALICI olarak silinecek. Bu işlem geri alınamaz.\n\nDevam edilsin mi?`)) return;
+    if (!window.confirm(`Son onay: "${label}" grubundaki ${total} soru silinsin mi?`)) return;
+
+    setPoolBrowserLoading(true);
+    // Satırlar silinince dosya adları da kaybolacağı için önce toplıyoruz.
+    const paths = [];
+    const pageSize = 1000;
+    for (let from = 0; ; from += pageSize) {
+      let q = supabase.from('question_pool').select('pdf_file, solution_pdf_file').order('id', { ascending: true }).range(from, from + pageSize - 1);
+      q = key === '__none__' ? q.is('upload_batch_id', null) : q.eq('upload_batch_id', key);
+      const { data, error } = await q;
+      if (error) { setPoolBrowserLoading(false); alert('Dosya listesi okunamadı: ' + error.message); return; }
+      (data || []).forEach((r) => { paths.push(r.pdf_file, r.solution_pdf_file); });
+      if (!data || data.length < pageSize) break;
+    }
+
+    let del = supabase.from('question_pool').delete({ count: 'exact' });
+    del = key === '__none__' ? del.is('upload_batch_id', null) : del.eq('upload_batch_id', key);
+    const { error: delErr, count } = await del;
+    if (delErr) { setPoolBrowserLoading(false); alert('Silinemedi: ' + delErr.message); return; }
+    if (!count) { setPoolBrowserLoading(false); alert('Hiçbir soru silinmedi (yetki sorunu olabilir -- question_pool için silme izni gerekiyor).'); return; }
+
+    const failedFiles = await removePoolStorageFiles(paths);
+    setPoolBrowserGroup('');
+    setSelectedPoolQuestionId(null);
+    await fetchPoolBrowserGroups();
+    await fetchPoolBrowserRows({ group: '' });
+    alert(`✓ ${count} soru silindi.` + (failedFiles > 0 ? `\n(${failedFiles} PDF dosyası depodan silinemedi -- veritabanı kayıtları silindiği için sorun değil, sadece depoda artık dosya kaldı.)` : ''));
+  };
+
   const handlePoolDetailDersChange = (dersName) => {
     const ders = lessonCategories.find((lc) => lc.name === dersName);
     updatePoolDetailField({ lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null });
@@ -2561,6 +2665,7 @@ export default function App() {
       return;
     }
     await updatePoolDetailField({ [field]: storageName });
+    setPoolPdfVersions((prev) => ({ ...prev, [`${field}:${selectedPoolQuestionId}`]: Date.now() }));
   };
 
 
@@ -4235,7 +4340,7 @@ export default function App() {
               🗂️ Soru Havuzu
             </button>
             <button
-              onClick={() => { setShowPoolBrowser(true); setSelectedPoolQuestionId(null); fetchPoolBrowserRows(); }}
+              onClick={() => { setShowPoolBrowser(true); setSelectedPoolQuestionId(null); setPoolBrowserGroup(''); fetchPoolBrowserRows({ group: '' }); fetchPoolBrowserGroups(); }}
               style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
             >
               📋 Havuz Listesi
@@ -5316,38 +5421,48 @@ export default function App() {
                   <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
                     <select
                       value={poolBrowserFilterTag}
-                      onChange={(e) => setPoolBrowserFilterTag(e.target.value)}
+                      onChange={(e) => { setPoolBrowserFilterTag(e.target.value); fetchPoolBrowserRows({ tag: e.target.value }); }}
                       style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.82rem' }}
                     >
                       <option value="all">Hepsi</option>
                       <option value="tagged">Sadece Etiketli</option>
                       <option value="untagged">Sadece Etiketsiz</option>
                     </select>
-                    <input
-                      type="text"
-                      value={poolBrowserSearch}
-                      onChange={(e) => setPoolBrowserSearch(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') fetchPoolBrowserRows(); }}
-                      placeholder="Grup adina gore ara..."
-                      style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.82rem' }}
-                    />
-                    <button onClick={fetchPoolBrowserRows} className="yt-btn yt-btn-primary" style={{ fontSize: '0.8rem', padding: '7px 14px' }}>Ara / Yenile</button>
-                    <span style={{ fontSize: '0.78rem', color: '#64748b', marginLeft: 'auto' }}>{poolBrowserRows.length} soru gosteriliyor (en fazla 500)</span>
+                    <select
+                      value={poolBrowserGroup}
+                      onChange={(e) => { setPoolBrowserGroup(e.target.value); fetchPoolBrowserRows({ group: e.target.value }); }}
+                      style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.82rem', maxWidth: '260px' }}
+                    >
+                      <option value="">Tüm Gruplar</option>
+                      {poolBrowserGroups.map((g) => (
+                        <option key={g.key} value={g.key}>{g.key === '__none__' ? 'İsimsiz Grup' : g.key} ({g.count})</option>
+                      ))}
+                    </select>
+                    <button onClick={() => { fetchPoolBrowserRows(); fetchPoolBrowserGroups(); }} className="yt-btn yt-btn-primary" style={{ fontSize: '0.8rem', padding: '7px 14px' }}>Yenile</button>
+                    {poolBrowserGroup && (
+                      <button
+                        onClick={deletePoolGroup}
+                        style={{ fontSize: '0.8rem', padding: '7px 14px', borderRadius: '6px', border: '1px solid #dc2626', backgroundColor: '#fff', color: '#dc2626', cursor: 'pointer', fontWeight: 'bold' }}
+                      >
+                        🗑️ Bu Grubu Tümden Sil
+                      </button>
+                    )}
+                    <span style={{ fontSize: '0.78rem', color: '#64748b', marginLeft: 'auto' }}>{poolBrowserRows.length} soru gösteriliyor (en fazla 500)</span>
                   </div>
 
                   {poolBrowserLoading ? (
-                    <p style={{ color: '#64748b' }}>Yukleniyor...</p>
+                    <p style={{ color: '#64748b' }}>Yükleniyor...</p>
                   ) : poolBrowserRows.length === 0 ? (
-                    <p style={{ color: '#64748b' }}>Kriterlere uyan soru bulunamadi.</p>
+                    <p style={{ color: '#64748b' }}>Kriterlere uyan soru bulunamadı.</p>
                   ) : (
                     <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #f1f5f9', borderRadius: '8px' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                         <thead>
                           <tr style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
                             <th style={{ textAlign: 'left', padding: '7px 10px' }}>ID</th>
-                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>Ders / Konu / Kazanim</th>
+                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>Ders / Konu / Kazanım</th>
                             <th style={{ textAlign: 'left', padding: '7px 10px' }}>Cevap</th>
-                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>Kullanim</th>
+                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>Kullanım</th>
                             <th style={{ textAlign: 'left', padding: '7px 10px' }}>Grup</th>
                           </tr>
                         </thead>
@@ -5387,7 +5502,7 @@ export default function App() {
                 (() => {
                   const idx = poolBrowserRows.findIndex((r) => r.id === selectedPoolQuestionId);
                   const row = poolBrowserRows[idx];
-                  if (!row) return <p style={{ color: '#64748b' }}>Soru bulunamadi.</p>;
+                  if (!row) return <p style={{ color: '#64748b' }}>Soru bulunamadı.</p>;
                   const ders = lessonCategories.find((lc) => lc.id === row.lesson_category_id);
                   const konu = topics.find((t) => t.id === row.topic_id);
                   const goTo = (newIdx) => {
@@ -5402,10 +5517,10 @@ export default function App() {
                           onClick={() => setSelectedPoolQuestionId(null)}
                           style={{ marginBottom: '10px', padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer', fontSize: '0.8rem' }}
                         >
-                          ◀ Listeye Don
+                          ◀ Listeye Dön
                         </button>
                         <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px' }}>
-                          <SecurePdfViewer poolId={row.id} type="pool-question" pageNumber={1} />
+                          <SecurePdfViewer poolId={row.id} type="pool-question" pageNumber={1} version={poolPdfVersions[`pdf_file:${row.id}`]} />
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
                             <button
                               type="button"
@@ -5413,7 +5528,7 @@ export default function App() {
                               disabled={idx <= 0}
                               style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: idx <= 0 ? 'not-allowed' : 'pointer', opacity: idx <= 0 ? 0.4 : 1, fontWeight: 'bold' }}
                             >
-                              ◀ Onceki Soru
+                              ◀ Önceki Soru
                             </button>
                             <span style={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#334155' }}>{idx + 1} / {poolBrowserRows.length}</span>
                             <button
@@ -5426,11 +5541,23 @@ export default function App() {
                             </button>
                           </div>
                         </div>
+
+                        <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px', marginTop: '14px' }}>
+                          <div style={{ fontWeight: 'bold', fontSize: '0.85rem', color: '#334155', marginBottom: '10px' }}>💡 Çözüm</div>
+                          {row.solution_pdf_file ? (
+                            <SecurePdfViewer poolId={row.id} type="pool-solution" pageNumber={1} version={poolPdfVersions[`solution_pdf_file:${row.id}`]} />
+                          ) : (
+                            <p style={{ margin: 0, fontSize: '0.8rem', color: '#64748b' }}>Bu soru için çözüm PDF'i yüklenmemiş. Sağdaki "Çözüm PDF'i" alanından ekleyebilirsiniz.</p>
+                          )}
+                        </div>
                       </div>
 
                       <div>
-                        <h3 style={{ margin: '0 0 4px', fontSize: '1rem' }}>#{row.id}</h3>
-                        <p style={{ margin: '0 0 14px', fontSize: '0.76rem', color: '#94a3b8' }}>Grup: {row.upload_batch_id || '—'} · Kullanim: {row.used_count || 0}</p>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                          <h3 style={{ margin: 0, fontSize: '1rem' }}>#{row.id}</h3>
+                          <button type="button" onClick={deletePoolQuestion} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.82rem' }}>Sil ✕</button>
+                        </div>
+                        <p style={{ margin: '0 0 14px', fontSize: '0.76rem', color: '#94a3b8' }}>Grup: {row.upload_batch_id || '—'} · Kullanım: {row.used_count || 0}</p>
 
                         <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Ders</label>
                         <select
@@ -5439,7 +5566,7 @@ export default function App() {
                           className="yt-input"
                           style={{ width: '100%', marginBottom: '10px' }}
                         >
-                          <option value="">Ders Secin</option>
+                          <option value="">Ders Seçin</option>
                           {lessonCategories.map((lc) => <option key={lc.id} value={lc.name}>{lc.name}</option>)}
                         </select>
 
@@ -5451,11 +5578,11 @@ export default function App() {
                           className="yt-input"
                           style={{ width: '100%', marginBottom: '10px' }}
                         >
-                          <option value="">{row.lesson_category_id ? 'Konu Secin' : 'Once Ders secin'}</option>
+                          <option value="">{row.lesson_category_id ? 'Konu Seçin' : 'Önce Ders seçin'}</option>
                           {topics.filter((t) => t.lesson_category_id === row.lesson_category_id).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                         </select>
 
-                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Kazanim</label>
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Kazanım</label>
                         <select
                           value={learningOutcomes.find((lo) => lo.id === row.outcome_id)?.name || ''}
                           onChange={(e) => handlePoolDetailKazanimChange(row.topic_id, e.target.value)}
@@ -5463,42 +5590,42 @@ export default function App() {
                           className="yt-input"
                           style={{ width: '100%', marginBottom: '10px' }}
                         >
-                          <option value="">{row.topic_id ? 'Kazanim Secin' : 'Once Konu secin'}</option>
+                          <option value="">{row.topic_id ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
                           {learningOutcomes.filter((lo) => lo.topic_id === row.topic_id).map((lo) => <option key={lo.id} value={lo.name}>{lo.name}</option>)}
                         </select>
 
-                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Dogru Cevap</label>
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Doğru Cevap</label>
                         <select
                           value={row.correct_answer || ''}
                           onChange={(e) => handlePoolDetailCevapChange(e.target.value)}
                           className="yt-input"
                           style={{ width: '100%', marginBottom: '16px' }}
                         >
-                          <option value="">Secin</option>
+                          <option value="">Seçin</option>
                           {['A', 'B', 'C', 'D', 'E'].map((c) => <option key={c} value={c}>{c}</option>)}
                         </select>
 
                         <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '14px', marginBottom: '14px' }}>
                           <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>Soru PDF'i</label>
                           <input type="file" accept="application/pdf" onChange={(e) => handlePoolDetailPdfReplace('pdf_file', e)} disabled={poolDetailUploading} style={{ fontSize: '0.78rem' }} />
-                          {poolDetailUploading && <div style={{ fontSize: '0.74rem', color: '#64748b', marginTop: '4px' }}>Yukleniyor...</div>}
+                          {poolDetailUploading && <div style={{ fontSize: '0.74rem', color: '#64748b', marginTop: '4px' }}>Yükleniyor...</div>}
 
-                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', margin: '12px 0 6px' }}>Cozum PDF'i {row.solution_pdf_file ? '' : '(yok)'}</label>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', margin: '12px 0 6px' }}>Çözüm PDF'i {row.solution_pdf_file ? '' : '(yok)'}</label>
                           <input type="file" accept="application/pdf" onChange={(e) => handlePoolDetailPdfReplace('solution_pdf_file', e)} disabled={poolDetailUploading} style={{ fontSize: '0.78rem' }} />
                         </div>
 
                         <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '14px' }}>
-                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>Kullanildigi Testler</label>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>Kullanıldığı Testler</label>
                           {poolDetailUsageLoading ? (
-                            <p style={{ fontSize: '0.78rem', color: '#64748b' }}>Yukleniyor...</p>
+                            <p style={{ fontSize: '0.78rem', color: '#64748b' }}>Yükleniyor...</p>
                           ) : poolDetailUsage.length === 0 ? (
-                            <p style={{ fontSize: '0.78rem', color: '#16a34a' }}>Bu soru henuz hicbir testte kullanilmadi -- duzeltmeler risksiz.</p>
+                            <p style={{ fontSize: '0.78rem', color: '#16a34a' }}>Bu soru henüz hiçbir testte kullanılmadı -- düzeltmeler risksiz.</p>
                           ) : (
                             <div style={{ fontSize: '0.78rem', color: '#92400e', backgroundColor: '#fffbeb', padding: '10px', borderRadius: '6px' }}>
-                              <p style={{ margin: '0 0 6px' }}>⚠️ Bu soru su testlerde kullanildi. Buradaki duzeltme o testleri OTOMATIK duzeltmez, gerekirse oraya da gitmeniz gerekir:</p>
+                              <p style={{ margin: '0 0 6px' }}>⚠️ Bu soru şu testlerde kullanıldı. Buradaki düzeltme o testleri OTOMATİK düzeltmez, gerekirse oraya da gitmeniz gerekir:</p>
                               <ul style={{ margin: 0, paddingLeft: '18px' }}>
                                 {poolDetailUsage.map((u) => (
-                                  <li key={u.id}>{u.exams?.name || `Sinav #${u.exams?.id || '?'}`}</li>
+                                  <li key={u.id}>{u.exams?.name || `Sınav #${u.exams?.id || '?'}`}</li>
                                 ))}
                               </ul>
                             </div>

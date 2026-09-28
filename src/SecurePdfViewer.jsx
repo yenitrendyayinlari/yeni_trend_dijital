@@ -9,7 +9,7 @@ import { supabase } from './supabase';
 // sayfa değiştirmede tekrar tekrar istek atılmasını engeller.
 const urlCache = {};
 
-export default function SecurePdfViewer({ examId, poolId, type, pageNumber, onDocumentLoadSuccess }) {
+export default function SecurePdfViewer({ examId, poolId, type, pageNumber, version, onDocumentLoadSuccess }) {
   const [signedUrl, setSignedUrl] = useState(null);
   const [error, setError] = useState(null);
   const requestedKeyRef = useRef(null);
@@ -19,7 +19,8 @@ export default function SecurePdfViewer({ examId, poolId, type, pageNumber, onDo
     // kullanılır (bkz. get-pdf-url.js'teki ayrı "SORU HAVUZU" dalı).
     const idKey = poolId || examId;
     if (!idKey || !type) return;
-    const cacheKey = `${type}:${idKey}`;
+    // version: PDF değiştirilince (ör. Havuz Listesi'nde yeni dosya yüklenince) önbelleği atlatıp yeni dosyayı getirir.
+    const cacheKey = `${type}:${idKey}:${version || 0}`;
 
     const cached = urlCache[cacheKey];
     if (cached && cached.expiresAt > Date.now()) {
@@ -27,6 +28,10 @@ export default function SecurePdfViewer({ examId, poolId, type, pageNumber, onDo
       setError(null);
       return;
     }
+
+    // Önbellekte yoksa, önceki sorunun görüntüsü yenisi gelene kadar ekranda kalmasın.
+    setSignedUrl(null);
+    setError(null);
 
     if (requestedKeyRef.current === cacheKey) return; // zaten istek atıldı
     requestedKeyRef.current = cacheKey;
@@ -73,7 +78,7 @@ export default function SecurePdfViewer({ examId, poolId, type, pageNumber, onDo
 
     fetchUrl();
     return () => { cancelled = true; };
-  }, [examId, poolId, type]);
+  }, [examId, poolId, type, version]);
 
 
   if (error) {
