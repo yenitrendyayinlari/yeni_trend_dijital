@@ -12,6 +12,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.110.8",
     "iyzipay": "^2.0.69",
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^3.11.174",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
