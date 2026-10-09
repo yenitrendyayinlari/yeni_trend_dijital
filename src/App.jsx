@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import * as pdfjsLib from 'pdfjs-dist';
+import { PDFDocument } from 'pdf-lib';
 import SecurePdfViewer from './SecurePdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
@@ -259,6 +260,22 @@ export default function App() {
   const [showPoolImport, setShowPoolImport] = useState(false);
   const [poolExcelRows, setPoolExcelRows] = useState([]); // [{soruPdfName, cozumPdfName, cevap}]
   const [poolGroupName, setPoolGroupName] = useState(''); // Kullanıcının verdiği yükleme grubu adı (ör. "Biyoloji Kitabı 1")
+
+  // --- Havuzdan Oluştur (Test/Deneme Üretme) ---
+  const [showPoolGenerate, setShowPoolGenerate] = useState(false);
+  const [poolGenParentId, setPoolGenParentId] = useState(null);
+  const [poolGenMode, setPoolGenMode] = useState('test'); // 'test' (çoklu, aynı kazanım) | 'deneme' (tekli, karma)
+  const [poolGenIncludeUsed, setPoolGenIncludeUsed] = useState(false);
+  const [poolGenNamePrefix, setPoolGenNamePrefix] = useState('');
+  const [poolGenDuration, setPoolGenDuration] = useState(60);
+  const [poolGenTestDers, setPoolGenTestDers] = useState('');
+  const [poolGenTestKonu, setPoolGenTestKonu] = useState('');
+  const [poolGenTestKazanim, setPoolGenTestKazanim] = useState('');
+  const [poolGenTestCount, setPoolGenTestCount] = useState(10);
+  const [poolGenTestSize, setPoolGenTestSize] = useState(16);
+  const [poolGenDenemeRows, setPoolGenDenemeRows] = useState([{ ders: '', konu: '', kazanim: '', count: 10 }]);
+  const [poolGenLoading, setPoolGenLoading] = useState(false);
+  const [poolGenProgress, setPoolGenProgress] = useState({ current: 0, total: 0 });
   const [poolPdfFiles, setPoolPdfFiles] = useState(new Map()); // dosya adı (küçük harf) -> File
   const [poolImporting, setPoolImporting] = useState(false);
   const [poolImportProgress, setPoolImportProgress] = useState({ current: 0, total: 0 });
@@ -2977,6 +2994,232 @@ export default function App() {
     }
   };
 
+  // --- Havuzdan Oluştur ---
+  // Diziden rastgele (tekrarsız) n eleman seçer -- kaynak diziyi bozmaz.
+  const sampleN = (arr, n) => {
+    const copy = [...arr];
+    const out = [];
+    while (out.length < n && copy.length > 0) {
+      const i = Math.floor(Math.random() * copy.length);
+      out.push(copy.splice(i, 1)[0]);
+    }
+    return out;
+  };
+
+  // Bir kazanıma ait, excludeIds listesinde OLMAYAN havuz sorularını getirir.
+  // includeUsed false ise sadece hiç kullanılmamış (used_count=0) sorular aday olur.
+  const fetchPoolCandidatesForOutcome = async (outcomeId, excludeIds, includeUsed) => {
+    const all = [];
+    const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir
+    for (let from = 0; ; from += pageSize) {
+      let query = supabase.from('question_pool').select('*').eq('outcome_id', outcomeId).order('id', { ascending: true }).range(from, from + pageSize - 1);
+      if (!includeUsed) query = query.eq('used_count', 0);
+      const { data, error } = await query;
+      if (error) throw new Error(error.message);
+      all.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+    }
+    const excludeSet = new Set(excludeIds);
+    return all.filter((r) => !excludeSet.has(r.id));
+  };
+
+  // Bir havuz sorusunun (ya da çözümünün) PDF baytlarını, get-pdf-url.js'teki
+  // admin-only "SORU HAVUZU" dalından imzalı link alıp indirerek getirir.
+  const fetchPoolPdfBytes = async (poolId, type) => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    const resp = await fetch('/api/get-pdf-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ poolId, type }),
+    });
+    const result = await resp.json();
+    if (!resp.ok) throw new Error(result.error || 'PDF alınamadı');
+    const pdfResp = await fetch(result.url);
+    return await pdfResp.arrayBuffer();
+  };
+
+  // Tek sayfalık PDF baytlarını sırasıyla TEK PDF'te birleştirir. Listede
+  // `null` varsa (ör. sorunun çözümü yok) o sırada BOŞ sayfa eklenir --
+  // çözüm PDF'indeki sayfa numarası soru PDF'iyle hizalı kalsın diye.
+  const mergePdfBytesList = async (bytesList) => {
+    const merged = await PDFDocument.create();
+    for (const bytes of bytesList) {
+      if (bytes === null) {
+        merged.addPage();
+        continue;
+      }
+      const srcDoc = await PDFDocument.load(bytes);
+      const pages = await merged.copyPages(srcDoc, srcDoc.getPageIndices());
+      pages.forEach((pg) => merged.addPage(pg));
+    }
+    return await merged.save();
+  };
+
+  // Seçilen havuz sorularından (picked) GERÇEK bir test/deneme sınavı oluşturur:
+  // PDF'leri birleştirir, exams kaydını açar, cevap anahtarını (exam_answer_keys)
+  // ve kazanım haritasını (topic_map) sorulardan otomatik doldurur,
+  // question_pool_usage kaydı düşürüp used_count'ları artırır.
+  const assemblePoolExamRow = async ({ picked, examName, parentExam, sortOrder, examType, duration, batchId }) => {
+    const questionBytesList = [];
+    for (const q of picked) {
+      questionBytesList.push(await fetchPoolPdfBytes(q.id, 'pool-question'));
+    }
+    const mergedQuestionsPdf = await mergePdfBytesList(questionBytesList);
+    const mergedQuestionsName = `pool_gen_${Math.random().toString(36).substring(2)}_${Date.now()}.pdf`;
+    const { error: qUpErr } = await supabase.storage.from('exam-files').upload(mergedQuestionsName, new Blob([mergedQuestionsPdf], { type: 'application/pdf' }));
+    if (qUpErr) throw new Error("Birleştirilmiş soru PDF'i yüklenemedi: " + qUpErr.message);
+
+    let mergedSolutionName = null;
+    if (picked.some((q) => q.solution_pdf_file)) {
+      const solutionBytesList = [];
+      for (const q of picked) {
+        solutionBytesList.push(q.solution_pdf_file ? await fetchPoolPdfBytes(q.id, 'pool-solution') : null);
+      }
+      const mergedSolutionsPdf = await mergePdfBytesList(solutionBytesList);
+      mergedSolutionName = `pool_gen_sol_${Math.random().toString(36).substring(2)}_${Date.now()}.pdf`;
+      const { error: sUpErr } = await supabase.storage.from('exam-files').upload(mergedSolutionName, new Blob([mergedSolutionsPdf], { type: 'application/pdf' }));
+      if (sUpErr) throw new Error("Birleştirilmiş çözüm PDF'i yüklenemedi: " + sUpErr.message);
+    }
+
+    const topicMap = {};
+    const answerKey = {};
+    picked.forEach((q, idx) => {
+      const page = idx + 1;
+      const ders = lessonCategories.find((lc) => lc.id === q.lesson_category_id);
+      const konu = topics.find((t) => t.id === q.topic_id);
+      const kazanim = learningOutcomes.find((lo) => lo.id === q.outcome_id);
+      topicMap[page] = { ders: ders?.name || '', konu: konu?.name || '', kazanim: kazanim?.name || '' };
+      answerKey[page] = q.correct_answer;
+    });
+
+    // Alt testler ayrı satılmaz (toplu yüklemeyle aynı): fiyat 0, paket üst testten satılır.
+    const computedPrice = 0;
+    const { data, error } = await supabase.from('exams').insert([{
+      name: examName,
+      parent_id: parentExam.id,
+      is_published: true,
+      exam_type: examType,
+      category_exam_type: parentExam.categoryExamType || '',
+      category_lesson: '',
+      duration: duration,
+      price: computedPrice,
+      sections: [],
+      num_pages: picked.length,
+      sort_order: sortOrder,
+      pdf_file: mergedQuestionsName,
+      solution_pdf_file: mergedSolutionName,
+      topic_map: topicMap,
+    }]).select();
+    if (error) throw new Error('Sınav kaydı oluşturulamadı: ' + error.message);
+    const newExamRow = data[0];
+
+    const { error: keyErr } = await supabase.from('exam_answer_keys').upsert([{ exam_id: newExamRow.id, answer_key: answerKey }], { onConflict: 'exam_id' });
+    if (keyErr) throw new Error('Cevap anahtarı kaydedilemedi: ' + keyErr.message);
+
+    const usageRows = picked.map((q) => ({ pool_question_id: q.id, exam_id: newExamRow.id, batch_id: batchId }));
+    const { error: usageErr } = await supabase.from('question_pool_usage').insert(usageRows);
+    if (usageErr) console.error('question_pool_usage kaydedilemedi (sınav yine de oluşturuldu):', usageErr);
+
+    for (const q of picked) {
+      await supabase.from('question_pool').update({ used_count: (q.used_count || 0) + 1 }).eq('id', q.id);
+    }
+
+    return formatExamData(newExamRow);
+  };
+
+  // MOD 1 -- "Test Üret": aynı kazanımdan, soru TEKRARI OLMADAN birden fazla test
+  // (ör. "Hücre ve Metabolizma'dan 16'şar sorulu 10 test").
+  const runGeneratePoolTests = async () => {
+    const parentExam = exams.find((e) => e.id === poolGenParentId);
+    const ders = lessonCategories.find((lc) => lc.name === poolGenTestDers);
+    const konu = ders && topics.find((t) => t.name === poolGenTestKonu && t.lesson_category_id === ders.id);
+    const kazanim = konu && learningOutcomes.find((lo) => lo.name === poolGenTestKazanim && lo.topic_id === konu.id);
+    if (!parentExam || !ders || !konu || !kazanim) {
+      alert('Ders, Konu ve Kazanım seçin.');
+      return;
+    }
+    const testCount = Number(poolGenTestCount);
+    const testSize = Number(poolGenTestSize);
+    if (!testCount || testCount < 1 || !testSize || testSize < 1) {
+      alert('Test sayısı ve soru sayısı için geçerli bir değer girin.');
+      return;
+    }
+    const needed = testCount * testSize;
+
+    setPoolGenLoading(true);
+    const createdExams = [];
+    try {
+      const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, [], poolGenIncludeUsed);
+      if (candidates.length < needed) {
+        alert(`Yetersiz soru: "${kazanim.name}" kazanımında ${candidates.length} uygun soru var, ama ${testCount} test × ${testSize} soru = ${needed} soru gerekiyor.` + (!poolGenIncludeUsed ? '\n\n"Kullanılmışları da dahil et" seçeneğini işaretlemeyi deneyebilirsiniz.' : ''));
+        setPoolGenLoading(false);
+        return;
+      }
+
+      setPoolGenProgress({ current: 0, total: testCount });
+      const batchId = crypto.randomUUID();
+      const pool = [...candidates];
+      const existingChildren = exams.filter((ex) => ex.parentId === parentExam.id);
+      let nextOrder = existingChildren.length > 0 ? Math.max(...existingChildren.map((ex) => ex.sortOrder || 0)) + 1 : 0;
+
+      for (let i = 0; i < testCount; i++) {
+        setPoolGenProgress({ current: i + 1, total: testCount });
+        const picked = sampleN(pool, testSize);
+        picked.forEach((p) => { const idx = pool.findIndex((x) => x.id === p.id); if (idx !== -1) pool.splice(idx, 1); });
+        const examName = `${poolGenNamePrefix.trim() || kazanim.name} ${i + 1}`;
+        const newExam = await assemblePoolExamRow({ picked, examName, parentExam, sortOrder: nextOrder, examType: 'test', duration: 0, batchId });
+        nextOrder++;
+        createdExams.push(newExam);
+      }
+      setExams((prev) => [...prev, ...createdExams]);
+      alert(`✓ ${createdExams.length} test oluşturuldu ve "${parentExam.name}" paketine eklendi.`);
+      setShowPoolGenerate(false);
+    } catch (err) {
+      alert('Oluşturulurken hata: ' + err.message + (createdExams.length > 0 ? `\n\n${createdExams.length} test başarıyla oluşturuldu, bunlar listede kaldı -- işlem burada durdu.` : ''));
+      if (createdExams.length > 0) setExams((prev) => [...prev, ...createdExams]);
+    }
+    setPoolGenLoading(false);
+  };
+
+  // MOD 2 -- "Deneme Üret": birden fazla ders/konu/kazanımdan TEK bir karma deneme
+  // (ör. "Biyoloji'den 20, Kimya'dan 15, Fizik'ten 15").
+  const runGeneratePoolDeneme = async () => {
+    const parentExam = exams.find((e) => e.id === poolGenParentId);
+    if (!parentExam) { alert('Üst paket bulunamadı.'); return; }
+    const rows = poolGenDenemeRows.filter((r) => r.ders && r.konu && r.kazanim && Number(r.count) > 0);
+    if (rows.length === 0) { alert('En az bir satır (Ders/Konu/Kazanım + soru sayısı) doldurun.'); return; }
+    if (!poolGenNamePrefix.trim()) { alert('Deneme adı girin.'); return; }
+
+    setPoolGenLoading(true);
+    setPoolGenProgress({ current: 0, total: rows.length });
+    const allPicked = [];
+    try {
+      for (let i = 0; i < rows.length; i++) {
+        setPoolGenProgress({ current: i + 1, total: rows.length });
+        const r = rows[i];
+        const ders = lessonCategories.find((lc) => lc.name === r.ders);
+        const konu = ders && topics.find((t) => t.name === r.konu && t.lesson_category_id === ders.id);
+        const kazanim = konu && learningOutcomes.find((lo) => lo.name === r.kazanim && lo.topic_id === konu.id);
+        if (!ders || !konu || !kazanim) throw new Error(`Satır ${i + 1}: Ders/Konu/Kazanım eşleşmedi.`);
+        const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, allPicked.map((p) => p.id), poolGenIncludeUsed);
+        const need = Number(r.count);
+        if (candidates.length < need) throw new Error(`Satır ${i + 1} ("${kazanim.name}"): ${candidates.length} uygun soru var, ${need} gerekiyor.`);
+        allPicked.push(...sampleN(candidates, need));
+      }
+      const existingChildren = exams.filter((ex) => ex.parentId === parentExam.id);
+      const nextOrder = existingChildren.length > 0 ? Math.max(...existingChildren.map((ex) => ex.sortOrder || 0)) + 1 : 0;
+      const batchId = crypto.randomUUID();
+      const newExam = await assemblePoolExamRow({ picked: allPicked, examName: poolGenNamePrefix.trim(), parentExam, sortOrder: nextOrder, examType: 'deneme', duration: Number(poolGenDuration) || 0, batchId });
+      setExams((prev) => [...prev, newExam]);
+      alert(`✓ "${poolGenNamePrefix}" denemesi (${allPicked.length} soru) oluşturuldu ve "${parentExam.name}" paketine eklendi.`);
+      setShowPoolGenerate(false);
+    } catch (err) {
+      alert('Oluşturulurken hata: ' + err.message);
+    }
+    setPoolGenLoading(false);
+  };
+
   const handleAddSubTest = async () => {
     const adminActiveExam = exams.find(e => e.id === activeAdminExamId);
     if (!adminActiveExam) return;
@@ -5642,6 +5885,155 @@ export default function App() {
 
 
 
+        {showPoolGenerate && (() => {
+          const genParent = exams.find((e) => e.id === poolGenParentId);
+          const selStyle = { width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' };
+          const lblStyle = { display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '4px', color: '#334155' };
+          const konularOf = (dersName) => { const d = lessonCategories.find((lc) => lc.name === dersName); return d ? topics.filter((t) => t.lesson_category_id === d.id) : []; };
+          const kazanimlarOf = (dersName, konuName) => { const d = lessonCategories.find((lc) => lc.name === dersName); const k = d && topics.find((t) => t.name === konuName && t.lesson_category_id === d.id); return k ? learningOutcomes.filter((lo) => lo.topic_id === k.id) : []; };
+          const updateRow = (idx, patch) => setPoolGenDenemeRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+          const denemeTotal = poolGenDenemeRows.reduce((s, r) => s + (Number(r.count) || 0), 0);
+          return (
+            <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+              <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '24px', width: '760px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🎯 Havuzdan Oluştur</h2>
+                  {!poolGenLoading && (
+                    <button onClick={() => setShowPoolGenerate(false)} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+                  )}
+                </div>
+                <p style={{ margin: '0 0 14px', color: '#64748b', fontSize: '0.9rem' }}>
+                  Üretilen sınavlar <b>{genParent ? genParent.name : ''}</b> paketine alt test olarak eklenir. Aynı üretim içinde bir soru iki kez kullanılmaz.
+                </p>
+
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                  <button onClick={() => setPoolGenMode('test')} disabled={poolGenLoading}
+                    style={{ flex: 1, padding: '10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', border: '2px solid #be185d', backgroundColor: poolGenMode === 'test' ? '#be185d' : '#fff', color: poolGenMode === 'test' ? '#fff' : '#be185d' }}>
+                    📝 Test Üret (aynı kazanımdan, çok sayıda)
+                  </button>
+                  <button onClick={() => setPoolGenMode('deneme')} disabled={poolGenLoading}
+                    style={{ flex: 1, padding: '10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', border: '2px solid #be185d', backgroundColor: poolGenMode === 'deneme' ? '#be185d' : '#fff', color: poolGenMode === 'deneme' ? '#fff' : '#be185d' }}>
+                    🏆 Deneme Üret (karma, tek deneme)
+                  </button>
+                </div>
+
+                {poolGenMode === 'test' ? (
+                  <div style={{ display: 'grid', gap: '12px' }}>
+                    <div>
+                      <label style={lblStyle}>Test adı öneki (boşsa kazanım adı kullanılır)</label>
+                      <input className="yt-input" style={selStyle} value={poolGenNamePrefix} onChange={(e) => setPoolGenNamePrefix(e.target.value)} placeholder="Örn: Sözcükte Anlam Testi" />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                      <div>
+                        <label style={lblStyle}>Ders</label>
+                        <select className="yt-input" style={selStyle} value={poolGenTestDers} onChange={(e) => { setPoolGenTestDers(e.target.value); setPoolGenTestKonu(''); setPoolGenTestKazanim(''); }}>
+                          <option value="">Seçin</option>
+                          {lessonCategories.map((lc) => <option key={lc.id} value={lc.name}>{lc.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={lblStyle}>Konu</label>
+                        <select className="yt-input" style={selStyle} value={poolGenTestKonu} disabled={!poolGenTestDers} onChange={(e) => { setPoolGenTestKonu(e.target.value); setPoolGenTestKazanim(''); }}>
+                          <option value="">Seçin</option>
+                          {konularOf(poolGenTestDers).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={lblStyle}>Kazanım</label>
+                        <select className="yt-input" style={selStyle} value={poolGenTestKazanim} disabled={!poolGenTestKonu} onChange={(e) => setPoolGenTestKazanim(e.target.value)}>
+                          <option value="">Seçin</option>
+                          {kazanimlarOf(poolGenTestDers, poolGenTestKonu).map((lo) => <option key={lo.id} value={lo.name}>{lo.name}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                      <div>
+                        <label style={lblStyle}>Kaç test üretilsin?</label>
+                        <input type="number" min="1" className="yt-input" style={selStyle} value={poolGenTestCount} onChange={(e) => setPoolGenTestCount(e.target.value)} />
+                      </div>
+                      <div>
+                        <label style={lblStyle}>Her testte kaç soru?</label>
+                        <input type="number" min="1" className="yt-input" style={selStyle} value={poolGenTestSize} onChange={(e) => setPoolGenTestSize(e.target.value)} />
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '0.9rem', color: '#be185d', fontWeight: 'bold' }}>
+                      Toplam gereken soru: {(Number(poolGenTestCount) || 0) * (Number(poolGenTestSize) || 0)}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gap: '12px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px' }}>
+                      <div>
+                        <label style={lblStyle}>Deneme adı</label>
+                        <input className="yt-input" style={selStyle} value={poolGenNamePrefix} onChange={(e) => setPoolGenNamePrefix(e.target.value)} placeholder="Örn: Biyoloji Deneme 1" />
+                      </div>
+                      <div>
+                        <label style={lblStyle}>Süre (dakika)</label>
+                        <input type="number" min="0" className="yt-input" style={selStyle} value={poolGenDuration} onChange={(e) => setPoolGenDuration(e.target.value)} />
+                      </div>
+                    </div>
+                    {poolGenDenemeRows.map((row, idx) => (
+                      <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 80px 32px', gap: '6px', alignItems: 'end' }}>
+                        <div>
+                          {idx === 0 && <label style={lblStyle}>Ders</label>}
+                          <select className="yt-input" style={selStyle} value={row.ders} onChange={(e) => updateRow(idx, { ders: e.target.value, konu: '', kazanim: '' })}>
+                            <option value="">Ders</option>
+                            {lessonCategories.map((lc) => <option key={lc.id} value={lc.name}>{lc.name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          {idx === 0 && <label style={lblStyle}>Konu</label>}
+                          <select className="yt-input" style={selStyle} value={row.konu} disabled={!row.ders} onChange={(e) => updateRow(idx, { konu: e.target.value, kazanim: '' })}>
+                            <option value="">Konu</option>
+                            {konularOf(row.ders).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          {idx === 0 && <label style={lblStyle}>Kazanım</label>}
+                          <select className="yt-input" style={selStyle} value={row.kazanim} disabled={!row.konu} onChange={(e) => updateRow(idx, { kazanim: e.target.value })}>
+                            <option value="">Kazanım</option>
+                            {kazanimlarOf(row.ders, row.konu).map((lo) => <option key={lo.id} value={lo.name}>{lo.name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          {idx === 0 && <label style={lblStyle}>Soru</label>}
+                          <input type="number" min="1" className="yt-input" style={selStyle} value={row.count} onChange={(e) => updateRow(idx, { count: e.target.value })} />
+                        </div>
+                        <button onClick={() => setPoolGenDenemeRows((rows) => rows.length > 1 ? rows.filter((_, i) => i !== idx) : rows)}
+                          style={{ padding: '8px 0', borderRadius: '6px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', color: '#dc2626', cursor: 'pointer' }}>✕</button>
+                      </div>
+                    ))}
+                    <div>
+                      <button onClick={() => setPoolGenDenemeRows((rows) => [...rows, { ders: '', konu: '', kazanim: '', count: 10 }])}
+                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px dashed #be185d', backgroundColor: '#fff', color: '#be185d', cursor: 'pointer', fontWeight: 'bold' }}>
+                        + Satır Ekle
+                      </button>
+                    </div>
+                    <div style={{ fontSize: '0.9rem', color: '#be185d', fontWeight: 'bold' }}>Toplam soru: {denemeTotal}</div>
+                  </div>
+                )}
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px', fontSize: '0.9rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={poolGenIncludeUsed} onChange={(e) => setPoolGenIncludeUsed(e.target.checked)} disabled={poolGenLoading} />
+                  Daha önce kullanılmış soruları da dahil et
+                </label>
+
+                <div style={{ marginTop: '18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                  <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
+                    {poolGenLoading && `${poolGenProgress.current} / ${poolGenProgress.total} hazırlanıyor... (PDF'ler birleştiriliyor, bekleyin)`}
+                  </div>
+                  <button
+                    onClick={poolGenMode === 'test' ? runGeneratePoolTests : runGeneratePoolDeneme}
+                    disabled={poolGenLoading}
+                    style={{ padding: '10px 20px', borderRadius: '6px', border: 'none', backgroundColor: poolGenLoading ? '#94a3b8' : '#be185d', color: '#fff', fontWeight: 'bold', cursor: poolGenLoading ? 'not-allowed' : 'pointer' }}>
+                    {poolGenLoading ? 'Hazırlanıyor...' : (poolGenMode === 'test' ? 'Testleri Oluştur' : 'Denemeyi Oluştur')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {authLoading && (
           <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'var(--yt-mustard-bg)', color: 'var(--yt-mustard-deep)', marginBottom: '16px', borderRadius: '6px', fontWeight: 'bold' }}>
             ⏳ İşlem yapılıyor, lütfen bekleyin...
@@ -5692,6 +6084,21 @@ export default function App() {
                           style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#dcfce7', color: '#15803d', cursor: 'pointer', fontWeight: 'bold', border: '1px dashed #15803d' }}
                         >
                           📥 Excel'den Toplu Test Yükle
+                        </button>
+                        <button
+                          onClick={() => {
+                            setPoolGenParentId(parentExam.id);
+                            setPoolGenMode('test');
+                            setPoolGenNamePrefix('');
+                            setPoolGenTestDers(''); setPoolGenTestKonu(''); setPoolGenTestKazanim('');
+                            setPoolGenTestCount(10); setPoolGenTestSize(16);
+                            setPoolGenDenemeRows([{ ders: '', konu: '', kazanim: '', count: 10 }]);
+                            setPoolGenIncludeUsed(false);
+                            setShowPoolGenerate(true);
+                          }}
+                          style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#fce7f3', color: '#be185d', cursor: 'pointer', fontWeight: 'bold', border: '1px dashed #be185d' }}
+                        >
+                          🎯 Havuzdan Oluştur
                         </button>
                         <button onClick={() => togglePublish(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: parentExam.isPublished ? '#f59e0b' : '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 'bold' }}>
                           {parentExam.isPublished ? 'Yayından Kaldır' : 'Yayınla'}
