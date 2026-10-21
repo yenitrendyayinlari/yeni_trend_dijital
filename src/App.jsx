@@ -9201,11 +9201,18 @@ export default function App() {
               </div>
             </div>
 
-            <SecurePdfViewer
-              examId={activeStudentExamId}
-              type="exam"
-              pageNumber={studentCurrentPage}
-            />
+            <div style={{ position: 'relative' }}>
+              {String(activeStudentExam?.pdfFile || '').startsWith('pool_gen_') && (
+                <div style={{ position: 'absolute', top: '10px', left: '10px', zIndex: 5, minWidth: '34px', height: '34px', padding: '0 8px', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', backgroundColor: '#1a1a2e', color: '#FBF9F3', fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 1px 4px rgba(0,0,0,0.3)', pointerEvents: 'none' }}>
+                  {studentCurrentPage}
+                </div>
+              )}
+              <SecurePdfViewer
+                examId={activeStudentExamId}
+                type="exam"
+                pageNumber={studentCurrentPage}
+              />
+            </div>
 
             <div className="yt-nav-row">
               <button
@@ -9342,7 +9349,14 @@ export default function App() {
             </div>
 
             {activeStudentExam.solutionPdfFile ? (
-              <SecurePdfViewer examId={activeStudentExamId} type="solution" pageNumber={studentCurrentPage} />
+              <div style={{ position: 'relative' }}>
+                {String(activeStudentExam?.pdfFile || '').startsWith('pool_gen_') && (
+                  <div style={{ position: 'absolute', top: '10px', left: '10px', zIndex: 5, minWidth: '34px', height: '34px', padding: '0 8px', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', backgroundColor: '#1a1a2e', color: '#FBF9F3', fontWeight: 'bold', fontSize: '1rem', pointerEvents: 'none' }}>
+                    {studentCurrentPage}
+                  </div>
+                )}
+                <SecurePdfViewer examId={activeStudentExamId} type="solution" pageNumber={studentCurrentPage} />
+              </div>
             ) : (
               // Bu paket için açıklamalı çözüm PDF'i yüklenmemiş -- ama
               // cevap anahtarı her zaman elimizde olduğu için (puanlama
