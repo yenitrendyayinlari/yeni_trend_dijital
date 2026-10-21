@@ -2239,7 +2239,7 @@ export default function App() {
   // (Tek Kazanım Uygula ya da satır satır seçerek) atanıyor, tıpkı mevcut
   // Kazanım Haritası ekranınızdaki gibi.
   const downloadPoolImportTemplate = () => {
-    const rows = [['Soru PDF (dosya adı)', 'Çözüm PDF (dosya adı, opsiyonel)', 'Doğru Cevap (A-E)']];
+    const rows = [['Soru PDF (dosya adı)', 'Çözüm PDF (dosya adı, opsiyonel)', 'Doğru Cevap (A-E)', 'Soru Grubu (opsiyonel, bağlı sorulara aynı kod: G1, G1, G1)']];
     const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Soru Havuzu');
@@ -2266,6 +2266,7 @@ export default function App() {
             soruPdfName,
             cozumPdfName: String(row[1] || '').trim(),
             cevap: String(row[2] || '').trim().toUpperCase(),
+            setCode: String(row[3] || '').trim(),
           });
         }
         if (parsed.length === 0) {
@@ -2358,6 +2359,7 @@ export default function App() {
           solution_pdf_file: cozumStorageName,
           correct_answer: row.cevap,
           upload_batch_id: batchId,
+          set_key: row.setCode ? `${batchId}::${row.setCode}` : null,
         }]);
         if (insertErr) throw new Error('Havuz kaydı oluşturulamadı: ' + insertErr.message);
       } catch (err) {
@@ -2501,7 +2503,7 @@ export default function App() {
     setPoolBrowserLoading(true);
     let query = supabase
       .from('question_pool')
-      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, upload_batch_id, used_count, created_at')
+      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, upload_batch_id, set_key, used_count, created_at')
       .order('id', { ascending: false })
       .limit(500);
     if (tagFilter === 'tagged') query = query.not('outcome_id', 'is', null);
@@ -2658,6 +2660,10 @@ export default function App() {
     const kazanim = learningOutcomes.find((lo) => lo.name === kazanimName && lo.topic_id === topicId);
     if (!kazanim) return;
     updatePoolDetailField({ outcome_id: kazanim.id });
+  };
+  const handlePoolDetailSetChange = (row, code) => {
+    const clean = (code || '').trim();
+    updatePoolDetailField({ set_key: clean ? `${row.upload_batch_id || ''}::${clean}` : null });
   };
   const handlePoolDetailCevapChange = (cevap) => {
     updatePoolDetailField({ correct_answer: cevap });
@@ -3008,6 +3014,26 @@ export default function App() {
 
   // Bir kazanıma ait, excludeIds listesinde OLMAYAN havuz sorularını getirir.
   // includeUsed false ise sadece hiç kullanılmamış (used_count=0) sorular aday olur.
+  // Birbirine bağlı sorular (aynı set_key) tek birim sayılır: ya hepsi gelir
+  // ya hiçbiri, ve testte art arda dizilir. Tek soruların set_key'i boştur.
+  // n soruya TAM ulaşmak için sığmayan grup atlanıp sıradaki birim denenir.
+  const pickUnits = (arr, n) => {
+    const sets = new Map();
+    const units = [];
+    arr.forEach((q) => {
+      if (!q.set_key) { units.push([q]); return; }
+      if (!sets.has(q.set_key)) { const u = []; sets.set(q.set_key, u); units.push(u); }
+      sets.get(q.set_key).push(q);
+    });
+    units.forEach((u) => u.sort((a, b) => (a.id > b.id ? 1 : a.id < b.id ? -1 : 0)));
+    for (let i = units.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [units[i], units[j]] = [units[j], units[i]]; }
+    const out = [];
+    for (const u of units) {
+      if (out.length === n) break;
+      if (out.length + u.length <= n) out.push(...u);
+    }
+    return out;
+  };
   const fetchPoolCandidatesForOutcome = async (outcomeId, excludeIds, includeUsed) => {
     const all = [];
     const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir
@@ -3165,7 +3191,8 @@ export default function App() {
 
       for (let i = 0; i < testCount; i++) {
         setPoolGenProgress({ current: i + 1, total: testCount });
-        const picked = sampleN(pool, testSize);
+        const picked = pickUnits(pool, testSize);
+        if (picked.length < testSize) throw new Error(`${i + 1}. test için ${testSize} soruya tamamlanamadı (${picked.length} bulunabildi). Bağlı soru grupları bölünemediği için kalan sorular bu sayıya tam oturmuyor -- soru sayısını değiştirin veya "kullanılmışları da dahil et"i deneyin.`);
         picked.forEach((p) => { const idx = pool.findIndex((x) => x.id === p.id); if (idx !== -1) pool.splice(idx, 1); });
         const examName = `${poolGenNamePrefix.trim() || kazanim.name} ${i + 1}`;
         const newExam = await assemblePoolExamRow({ picked, examName, parentExam, sortOrder: nextOrder, examType: 'test', duration: 0, batchId });
@@ -3205,7 +3232,9 @@ export default function App() {
         const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, allPicked.map((p) => p.id), poolGenIncludeUsed);
         const need = Number(r.count);
         if (candidates.length < need) throw new Error(`Satır ${i + 1} ("${kazanim.name}"): ${candidates.length} uygun soru var, ${need} gerekiyor.`);
-        allPicked.push(...sampleN(candidates, need));
+        const rowPicked = pickUnits(candidates, need);
+        if (rowPicked.length < need) throw new Error(`Satır ${i + 1} ("${kazanim.name}"): ${need} soruya tam oturan bir seçim yapılamadı (bağlı soru grupları bölünemez). Soru sayısını grup büyüklüğüne uygun girin.`);
+        allPicked.push(...rowPicked);
       }
       const existingChildren = exams.filter((ex) => ex.parentId === parentExam.id);
       const nextOrder = existingChildren.length > 0 ? Math.max(...existingChildren.map((ex) => ex.sortOrder || 0)) + 1 : 0;
@@ -5332,7 +5361,7 @@ export default function App() {
               {/* --- 1) YÜKLEME BÖLÜMÜ --- */}
               <h3 style={{ fontSize: '0.95rem', margin: '6px 0 8px' }}>Havuza Soru Yükle</h3>
               <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
-                Sütun sırası: 1. Soru PDF (dosya adı), 2. Çözüm PDF (dosya adı, opsiyonel), 3. Doğru Cevap (A-E).
+                Sütun sırası: 1. Soru PDF (dosya adı), 2. Çözüm PDF (dosya adı, opsiyonel), 3. Doğru Cevap (A-E), 4. Soru Grubu (opsiyonel; ortak metne bağlı sorulara aynı kod: G1, G1, G1).
                 İlk satır başlık kabul edilir. Her PDF zaten TEK bir soru (1 sayfa) olmalı -- InDesign'da "Create Separate PDF Files" ile böldüğünüz dosyalar.
                 Ders/Konu/Kazanım burada YOK -- yükledikten sonra aşağıdaki "Etiketlenmemiş Sorular" bölümünden dropdown ile atanır.
               </div>
@@ -5847,6 +5876,16 @@ export default function App() {
                           <option value="">Seçin</option>
                           {['A', 'B', 'C', 'D', 'E'].map((c) => <option key={c} value={c}>{c}</option>)}
                         </select>
+
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Soru Grubu Kodu (ortak metne bağlı sorular)</label>
+                        <input
+                          key={row.id}
+                          defaultValue={row.set_key ? row.set_key.split('::').slice(1).join('::') : ''}
+                          onBlur={(e) => handlePoolDetailSetChange(row, e.target.value)}
+                          placeholder="Boş = tek başına soru. Bağlı sorulara aynı kod (ör. G1)"
+                          className="yt-input"
+                          style={{ width: '100%', marginBottom: '16px', boxSizing: 'border-box' }}
+                        />
 
                         <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '14px', marginBottom: '14px' }}>
                           <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>Soru PDF'i</label>
