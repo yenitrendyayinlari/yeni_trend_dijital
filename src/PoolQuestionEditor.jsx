@@ -144,6 +144,8 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const [stage, setStage] = useState(isEdit ? 'edit' : 'size');
   const [pageW, setPageW] = useState(src.w || 16); // cm
   const [pageH, setPageH] = useState(src.h || 9);
+  const [wInput, setWInput] = useState(String(src.w || 16));
+  const [hInput, setHInput] = useState(String(src.h || 9));
   const [paraGap, setParaGap] = useState(src.paraGap != null ? src.paraGap : 4);
   const [batchName, setBatchName] = useState(isEdit ? (editRow.upload_batch_id || '') : '');
   const [dersId, setDersId] = useState(isEdit && editRow.lesson_category_id != null ? String(editRow.lesson_category_id) : '');
@@ -301,6 +303,14 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const konular = topics.filter((t) => String(t.lesson_category_id) === String(dersId));
   const kazanimlar = learningOutcomes.filter((lo) => String(lo.topic_id) === String(konuId));
 
+  // Boyut kutuları: yazarken serbest; kutudan çıkınca (ya da Enter) 5-30 cm arasına çekilip uygulanır.
+  const commitSize = (which) => {
+    const raw = which === 'w' ? wInput : hInput;
+    const n = parseFloat(String(raw).replace(',', '.'));
+    const cur = which === 'w' ? pageW : pageH;
+    const v = Number.isFinite(n) ? Math.min(30, Math.max(5, n)) : cur;
+    if (which === 'w') { setPageW(v); setWInput(String(v)); } else { setPageH(v); setHInput(String(v)); }
+  };
   const keep = (e) => e.preventDefault(); // araç çubuğuna basınca yazı alanı odağı kaybolmasın
   const curSizePx = ed ? ed.getAttributes('textStyle').fontSize : null;
   const curSizePt = curSizePx ? String(Math.round(parseFloat(curSizePx) / PX_PER_PT)) : '';
@@ -317,7 +327,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
           <p style={{ margin: '0 0 16px', color: '#64748b', fontSize: '0.88rem' }}>Soru ve çözüm sayfası aynı ölçüde olur. Boyutu sonra da değiştirebilirsiniz.</p>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
             {SIZE_PRESETS.map((p) => (
-              <button key={p.key} onClick={() => { setPageW(p.w); setPageH(p.h); setStage('edit'); }}
+              <button key={p.key} onClick={() => { setPageW(p.w); setPageH(p.h); setWInput(String(p.w)); setHInput(String(p.h)); setStage('edit'); }}
                 style={{ padding: '14px', borderRadius: '8px', border: '2px solid #cbd5e1', backgroundColor: '#f8fafc', cursor: 'pointer', fontWeight: 'bold', textAlign: 'left' }}>
                 <div style={{ width: `${p.w * 4}px`, height: `${p.h * 4}px`, border: '1px solid #64748b', backgroundColor: '#fff', marginBottom: '8px' }} />
                 {p.label}
@@ -326,10 +336,14 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
           </div>
           <div style={{ marginTop: '14px', display: 'flex', gap: '8px', alignItems: 'center' }}>
             <span style={{ fontSize: '0.85rem', fontWeight: 'bold' }}>Özel (cm):</span>
-            <input type="number" min="5" max="30" step="0.5" value={pageW} onChange={(e) => setPageW(Number(e.target.value))} style={{ ...inp, width: '80px' }} />
+            <input type="text" inputMode="decimal" value={wInput} onChange={(e) => setWInput(e.target.value)} style={{ ...inp, width: '80px' }} />
             <span>×</span>
-            <input type="number" min="5" max="30" step="0.5" value={pageH} onChange={(e) => setPageH(Number(e.target.value))} style={{ ...inp, width: '80px' }} />
-            <button onClick={() => { if (pageW >= 5 && pageH >= 5) setStage('edit'); else alert('En az 5 cm olmalı.'); }}
+            <input type="text" inputMode="decimal" value={hInput} onChange={(e) => setHInput(e.target.value)} style={{ ...inp, width: '80px' }} />
+            <button onClick={() => {
+              const w = parseFloat(String(wInput).replace(',', '.')), h = parseFloat(String(hInput).replace(',', '.'));
+              if (!(w >= 5 && w <= 30 && h >= 5 && h <= 30)) { alert('Genişlik ve yükseklik 5 ile 30 cm arasında olmalı.'); return; }
+              setPageW(w); setPageH(h); setStage('edit');
+            }}
               style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', backgroundColor: '#2563eb', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}>Devam</button>
           </div>
           <div style={{ marginTop: '14px', textAlign: 'right' }}>
@@ -477,9 +491,9 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
 
           <label style={lbl}>Sayfa boyutu (cm)</label>
           <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-            <input type="number" min="5" max="30" step="0.5" value={pageW} onChange={(e) => setPageW(Math.max(5, Number(e.target.value) || 5))} style={inp} />
+            <input type="text" inputMode="decimal" value={wInput} onChange={(e) => setWInput(e.target.value)} onBlur={() => commitSize('w')} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} style={inp} />
             <span>×</span>
-            <input type="number" min="5" max="30" step="0.5" value={pageH} onChange={(e) => setPageH(Math.max(5, Number(e.target.value) || 5))} style={inp} />
+            <input type="text" inputMode="decimal" value={hInput} onChange={(e) => setHInput(e.target.value)} onBlur={() => commitSize('h')} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} style={inp} />
           </div>
           <div style={{ marginTop: '14px', fontSize: '0.75rem', color: '#64748b', lineHeight: 1.5 }}>
             İpucu: Yazı alanına tıklayıp yazın; üstteki araçlar imlecin bulunduğu sayfaya (Soru ya da Çözüm) uygulanır. “＋ Şık ekle” soru sayfasının sonuna A–E satırlarını açar.
