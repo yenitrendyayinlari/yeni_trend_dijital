@@ -55,7 +55,36 @@ const fileToPngDataUrl = async (file) => {
     ctx.drawImage(img, 0, 0, w, h);
     URL.revokeObjectURL(url);
   }
-  return canvas.toDataURL('image/png');
+  return trimWhiteMargins(canvas).toDataURL('image/png');
+};
+
+// Çizimin etrafındaki boş beyaz alanı (Illustrator'ın tüm sayfayı kaydetmesi gibi)
+// otomatik kırpar; çizime 6 px pay bırakır. Her şey beyazsa olduğu gibi döner.
+const trimWhiteMargins = (canvas) => {
+  const w = canvas.width, h = canvas.height;
+  const ctx = canvas.getContext('2d');
+  const { data } = ctx.getImageData(0, 0, w, h);
+  let minX = w, minY = h, maxX = -1, maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4;
+      if (data[i + 3] > 10 && (data[i] < 245 || data[i + 1] < 245 || data[i + 2] < 245)) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (maxX < 0) return canvas;
+  const pad = 6;
+  minX = Math.max(0, minX - pad); minY = Math.max(0, minY - pad);
+  maxX = Math.min(w - 1, maxX + pad); maxY = Math.min(h - 1, maxY + pad);
+  const cw = maxX - minX + 1, ch = maxY - minY + 1;
+  const out = document.createElement('canvas');
+  out.width = cw; out.height = ch;
+  out.getContext('2d').drawImage(canvas, minX, minY, cw, ch, 0, 0, cw, ch);
+  return out;
 };
 
 export default function PoolQuestionEditor({ lessonCategories, topics, learningOutcomes, existingGroups, editRow, onClose, onSaved }) {
@@ -190,17 +219,26 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
 
   return (
     <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
-      <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '22px', width: '740px', maxWidth: '100%', maxHeight: '92vh', overflowY: 'auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ margin: 0, fontSize: '1.15rem' }}>
+      <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '22px', width: '1320px', maxWidth: '100%', maxHeight: '94vh', overflowY: 'auto' }}>
+        <div style={{ position: 'sticky', top: '-22px', zIndex: 10, backgroundColor: '#fff', margin: '-22px -22px 0', padding: '14px 22px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+          <h2 style={{ margin: 0, fontSize: '1.1rem' }}>
             {isEdit ? `✏️ Soruyu Düzenle (#${editRow.id})` : '✏️ Soru Yaz'} {savedCount > 0 && <span style={{ fontSize: '0.8rem', color: '#16a34a' }}>({savedCount} soru eklendi)</span>}
           </h2>
-          {!saving && <button onClick={onClose} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>}
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            {(qOverflow || sOverflow) && <span style={{ color: '#dc2626', fontSize: '0.8rem', fontWeight: 'bold' }}>⚠ Metin sayfaya sığmıyor</span>}
+            <button onClick={handleSave} disabled={saving}
+              style={{ padding: '8px 20px', borderRadius: '6px', border: 'none', backgroundColor: saving ? '#94a3b8' : '#2563eb', color: '#fff', fontWeight: 'bold', cursor: saving ? 'not-allowed' : 'pointer' }}>
+              {saving ? 'Kaydediliyor...' : (isEdit ? 'Değişiklikleri Kaydet' : 'Havuza Kaydet')}
+            </button>
+            {!saving && <button onClick={onClose} style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>}
+          </div>
         </div>
-        <p style={{ margin: '6px 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+        <p style={{ margin: '8px 0 0', fontSize: '0.8rem', color: '#64748b' }}>
           Alt simge: <code>CO_{'{2}'}</code> &nbsp; Üst simge: <code>x^{'{2}'}</code>. Kaydedince soru (ve çözüm) tek sayfalık PDF olarak havuza eklenir.
         </p>
 
+        <div style={{ display: 'flex', gap: '22px', flexWrap: 'wrap', alignItems: 'flex-start', marginTop: '4px' }}>
+        <div style={{ flex: '1 1 420px', minWidth: 0 }}>
         <label style={lbl}>Grup Adı</label>
         <input list="pool-editor-groups" style={inp} value={batchName} onChange={(e) => setBatchName(e.target.value)} placeholder='Ör. "Biyoloji Kitabı 1"' />
         <datalist id="pool-editor-groups">{(existingGroups || []).map((g) => <option key={g} value={g} />)}</datalist>
@@ -298,7 +336,9 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         <label style={lbl}>Çözüm açıklaması (boşsa çözüm sayfası oluşturulmaz)</label>
         <textarea style={inp} rows={3} value={solution} onChange={(e) => setSolution(e.target.value)} />
 
-        <div style={{ fontWeight: 'bold', fontSize: '0.85rem', margin: '16px 0 6px' }}>Önizleme — Soru {qOverflow && <span style={{ color: '#dc2626' }}>⚠ sığmıyor</span>}</div>
+        </div>
+        <div style={{ flex: '0 0 auto', width: `${PX_W + 4}px`, maxWidth: '100%', position: 'sticky', top: '64px' }}>
+        <div style={{ fontWeight: 'bold', fontSize: '0.85rem', margin: '0 0 6px' }}>Önizleme — Soru {qOverflow && <span style={{ color: '#dc2626' }}>⚠ sığmıyor</span>}</div>
         <div style={{ overflowX: 'auto' }}>
           <div ref={qRef} lang="tr" style={pageStyle}>
             <div style={colStyle}>
@@ -337,11 +377,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
           </div>
         </div>
 
-        <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
-          <button onClick={handleSave} disabled={saving}
-            style={{ padding: '10px 22px', borderRadius: '6px', border: 'none', backgroundColor: saving ? '#94a3b8' : '#2563eb', color: '#fff', fontWeight: 'bold', cursor: saving ? 'not-allowed' : 'pointer' }}>
-            {saving ? 'Kaydediliyor...' : (isEdit ? 'Değişiklikleri Kaydet' : 'Havuza Kaydet')}
-          </button>
+        </div>
         </div>
       </div>
     </div>
