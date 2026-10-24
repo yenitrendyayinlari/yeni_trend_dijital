@@ -1,56 +1,80 @@
 import { useRef, useState, useLayoutEffect } from 'react';
 import html2canvas from 'html2canvas';
+import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
 import { supabase } from './supabase';
 
-// Havuz için soru + çözüm yazma ekranı. Yazılan soru ve çözüm, mevcut
+// Havuz için soru + çözüm yazma / düzenleme ekranı. Yazılan soru ve çözüm,
 // InDesign çıktılarıyla aynı ölçüde (160 x 90 mm, 16:9) TEK SAYFALIK birer
-// PDF'e çevrilip havuza eklenir -- yani havuz, birleştirme ve test üretme
-// mantığı hiç değişmez.
+// PDF'e çevrilip havuza eklenir -- havuz, birleştirme ve test üretme mantığı
+// hiç değişmez. Yazılan alanlar source_json'da saklanır; "Düzenle" ile açılır.
 const PAGE_W_PT = 453.543;
 const PAGE_H_PT = 255.118;
-const PX_W = 640; // ekrandaki sayfa genişliği (px); yükseklik 16:9
+const PX_W = 640;
 const PX_H = Math.round((PX_W * PAGE_H_PT) / PAGE_W_PT); // ~360
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
 
-// Düz metni güvenli HTML'e çevirir; _{2} alt simge, ^{2} üst simge.
 const fmt = (text) => {
-  const esc = String(text || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  return esc
-    .replace(/_\{([^}]*)\}/g, '<sub>$1</sub>')
-    .replace(/\^\{([^}]*)\}/g, '<sup>$1</sup>')
-    .replace(/\n/g, '<br/>');
+  const esc = String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return esc.replace(/_\{([^}]*)\}/g, '<sub>$1</sub>').replace(/\^\{([^}]*)\}/g, '<sup>$1</sup>').replace(/\n/g, '<br/>');
 };
 
 const pageStyle = {
-  position: 'relative',
-  width: `${PX_W}px`,
-  height: `${PX_H}px`,
-  backgroundColor: '#fff',
-  boxSizing: 'border-box',
-  padding: '22px 30px',
-  fontFamily: 'Arial, Helvetica, sans-serif',
-  color: '#000',
-  overflow: 'hidden',
-  border: '1px solid #e2e8f0',
+  position: 'relative', width: `${PX_W}px`, height: `${PX_H}px`, backgroundColor: '#fff',
+  boxSizing: 'border-box', padding: '22px 30px', fontFamily: 'Arial, Helvetica, sans-serif',
+  color: '#000', overflow: 'hidden', border: '1px solid #e2e8f0',
 };
-const colStyle = { width: '56%', textAlign: 'justify', hyphens: 'auto', WebkitHyphens: 'auto', lineHeight: 1.35 };
 
-export default function PoolQuestionEditor({ lessonCategories, topics, learningOutcomes, existingGroups, onClose, onSaved }) {
-  const [batchName, setBatchName] = useState('');
-  const [dersId, setDersId] = useState('');
-  const [konuId, setKonuId] = useState('');
-  const [kazanimId, setKazanimId] = useState('');
-  const [setCode, setSetCode] = useState('');
-  const [intro, setIntro] = useState('');
-  const [items, setItems] = useState('');
-  const [stem, setStem] = useState('');
-  const [opts, setOpts] = useState(['', '', '', '', '']);
-  const [answer, setAnswer] = useState('');
-  const [solution, setSolution] = useState('');
+// Yüklenen şekli (PNG/JPG/SVG ya da PDF/Illustrator-PDF'in ilk sayfası) PNG data URL'ine çevirir.
+const fileToPngDataUrl = async (file) => {
+  const MAX_W = 1100;
+  const isPdf = file.type === 'application/pdf' || /\.(pdf|ai)$/i.test(file.name);
+  let canvas = document.createElement('canvas');
+  if (isPdf) {
+    const data = new Uint8Array(await file.arrayBuffer());
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    const page = await pdf.getPage(1);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(3, MAX_W / base.width);
+    const vp = page.getViewport({ scale });
+    canvas.width = Math.round(vp.width);
+    canvas.height = Math.round(vp.height);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  } else {
+    const url = URL.createObjectURL(file);
+    const img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('Resim okunamadı')); im.src = url; });
+    const w = Math.min(MAX_W, img.naturalWidth || MAX_W);
+    const h = Math.round(w * ((img.naturalHeight || w) / (img.naturalWidth || w)));
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    URL.revokeObjectURL(url);
+  }
+  return canvas.toDataURL('image/png');
+};
+
+export default function PoolQuestionEditor({ lessonCategories, topics, learningOutcomes, existingGroups, editRow, onClose, onSaved }) {
+  const src = (editRow && editRow.source_json) || {};
+  const isEdit = !!editRow;
+  const [batchName, setBatchName] = useState(isEdit ? (editRow.upload_batch_id || '') : '');
+  const [dersId, setDersId] = useState(isEdit && editRow.lesson_category_id != null ? String(editRow.lesson_category_id) : '');
+  const [konuId, setKonuId] = useState(isEdit && editRow.topic_id != null ? String(editRow.topic_id) : '');
+  const [kazanimId, setKazanimId] = useState(isEdit && editRow.outcome_id != null ? String(editRow.outcome_id) : '');
+  const [setCode, setSetCode] = useState(isEdit && editRow.set_key ? editRow.set_key.split('::').slice(1).join('::') : '');
+  const [intro, setIntro] = useState(src.intro || '');
+  const [items, setItems] = useState(src.items || '');
+  const [stem, setStem] = useState(src.stem || '');
+  const [opts, setOpts] = useState(src.opts || ['', '', '', '', '']);
+  const [answer, setAnswer] = useState(isEdit ? (editRow.correct_answer || '') : '');
+  const [solution, setSolution] = useState(src.solution || '');
+  const [optLayout, setOptLayout] = useState(src.optLayout || 'auto');
+  const [colWidth, setColWidth] = useState(src.colWidth || 56);
+  const [img, setImg] = useState(src.img || null); // {dataUrl, pos:'right'|'below', widthPct, topPx}
   const [saving, setSaving] = useState(false);
   const [savedCount, setSavedCount] = useState(0);
   const [qOverflow, setQOverflow] = useState(false);
@@ -65,14 +89,26 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     if (sRef.current) setSOverflow(sRef.current.scrollHeight > sRef.current.clientHeight + 1);
   });
 
+  const handleImageFile = async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const dataUrl = await fileToPngDataUrl(f);
+      setImg({ dataUrl, pos: 'right', widthPct: 36, topPx: 20 });
+    } catch (err) {
+      alert('Şekil eklenemedi: ' + err.message + '\n(Illustrator dosyasını PDF, SVG veya PNG olarak dışa aktarıp deneyin.)');
+    }
+  };
+
   const pageToPdfBytes = async (node) => {
     const canvas = await html2canvas(node, { scale: 3, backgroundColor: '#ffffff', logging: false });
     const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
     const pngBytes = new Uint8Array(await blob.arrayBuffer());
     const pdf = await PDFDocument.create();
-    const img = await pdf.embedPng(pngBytes);
+    const image = await pdf.embedPng(pngBytes);
     const page = pdf.addPage([PAGE_W_PT, PAGE_H_PT]);
-    page.drawImage(img, { x: 0, y: 0, width: PAGE_W_PT, height: PAGE_H_PT });
+    page.drawImage(image, { x: 0, y: 0, width: PAGE_W_PT, height: PAGE_H_PT });
     return await pdf.save();
   };
 
@@ -101,7 +137,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         const sBytes = await pageToPdfBytes(sRef.current);
         sName = await uploadPdf(sBytes, 'pool_sol');
       }
-      const { error } = await supabase.from('question_pool').insert([{
+      const fields = {
         pdf_file: qName,
         solution_pdf_file: sName,
         correct_answer: answer,
@@ -110,11 +146,23 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         topic_id: konuId || null,
         outcome_id: kazanimId || null,
         set_key: setCode.trim() ? `${batch}::${setCode.trim()}` : null,
-      }]);
+        source_json: { intro, items, stem, opts, solution, optLayout, colWidth, img },
+      };
+      if (isEdit) {
+        const { error } = await supabase.from('question_pool').update(fields).eq('id', editRow.id);
+        if (error) throw new Error('Soru güncellenemedi: ' + error.message);
+        // Eski dosyalar depoda artık kalmasın (hata olursa sessizce geçilir).
+        const old = [editRow.pdf_file, editRow.solution_pdf_file].filter(Boolean);
+        if (old.length) { try { await supabase.storage.from('exam-files').remove(old); } catch (e) { /* önemsiz */ } }
+        if (onSaved) onSaved(editRow.id);
+        onClose();
+        setSaving(false);
+        return;
+      }
+      const { error } = await supabase.from('question_pool').insert([fields]);
       if (error) throw new Error('Havuz kaydı oluşturulamadı: ' + error.message);
       setSavedCount((c) => c + 1);
-      // Ders/Konu/Kazanım/Grup korunur, soru alanları temizlenir -- seri giriş için.
-      setIntro(''); setItems(''); setStem(''); setOpts(['', '', '', '', '']); setAnswer(''); setSolution('');
+      setIntro(''); setItems(''); setStem(''); setOpts(['', '', '', '', '']); setAnswer(''); setSolution(''); setImg(null);
       if (onSaved) onSaved();
     } catch (err) {
       alert('Kaydedilemedi: ' + err.message);
@@ -127,19 +175,26 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const konular = topics.filter((t) => String(t.lesson_category_id) === String(dersId));
   const kazanimlar = learningOutcomes.filter((lo) => String(lo.topic_id) === String(konuId));
 
+  // Şık düzeni: kısa şıklar 3 sütun, orta 2 sütun, uzun şıklar tek sütun.
+  const maxLen = Math.max(0, ...opts.map((o) => o.length));
+  const cols = optLayout === 'auto' ? (maxLen <= 14 ? 3 : maxLen <= 26 ? 2 : 1) : Number(optLayout);
+  const colPct = img && img.pos === 'right' ? colWidth : Math.max(colWidth, 56);
   const optGrid = (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, auto)', justifyContent: 'start', columnGap: '22px', rowGap: '4px', fontSize: '12px', marginTop: '8px' }}>
+    <div style={{ width: `${colPct}%`, display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, columnGap: '14px', rowGap: '5px', fontSize: '12px', marginTop: '8px', textAlign: 'left', lineHeight: 1.3 }}>
       {['A', 'B', 'C', 'D', 'E'].map((L, i) => (
         <div key={L}>{L}) <span dangerouslySetInnerHTML={{ __html: fmt(opts[i]) }} /></div>
       ))}
     </div>
   );
+  const colStyle = { width: `${colPct}%`, textAlign: 'justify', hyphens: 'auto', WebkitHyphens: 'auto', lineHeight: 1.35 };
 
   return (
     <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
       <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '22px', width: '740px', maxWidth: '100%', maxHeight: '92vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2 style={{ margin: 0, fontSize: '1.15rem' }}>✏️ Soru Yaz {savedCount > 0 && <span style={{ fontSize: '0.8rem', color: '#16a34a' }}>({savedCount} soru eklendi)</span>}</h2>
+          <h2 style={{ margin: 0, fontSize: '1.15rem' }}>
+            {isEdit ? `✏️ Soruyu Düzenle (#${editRow.id})` : '✏️ Soru Yaz'} {savedCount > 0 && <span style={{ fontSize: '0.8rem', color: '#16a34a' }}>({savedCount} soru eklendi)</span>}
+          </h2>
           {!saving && <button onClick={onClose} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>}
         </div>
         <p style={{ margin: '6px 0 0', fontSize: '0.8rem', color: '#64748b' }}>
@@ -187,6 +242,44 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
             <input key={L} style={inp} placeholder={`${L})`} value={opts[i]} onChange={(e) => setOpts((o) => o.map((v, j) => (j === i ? e.target.value : v)))} />
           ))}
         </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+          <div>
+            <label style={lbl}>Şık düzeni</label>
+            <select style={inp} value={optLayout} onChange={(e) => setOptLayout(e.target.value)}>
+              <option value="auto">Otomatik (şık uzunluğuna göre)</option>
+              <option value="1">Alt alta (tek sütun)</option>
+              <option value="2">İki sütun</option>
+              <option value="3">Üç sütun</option>
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Metin sütunu genişliği: %{colWidth}</label>
+            <input type="range" min="40" max="100" value={colWidth} onChange={(e) => setColWidth(Number(e.target.value))} style={{ width: '100%' }} />
+          </div>
+        </div>
+
+        <label style={lbl}>Şekil / resim (PNG, JPG, SVG ya da PDF — Illustrator'dan PDF/SVG/PNG dışa aktarın)</label>
+        <input type="file" accept="image/*,.pdf,.svg" onChange={handleImageFile} />
+        {img && (
+          <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginTop: '8px', padding: '8px', backgroundColor: '#f8fafc', borderRadius: '6px' }}>
+            <img src={img.dataUrl} alt="" style={{ height: '48px', border: '1px solid #e2e8f0' }} />
+            <label style={{ fontSize: '0.8rem' }}>Konum:{' '}
+              <select value={img.pos} onChange={(e) => setImg({ ...img, pos: e.target.value })}>
+                <option value="right">Sağda</option>
+                <option value="below">Altta</option>
+              </select>
+            </label>
+            <label style={{ fontSize: '0.8rem' }}>Boyut %{img.widthPct}{' '}
+              <input type="range" min="15" max="90" value={img.widthPct} onChange={(e) => setImg({ ...img, widthPct: Number(e.target.value) })} />
+            </label>
+            {img.pos === 'right' && (
+              <label style={{ fontSize: '0.8rem' }}>Yukarıdan {img.topPx}px{' '}
+                <input type="range" min="0" max="260" value={img.topPx} onChange={(e) => setImg({ ...img, topPx: Number(e.target.value) })} />
+              </label>
+            )}
+            <button onClick={() => setImg(null)} style={{ fontSize: '0.8rem', padding: '4px 10px', borderRadius: '6px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', color: '#dc2626', cursor: 'pointer' }}>Kaldır</button>
+          </div>
+        )}
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
           <div>
@@ -223,13 +316,19 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
               {stem.trim() && <div style={{ fontWeight: 'bold', fontSize: '13px' }} dangerouslySetInnerHTML={{ __html: fmt(stem) }} />}
             </div>
             {optGrid}
+            {img && img.pos === 'below' && (
+              <img src={img.dataUrl} alt="" style={{ display: 'block', width: `${img.widthPct}%`, marginTop: '8px' }} />
+            )}
+            {img && img.pos === 'right' && (
+              <img src={img.dataUrl} alt="" style={{ position: 'absolute', right: '30px', top: `${img.topPx}px`, width: `${img.widthPct}%` }} />
+            )}
           </div>
         </div>
 
         <div style={{ fontWeight: 'bold', fontSize: '0.85rem', margin: '14px 0 6px' }}>Önizleme — Çözüm {sOverflow && <span style={{ color: '#dc2626' }}>⚠ sığmıyor</span>}</div>
         <div style={{ overflowX: 'auto' }}>
           <div ref={sRef} lang="tr" style={pageStyle}>
-            <div style={{ ...colStyle, fontSize: '12px' }} dangerouslySetInnerHTML={{ __html: fmt(solution) }} />
+            <div style={{ ...colStyle, width: '56%', fontSize: '12px' }} dangerouslySetInnerHTML={{ __html: fmt(solution) }} />
             <div style={{ width: '56%', textAlign: 'right', fontSize: '12px', marginTop: '6px' }}>
               {['A', 'B', 'C', 'D', 'E'].map((L) => (
                 <span key={L}>|<span style={{ fontWeight: L === answer ? 'bold' : 'normal' }}>{L}</span></span>
@@ -241,7 +340,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
           <button onClick={handleSave} disabled={saving}
             style={{ padding: '10px 22px', borderRadius: '6px', border: 'none', backgroundColor: saving ? '#94a3b8' : '#2563eb', color: '#fff', fontWeight: 'bold', cursor: saving ? 'not-allowed' : 'pointer' }}>
-            {saving ? 'Kaydediliyor...' : 'Havuza Kaydet'}
+            {saving ? 'Kaydediliyor...' : (isEdit ? 'Değişiklikleri Kaydet' : 'Havuza Kaydet')}
           </button>
         </div>
       </div>

@@ -311,6 +311,7 @@ export default function App() {
   // testlerde kullanıldı" bilgisini gösteren bir panel açılır.
   const [showPoolBrowser, setShowPoolBrowser] = useState(false);
   const [showPoolEditor, setShowPoolEditor] = useState(false);
+  const [poolEditorRow, setPoolEditorRow] = useState(null); // null = yeni soru, dolu = düzenlenen havuz satırı
   const [poolBrowserLoading, setPoolBrowserLoading] = useState(false);
   const [poolBrowserRows, setPoolBrowserRows] = useState([]);
   const [poolBrowserFilterTag, setPoolBrowserFilterTag] = useState('all'); // all | tagged | untagged
@@ -2505,7 +2506,7 @@ export default function App() {
     setPoolBrowserLoading(true);
     let query = supabase
       .from('question_pool')
-      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, upload_batch_id, set_key, used_count, created_at')
+      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, upload_batch_id, set_key, source_json, used_count, created_at')
       .order('id', { ascending: false })
       .limit(500);
     if (tagFilter === 'tagged') query = query.not('outcome_id', 'is', null);
@@ -5713,7 +5714,7 @@ export default function App() {
                       ))}
                     </select>
                     <button onClick={() => { fetchPoolBrowserRows(); fetchPoolBrowserGroups(); }} className="yt-btn yt-btn-primary" style={{ fontSize: '0.8rem', padding: '7px 14px' }}>Yenile</button>
-                    <button onClick={() => setShowPoolEditor(true)} style={{ fontSize: '0.8rem', padding: '7px 14px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#2563eb', cursor: 'pointer', fontWeight: 'bold' }}>✏️ Soru Yaz</button>
+                    <button onClick={() => { setPoolEditorRow(null); setShowPoolEditor(true); }} style={{ fontSize: '0.8rem', padding: '7px 14px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#2563eb', cursor: 'pointer', fontWeight: 'bold' }}>✏️ Soru Yaz</button>
                     {poolBrowserGroup && (
                       <button
                         onClick={deletePoolGroup}
@@ -5880,6 +5881,16 @@ export default function App() {
                           {['A', 'B', 'C', 'D', 'E'].map((c) => <option key={c} value={c}>{c}</option>)}
                         </select>
 
+                        {row.source_json ? (
+                          <button
+                            onClick={() => { setPoolEditorRow(row); setShowPoolEditor(true); }}
+                            style={{ width: '100%', marginBottom: '14px', padding: '9px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer' }}
+                          >
+                            ✏️ Soruyu Düzenle (metin, şık, şekil)
+                          </button>
+                        ) : (
+                          <div style={{ marginBottom: '14px', fontSize: '0.75rem', color: '#64748b' }}>Bu soru Soru Yaz ile yazılmadığı için metni düzenlenemez; PDF'i aşağıdan değiştirebilirsiniz.</div>
+                        )}
                         <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Soru Grubu Kodu (ortak metne bağlı sorular)</label>
                         <input
                           key={row.id}
@@ -6082,8 +6093,16 @@ export default function App() {
             topics={topics}
             learningOutcomes={learningOutcomes}
             existingGroups={poolBrowserGroups.filter((g) => g.key !== '__none__').map((g) => g.key)}
-            onClose={() => setShowPoolEditor(false)}
-            onSaved={() => { fetchPoolBrowserRows(); fetchPoolBrowserGroups(); }}
+            editRow={poolEditorRow}
+            onClose={() => { setShowPoolEditor(false); setPoolEditorRow(null); }}
+            onSaved={(editedId) => {
+              if (editedId) {
+                // Düzenlenen sorunun önizleme önbelleğini atlat
+                const t = Date.now();
+                setPoolPdfVersions((prev) => ({ ...prev, [`pdf_file:${editedId}`]: t, [`solution_pdf_file:${editedId}`]: t }));
+              }
+              fetchPoolBrowserRows(); fetchPoolBrowserGroups();
+            }}
           />
         )}
 
