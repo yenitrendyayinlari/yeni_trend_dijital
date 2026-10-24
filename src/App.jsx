@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
+import PoolQuestionEditor from './PoolQuestionEditor';
 import SecurePdfViewer from './SecurePdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
@@ -309,6 +310,7 @@ export default function App() {
   // alanlar (Ders/Konu/Kazanım, Doğru Cevap, PDF değiştirme) ve "hangi
   // testlerde kullanıldı" bilgisini gösteren bir panel açılır.
   const [showPoolBrowser, setShowPoolBrowser] = useState(false);
+  const [showPoolEditor, setShowPoolEditor] = useState(false);
   const [poolBrowserLoading, setPoolBrowserLoading] = useState(false);
   const [poolBrowserRows, setPoolBrowserRows] = useState([]);
   const [poolBrowserFilterTag, setPoolBrowserFilterTag] = useState('all'); // all | tagged | untagged
@@ -5711,6 +5713,7 @@ export default function App() {
                       ))}
                     </select>
                     <button onClick={() => { fetchPoolBrowserRows(); fetchPoolBrowserGroups(); }} className="yt-btn yt-btn-primary" style={{ fontSize: '0.8rem', padding: '7px 14px' }}>Yenile</button>
+                    <button onClick={() => setShowPoolEditor(true)} style={{ fontSize: '0.8rem', padding: '7px 14px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#2563eb', cursor: 'pointer', fontWeight: 'bold' }}>✏️ Soru Yaz</button>
                     {poolBrowserGroup && (
                       <button
                         onClick={deletePoolGroup}
@@ -6072,6 +6075,17 @@ export default function App() {
             </div>
           );
         })()}
+
+        {showPoolEditor && (
+          <PoolQuestionEditor
+            lessonCategories={lessonCategories}
+            topics={topics}
+            learningOutcomes={learningOutcomes}
+            existingGroups={poolBrowserGroups.filter((g) => g.key !== '__none__').map((g) => g.key)}
+            onClose={() => setShowPoolEditor(false)}
+            onSaved={() => { fetchPoolBrowserRows(); fetchPoolBrowserGroups(); }}
+          />
+        )}
 
         {authLoading && (
           <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'var(--yt-mustard-bg)', color: 'var(--yt-mustard-deep)', marginBottom: '16px', borderRadius: '6px', fontWeight: 'bold' }}>
