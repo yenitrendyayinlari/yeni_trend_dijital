@@ -113,6 +113,15 @@ export default function App() {
   // listeden seçilerek geliyor, elle yazılmıyor.
   const [examCategories, setExamCategories] = useState([]); // [{id, name}]
   const [lessonCategories, setLessonCategories] = useState([]); // [{id, name, exam_category_id}]
+  // Aynı adlı birden fazla ders türü olabilir (ör. farklı sınav kategorilerinde "Tarih"). Havuz ekranlarında
+  // dersler adla eşleştirildiği için ilkine düşüyordu; bu yüzden tekrarlayan adlara sınav kategorisi eklenir.
+  const lcKey = (lc) => {
+    if (!lc) return '';
+    if (lessonCategories.filter((x) => x.name === lc.name).length <= 1) return lc.name;
+    const cat = examCategories.find((c) => c.id === lc.exam_category_id);
+    return `${lc.name} (${cat ? cat.name : '#' + lc.id})`;
+  };
+  const lcByKey = (key) => lessonCategories.find((lc) => lcKey(lc) === key);
   const [topics, setTopics] = useState([]); // [{id, name, lesson_category_id}]
   const [learningOutcomes, setLearningOutcomes] = useState([]); // [{id, name, lesson_category_id, topic_id}]
   // Kazanım bazlı ders notu (PDF) / video kaynakları. Anahtar: learning_outcome_id.
@@ -2439,7 +2448,7 @@ export default function App() {
   // Konu/Kazanım isimleri zaten dropdown'dan (master listeden) geldiği
   // için burada bir metin-eşleştirme riski yok.
   const applyQuickKazanimToPool = async (dersName, konuName, kazanimName) => {
-    const ders = lessonCategories.find((lc) => lc.name === dersName);
+    const ders = lcByKey(dersName);
     const konu = ders && topics.find((t) => t.name === konuName && t.lesson_category_id === ders.id);
     const kazanim = konu && learningOutcomes.find((lo) => lo.name === kazanimName && lo.topic_id === konu.id);
     if (!ders || !konu || !kazanim) {
@@ -2469,7 +2478,7 @@ export default function App() {
   // satırına yazılır -- Kazanım seçilince satır artık "etiketlenmemiş"
   // olmaktan çıktığı için listeden kaldırılır.
   const updatePoolRowDers = async (rowId, dersName) => {
-    const ders = lessonCategories.find((lc) => lc.name === dersName);
+    const ders = lcByKey(dersName);
     await supabase.from('question_pool').update({ lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null }).eq('id', rowId);
     setPoolUntagged((prev) => prev.map((r) => r.id === rowId ? { ...r, lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null } : r));
   };
@@ -2652,7 +2661,7 @@ export default function App() {
   };
 
   const handlePoolDetailDersChange = (dersName) => {
-    const ders = lessonCategories.find((lc) => lc.name === dersName);
+    const ders = lcByKey(dersName);
     updatePoolDetailField({ lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null });
   };
   const handlePoolDetailKonuChange = (dersId, konuName) => {
@@ -3161,7 +3170,7 @@ export default function App() {
   // (ör. "Hücre ve Metabolizma'dan 16'şar sorulu 10 test").
   const runGeneratePoolTests = async () => {
     const parentExam = exams.find((e) => e.id === poolGenParentId);
-    const ders = lessonCategories.find((lc) => lc.name === poolGenTestDers);
+    const ders = lcByKey(poolGenTestDers);
     const konu = ders && topics.find((t) => t.name === poolGenTestKonu && t.lesson_category_id === ders.id);
     const kazanim = konu && learningOutcomes.find((lo) => lo.name === poolGenTestKazanim && lo.topic_id === konu.id);
     if (!parentExam || !ders || !konu || !kazanim) {
@@ -3228,7 +3237,7 @@ export default function App() {
       for (let i = 0; i < rows.length; i++) {
         setPoolGenProgress({ current: i + 1, total: rows.length });
         const r = rows[i];
-        const ders = lessonCategories.find((lc) => lc.name === r.ders);
+        const ders = lcByKey(r.ders);
         const konu = ders && topics.find((t) => t.name === r.konu && t.lesson_category_id === ders.id);
         const kazanim = konu && learningOutcomes.find((lo) => lo.name === r.kazanim && lo.topic_id === konu.id);
         if (!ders || !konu || !kazanim) throw new Error(`Satır ${i + 1}: Ders/Konu/Kazanım eşleşmedi.`);
@@ -5514,7 +5523,7 @@ export default function App() {
                           style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
                         >
                           <option value="">Ders Türü Seçin</option>
-                          {lessonCategories.map((lc) => <option key={lc.id} value={lc.name}>{lc.name}</option>)}
+                          {lessonCategories.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
                         </select>
 
                         <select
@@ -5526,7 +5535,7 @@ export default function App() {
                           <option value="">{quickPoolDers ? 'Konu Seçin' : 'Önce Ders Türü seçin'}</option>
                           {quickPoolDers && topics
                             .filter((t) => {
-                              const ders = lessonCategories.find((lc) => lc.name === quickPoolDers);
+                              const ders = lcByKey(quickPoolDers);
                               return ders && t.lesson_category_id === ders.id;
                             })
                             .map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
@@ -5546,7 +5555,7 @@ export default function App() {
                             <button
                               type="button"
                               onClick={() => {
-                                const ders = lessonCategories.find((lc) => lc.name === quickPoolDers);
+                                const ders = lcByKey(quickPoolDers);
                                 if (!ders || !newTopicNamePool.trim()) return;
                                 addTopicForLessonCategoryId(ders.id, newTopicNamePool.trim(), (created) => {
                                   setQuickPoolKonu(created.name);
@@ -5633,12 +5642,12 @@ export default function App() {
                                 <td style={{ padding: '5px 8px', color: '#334155' }}>#{row.id}{row.source_label ? ` (${row.source_label})` : ''}</td>
                                 <td style={{ padding: '5px 8px' }}>
                                   <select
-                                    value={rowDers ? rowDers.name : ''}
+                                    value={rowDers ? lcKey(rowDers) : ''}
                                     onChange={(e) => updatePoolRowDers(row.id, e.target.value)}
                                     style={{ padding: '4px 6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.76rem' }}
                                   >
                                     <option value="">Ders Seçin</option>
-                                    {lessonCategories.map((lc) => <option key={lc.id} value={lc.name}>{lc.name}</option>)}
+                                    {lessonCategories.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
                                   </select>
                                 </td>
                                 <td style={{ padding: '5px 8px' }}>
@@ -5837,16 +5846,16 @@ export default function App() {
 
                         <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Ders</label>
                         {row.source_json ? (
-                          <div style={{ width: '100%', marginBottom: '10px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', fontSize: '0.88rem', color: '#334155', boxSizing: 'border-box' }}>{ders ? ders.name : '—'}</div>
+                          <div style={{ width: '100%', marginBottom: '10px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', fontSize: '0.88rem', color: '#334155', boxSizing: 'border-box' }}>{ders ? lcKey(ders) : '—'}</div>
                         ) : (
                         <select
-                          value={ders ? ders.name : ''}
+                          value={ders ? lcKey(ders) : ''}
                           onChange={(e) => handlePoolDetailDersChange(e.target.value)}
                           className="yt-input"
                           style={{ width: '100%', marginBottom: '10px' }}
                         >
                           <option value="">Ders Seçin</option>
-                          {lessonCategories.map((lc) => <option key={lc.id} value={lc.name}>{lc.name}</option>)}
+                          {lessonCategories.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
                         </select>
                         )}
 
@@ -5964,8 +5973,8 @@ export default function App() {
           const genParent = exams.find((e) => e.id === poolGenParentId);
           const selStyle = { width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' };
           const lblStyle = { display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '4px', color: '#334155' };
-          const konularOf = (dersName) => { const d = lessonCategories.find((lc) => lc.name === dersName); return d ? topics.filter((t) => t.lesson_category_id === d.id) : []; };
-          const kazanimlarOf = (dersName, konuName) => { const d = lessonCategories.find((lc) => lc.name === dersName); const k = d && topics.find((t) => t.name === konuName && t.lesson_category_id === d.id); return k ? learningOutcomes.filter((lo) => lo.topic_id === k.id) : []; };
+          const konularOf = (dersName) => { const d = lcByKey(dersName); return d ? topics.filter((t) => t.lesson_category_id === d.id) : []; };
+          const kazanimlarOf = (dersName, konuName) => { const d = lcByKey(dersName); const k = d && topics.find((t) => t.name === konuName && t.lesson_category_id === d.id); return k ? learningOutcomes.filter((lo) => lo.topic_id === k.id) : []; };
           const updateRow = (idx, patch) => setPoolGenDenemeRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
           const denemeTotal = poolGenDenemeRows.reduce((s, r) => s + (Number(r.count) || 0), 0);
           return (
@@ -6003,7 +6012,7 @@ export default function App() {
                         <label style={lblStyle}>Ders</label>
                         <select className="yt-input" style={selStyle} value={poolGenTestDers} onChange={(e) => { setPoolGenTestDers(e.target.value); setPoolGenTestKonu(''); setPoolGenTestKazanim(''); }}>
                           <option value="">Seçin</option>
-                          {lessonCategories.map((lc) => <option key={lc.id} value={lc.name}>{lc.name}</option>)}
+                          {lessonCategories.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
                         </select>
                       </div>
                       <div>
@@ -6053,7 +6062,7 @@ export default function App() {
                           {idx === 0 && <label style={lblStyle}>Ders</label>}
                           <select className="yt-input" style={selStyle} value={row.ders} onChange={(e) => updateRow(idx, { ders: e.target.value, konu: '', kazanim: '' })}>
                             <option value="">Ders</option>
-                            {lessonCategories.map((lc) => <option key={lc.id} value={lc.name}>{lc.name}</option>)}
+                            {lessonCategories.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
                           </select>
                         </div>
                         <div>
@@ -6111,7 +6120,7 @@ export default function App() {
 
         {showPoolEditor && (
           <PoolQuestionEditor
-            lessonCategories={lessonCategories}
+            lessonCategories={lessonCategories.map((lc) => ({ ...lc, name: lcKey(lc) }))}
             topics={topics}
             learningOutcomes={learningOutcomes}
             existingGroups={poolBrowserGroups.filter((g) => g.key !== '__none__').map((g) => g.key)}
