@@ -244,6 +244,7 @@ function parseIcml(xmlText) {
   };
   const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
   let skippedTables = 0;
+  const storyPages = [];
   const collectPsr = (node, out) => {
     Array.from(node.children).forEach((c) => {
       if (c.tagName === 'ParagraphStyleRange') out.push(c);
@@ -291,17 +292,52 @@ function parseIcml(xmlText) {
             open = true;
           } else if (ch.tagName === 'Br') { push(); }
         });
+        // Sayfa/sütun sonu işareti (InDesign'da "Page Break" ya da bağlı kutudan sonraki kutuya geçiş)
+        if (/^Next/.test(ca('ParagraphBreakType') || '')) { if (open || cur.segs.length) push(); paras.push({ pageBreak: true }); }
       });
       if (open || cur.segs.length) paras.push(cur);
+      if (/^Next/.test(pa('ParagraphBreakType') || '') && !(paras.length && paras[paras.length - 1].pageBreak)) paras.push({ pageBreak: true });
     });
     // bloklara böl: tamamen boş paragraflar (içinde hiçbir karakter olmayan) ayırıcıdır
-    const textOf = (p) => p.segs.map((g) => g.text || '').join('');
+    const textOf = (p) => (p.segs || []).map((g) => g.text || '').join('');
+    // sayfalara böl (toplu aktarma için)
+    const pages = []; let pg = [];
+    const flushPage = () => {
+      while (pg.length && textOf(pg[0]).length === 0) pg.shift();
+      while (pg.length && textOf(pg[pg.length - 1]).length === 0) pg.pop();
+      if (pg.length && pg.some((x) => textOf(x).trim().length)) pages.push(pg);
+      pg = [];
+    };
+    paras.forEach((p) => { if (p.pageBreak) flushPage(); else pg.push(p); });
+    flushPage();
+    storyPages.push({ len: paras.reduce((n, p) => n + textOf(p).length, 0), pages });
     const blocks = []; let b = [];
-    paras.forEach((p) => { if (textOf(p).length === 0) { if (b.length) { blocks.push(b); b = []; } } else b.push(p); });
+    paras.forEach((p) => { if (p.pageBreak || textOf(p).length === 0) { if (b.length) { blocks.push(b); b = []; } } else b.push(p); });
     if (b.length) blocks.push(b);
     blocks.forEach((bl) => stories.push({ paras: bl, label: textOf(bl[0]).replace(/\s+/g, ' ').trim().slice(0, 110) || textOf(bl[bl.length - 1]).trim().slice(0, 110), count: bl.length }));
   });
-  return { blocks: stories, skippedTables };
+  return { blocks: stories, skippedTables, storyPages };
+}
+// Çözüm sayfasının altındaki "|A|B|C|D|E|" satırını bulur; kalın (Black/Bold) harf doğru cevaptır.
+function extractAnswer(paras) {
+  const txt = (p) => (p.segs || []).map((g) => g.text || '').join('');
+  let li = paras.length - 1;
+  while (li >= 0 && !txt(paras[li]).trim()) li--;
+  if (li < 0) return { answer: null, paras, found: false };
+  const last = paras[li];
+  // Cevap satırı bazen ayrı bir paragraf, bazen çözüm metninin hemen sonunda: sondan geriye
+  // yalnızca "|", A-E harfleri ve boşluk içeren parçaları topla.
+  let k = last.segs.length;
+  while (k > 0) { const g = last.segs[k - 1]; if (g.br || !/^[|A-E\s]*$/.test(g.text || '')) break; k--; }
+  const tail = last.segs.slice(k);
+  const tailText = tail.map((g) => g.text || '').join('');
+  if (!(tailText.length <= 30 && tailText.replace(/[^A-E]/g, '') === 'ABCDE')) return { answer: null, paras, found: false };
+  const heavy = new Set();
+  tail.forEach((g) => { if (g.marks && g.marks.bold && g.text) (g.text.match(/[A-E]/g) || []).forEach((L) => heavy.add(L)); });
+  const rest = paras.slice(0, li);
+  if (k > 0) rest.push({ ...last, segs: last.segs.slice(0, k) });
+  while (rest.length && txt(rest[rest.length - 1]).length === 0) rest.pop();
+  return { answer: heavy.size === 1 ? [...heavy][0] : null, paras: rest, found: true };
 }
 const icmlParasToJson = (paras) => paras.map((p) => {
   const attrs = { indentLeft: p.indentLeft, indentRight: p.indentRight, firstLine: p.firstLine, spaceBefore: p.spaceBefore, spaceAfter: p.spaceAfter, leading: p.leading };
@@ -363,6 +399,8 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const [showTable, setShowTable] = useState(false);
   const [icml, setIcml] = useState(null); // {blocks, skippedTables} içe aktarma penceresi
   const icmlRef = useRef(null);
+  const [bulk, setBulk] = useState(null); // toplu aktarma penceresi: {items, notes, from, to, running, done, log}
+  const bulkStop = useRef(false);
   const [tRows, setTRows] = useState('3');
   const [tCols, setTCols] = useState('3');
   const [batchName, setBatchName] = useState(isEdit ? (editRow.upload_batch_id || '') : '');
@@ -435,6 +473,73 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     if (ed.isEmpty) ed.chain().focus().setContent({ type: 'doc', content: json }).run();
     else ed.chain().focus('end').insertContent(json).run();
     setIcml(null);
+  };
+
+  // ---- Toplu aktarma (soru dosyası + çözüm dosyası, her sayfa bir soru) ----
+  const mainPages = (res) => (res.storyPages.slice().sort((a, b) => b.len - a.len)[0] || { pages: [] }).pages;
+  const handleBulkFiles = async (qFile, sFile) => {
+    try {
+      const notes = [];
+      const qRes = parseIcml(await qFile.text());
+      const qPages = mainPages(qRes);
+      const extraStories = qRes.storyPages.filter((x) => x.len > 0).length - 1;
+      if (extraStories > 0) notes.push(`${extraStories} küçük metin kutusu (şekil etiketleri: I, II, III gibi) atlandı; şekilli sorulara resmi siz eklersiniz.`);
+      let sPages = [];
+      if (sFile) { sPages = mainPages(parseIcml(await sFile.text())); }
+      if (sFile && sPages.length !== qPages.length) notes.push(`Soru sayfası ${qPages.length}, çözüm sayfası ${sPages.length}: sayılar eşit değil. Eşleştirme sıraya göredir, kontrol edin.`);
+      const items = qPages.map((qp, i) => {
+        const sp = sPages[i];
+        const ex = sp ? extractAnswer(sp) : { answer: null, paras: [], found: false };
+        const first = (qp.map((p) => p.segs.map((g) => g.text || '').join('')).join(' ')).replace(/\s+/g, ' ').trim();
+        return { n: i + 1, q: qp, s: ex.paras, answer: ex.answer, answerLine: ex.found, label: first.slice(0, 100), fig: /harita|grafik|şekil|resim|görsel|piramit|tabloda|diyagram/i.test(first) };
+      });
+      setBulk({ items, notes, from: 1, to: Math.min(items.length, 50), running: false, done: 0, log: [], finished: false });
+    } catch (err) { alert('Dosya okunamadı: ' + err.message); }
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const runBulk = async () => {
+    const batch = batchName.trim();
+    if (!batch) { alert('Önce sağdaki "Grup Adı" alanını doldurun.'); return; }
+    if (!dersId) { alert('Önce sağdan Ders seçin (Konu/Kazanım isteğe bağlı).'); return; }
+    if (!qEditor || !sEditor) return;
+    const from = Math.max(1, bulk.from), to = Math.min(bulk.items.length, bulk.to);
+    if (!(to >= from)) { alert('Aralığı kontrol edin.'); return; }
+    bulkStop.current = false;
+    setBulk((b) => ({ ...b, running: true, finished: false, done: 0, log: [] }));
+    const avail = contentPxH - PAD_Y * 2;
+    const log = []; let done = 0;
+    for (let n = from; n <= to; n++) {
+      if (bulkStop.current) break;
+      const it = bulk.items[n - 1];
+      try {
+        if (!it.answer) throw new Error(it.answerLine ? 'doğru cevap okunamadı (kalın harf yok ya da birden fazla)' : 'çözüm dosyasında cevap satırı bulunamadı');
+        qEditor.commands.setContent({ type: 'doc', content: icmlParasToJson(it.q) });
+        const hasSol = it.s && it.s.some((p) => (p.segs || []).length);
+        sEditor.commands.setContent(hasSol ? { type: 'doc', content: icmlParasToJson(it.s) } : '');
+        setAnswer(it.answer);
+        await sleep(420);
+        const qh = qPageRef.current.querySelector('.ProseMirror').offsetHeight;
+        const sh = sPageRef.current.querySelector('.ProseMirror').offsetHeight;
+        if (qh > avail + 1) throw new Error('soru sayfaya sığmıyor (sayfa boyunu büyütün)');
+        if (hasSol && sh > avail + 1) throw new Error('çözüm sayfaya sığmıyor');
+        qEditor.commands.blur(); sEditor.commands.blur();
+        const qName = await uploadPdf(await pageToPdfBytes(qPageRef.current), 'pool');
+        let sName = null;
+        if (hasSol) sName = await uploadPdf(await pageToPdfBytes(sPageRef.current), 'pool_sol');
+        const { error } = await supabase.from('question_pool').insert([{
+          pdf_file: qName, solution_pdf_file: sName, correct_answer: it.answer, upload_batch_id: batch,
+          lesson_category_id: dersId || null, topic_id: konuId || null, outcome_id: kazanimId || null, set_key: null,
+          source_json: { v: 2, w: pageW, h: pageH, hyph, q: qEditor.getJSON(), s: hasSol ? sEditor.getJSON() : null },
+        }]);
+        if (error) throw new Error(error.message);
+        done++;
+        log.push({ n, ok: true });
+      } catch (err) { log.push({ n, ok: false, msg: err.message }); }
+      setBulk((b) => ({ ...b, done: n - from + 1, log: log.slice() }));
+    }
+    qEditor.commands.clearContent(true); sEditor.commands.clearContent(true); setAnswer('');
+    setBulk((b) => ({ ...b, running: false, finished: true, log: log.slice() }));
+    if (done && onSaved) onSaved();
   };
 
   const handleImageFile = async (e) => {
@@ -741,6 +846,70 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         .pq-page .ProseMirror img.ProseMirror-selectednode { outline: 2px solid #2563eb; }
         .pq-page .ProseMirror sub, .pq-page .ProseMirror sup { line-height: 0; }
       `}</style>
+      {bulk && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.6)', zIndex: 1250, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '20px', width: '760px', maxWidth: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}>
+            <h3 style={{ margin: '0 0 8px' }}>📚 InDesign'dan toplu aktar</h3>
+            {!bulk.items && (
+              <div style={{ fontSize: '0.85rem', lineHeight: 1.6 }}>
+                <p style={{ margin: '0 0 10px', color: '#475569' }}>Her sayfası bir soru olan InDesign dosyasını <b>InCopy Document (.icml)</b> olarak dışa aktarın. Çözüm dosyasını da aynı şekilde (soru sırasıyla aynı sırada, her sayfa bir çözüm). Doğru cevap, çözüm sayfası altındaki |A|B|C|D|E| satırındaki kalın harften okunur.</p>
+                <label style={{ display: 'block', margin: '8px 0 2px', fontWeight: 'bold' }}>1) Soru dosyası (.icml)</label>
+                <input type="file" accept=".icml,.xml" id="bulkQ" />
+                <label style={{ display: 'block', margin: '10px 0 2px', fontWeight: 'bold' }}>2) Çözüm dosyası (.icml)</label>
+                <input type="file" accept=".icml,.xml" id="bulkS" />
+                <div style={{ marginTop: '14px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                  <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => setBulk(null)}>Vazgeç</button>
+                  <button style={{ ...tbBtn(true), height: '34px', backgroundColor: '#2563eb', color: '#fff' }} onClick={() => {
+                    const q = document.getElementById('bulkQ').files[0]; const sf = document.getElementById('bulkS').files[0];
+                    if (!q) { alert('Soru dosyasını seçin.'); return; }
+                    handleBulkFiles(q, sf);
+                  }}>Dosyaları oku</button>
+                </div>
+              </div>
+            )}
+            {bulk.items && (
+              <>
+                <div style={{ fontSize: '0.82rem', color: '#334155', marginBottom: '6px' }}>
+                  <b>{bulk.items.length}</b> soru bulundu · doğru cevabı okunan: <b>{bulk.items.filter((x) => x.answer).length}</b>
+                  {bulk.items.some((x) => !x.answer) && <span style={{ color: '#b45309' }}> · cevabı bulunamayan: {bulk.items.filter((x) => !x.answer).length} (kaydedilmez, listede işaretli)</span>}
+                </div>
+                {bulk.notes.map((t, i) => <div key={i} style={{ fontSize: '0.78rem', color: '#b45309', marginBottom: '3px' }}>⚠ {t}</div>)}
+                <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #e2e8f0', borderRadius: '8px', margin: '8px 0', minHeight: '140px' }}>
+                  {bulk.items.map((it) => {
+                    const lg = bulk.log.find((l) => l.n === it.n);
+                    return (
+                      <div key={it.n} style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '5px 8px', fontSize: '0.78rem', borderBottom: '1px solid #f1f5f9', backgroundColor: lg ? (lg.ok ? '#f0fdf4' : '#fef2f2') : 'transparent' }}>
+                        <b style={{ width: '34px', color: '#2563eb' }}>{it.n}</b>
+                        <span style={{ width: '24px', fontWeight: 'bold', color: it.answer ? '#16a34a' : '#dc2626' }}>{it.answer || '?'}</span>
+                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.label}</span>
+                        {it.fig && <span title="Metinde şekil/harita/grafik geçiyor; resmi eklemeniz gerekebilir">🖼?</span>}
+                        {lg && <span style={{ color: lg.ok ? '#16a34a' : '#dc2626' }}>{lg.ok ? '✓ kaydedildi' : '✗ ' + lg.msg}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.8rem' }}>
+                  <span>Aralık:</span>
+                  <input type="number" min={1} max={bulk.items.length} value={bulk.from} disabled={bulk.running} onChange={(e) => setBulk((b) => ({ ...b, from: Number(e.target.value) }))} style={{ width: '70px', height: '30px' }} />
+                  <span>–</span>
+                  <input type="number" min={1} max={bulk.items.length} value={bulk.to} disabled={bulk.running} onChange={(e) => setBulk((b) => ({ ...b, to: Number(e.target.value) }))} style={{ width: '70px', height: '30px' }} />
+                  <span style={{ color: '#64748b' }}>Grup: <b>{batchName.trim() || '(sağdan girin)'}</b> · Sayfa: {pageW}×{pageH} cm</span>
+                </div>
+                {bulk.running && <div style={{ marginTop: '8px', fontSize: '0.85rem' }}>⏳ {bulk.done} / {Math.min(bulk.items.length, bulk.to) - Math.max(1, bulk.from) + 1} işleniyor… (sekmeyi kapatmayın)</div>}
+                {bulk.finished && <div style={{ marginTop: '8px', fontSize: '0.85rem', fontWeight: 'bold' }}>Bitti: {bulk.log.filter((l) => l.ok).length} kaydedildi, {bulk.log.filter((l) => !l.ok).length} atlandı.</div>}
+                <div style={{ marginTop: '12px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                  {bulk.running
+                    ? <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => { bulkStop.current = true; }}>Durdur</button>
+                    : <>
+                      <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => setBulk(null)}>Kapat</button>
+                      <button style={{ ...tbBtn(true), height: '34px', backgroundColor: '#2563eb', color: '#fff' }} onClick={runBulk}>Seçili aralığı havuza kaydet</button>
+                    </>}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
       {icml && (
         <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.55)', zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '20px', width: '640px', maxWidth: '100%', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
@@ -843,6 +1012,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
               </span>
               <button title="InDesign'dan dışa aktardığınız InCopy Document (.icml) dosyasındaki yazıyı biçimiyle birlikte getirir" onMouseDown={keep} onClick={() => icmlRef.current && icmlRef.current.click()} style={tbBtn(false)}>📥 InDesign'dan aktar</button>
               <input ref={icmlRef} type="file" accept=".icml,.xml,.incx" style={{ display: 'none' }} onChange={handleIcmlFile} />
+              {!isEdit && <button title="500 sayfalık InDesign dosyasından (her sayfa bir soru) toplu aktarır" onMouseDown={keep} onClick={() => setBulk({ items: null })} style={tbBtn(false)}>📚 Toplu aktar</button>}
               <button title="Soru sayfasının sonuna A–E şık satırları ekler" onMouseDown={keep} onClick={insertOptions} style={tbBtn(false)}>＋ Şık ekle</button>
             </div>
             {/* Satır 4: tablo içindeyken */}
