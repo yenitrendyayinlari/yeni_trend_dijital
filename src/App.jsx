@@ -5836,6 +5836,9 @@ export default function App() {
                         <p style={{ margin: '0 0 14px', fontSize: '0.76rem', color: '#94a3b8' }}>Grup: {row.upload_batch_id || '—'} · Kullanım: {row.used_count || 0}</p>
 
                         <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Ders</label>
+                        {row.source_json ? (
+                          <div style={{ width: '100%', marginBottom: '10px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', fontSize: '0.88rem', color: '#334155', boxSizing: 'border-box' }}>{ders ? ders.name : '—'}</div>
+                        ) : (
                         <select
                           value={ders ? ders.name : ''}
                           onChange={(e) => handlePoolDetailDersChange(e.target.value)}
@@ -5845,8 +5848,12 @@ export default function App() {
                           <option value="">Ders Seçin</option>
                           {lessonCategories.map((lc) => <option key={lc.id} value={lc.name}>{lc.name}</option>)}
                         </select>
+                        )}
 
                         <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Konu</label>
+                        {row.source_json ? (
+                          <div style={{ width: '100%', marginBottom: '10px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', fontSize: '0.88rem', color: '#334155', boxSizing: 'border-box' }}>{konu ? konu.name : '—'}</div>
+                        ) : (
                         <select
                           value={konu ? konu.name : ''}
                           onChange={(e) => handlePoolDetailKonuChange(row.lesson_category_id, e.target.value)}
@@ -5857,8 +5864,12 @@ export default function App() {
                           <option value="">{row.lesson_category_id ? 'Konu Seçin' : 'Önce Ders seçin'}</option>
                           {topics.filter((t) => t.lesson_category_id === row.lesson_category_id).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                         </select>
+                        )}
 
                         <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Kazanım</label>
+                        {row.source_json ? (
+                          <div style={{ width: '100%', marginBottom: '10px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', fontSize: '0.88rem', color: '#334155', boxSizing: 'border-box' }}>{learningOutcomes.find((lo) => lo.id === row.outcome_id)?.name || '—'}</div>
+                        ) : (
                         <select
                           value={learningOutcomes.find((lo) => lo.id === row.outcome_id)?.name || ''}
                           onChange={(e) => handlePoolDetailKazanimChange(row.topic_id, e.target.value)}
@@ -5869,8 +5880,12 @@ export default function App() {
                           <option value="">{row.topic_id ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
                           {learningOutcomes.filter((lo) => lo.topic_id === row.topic_id).map((lo) => <option key={lo.id} value={lo.name}>{lo.name}</option>)}
                         </select>
+                        )}
 
                         <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Doğru Cevap</label>
+                        {row.source_json ? (
+                          <div style={{ width: '100%', marginBottom: '16px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', fontSize: '0.88rem', fontWeight: 'bold', color: '#334155', boxSizing: 'border-box' }}>{row.correct_answer || '—'}</div>
+                        ) : (
                         <select
                           value={row.correct_answer || ''}
                           onChange={(e) => handlePoolDetailCevapChange(e.target.value)}
@@ -5880,6 +5895,7 @@ export default function App() {
                           <option value="">Seçin</option>
                           {['A', 'B', 'C', 'D', 'E'].map((c) => <option key={c} value={c}>{c}</option>)}
                         </select>
+                        )}
 
                         {row.source_json ? (
                           <button
@@ -5889,7 +5905,7 @@ export default function App() {
                             ✏️ Soruyu Düzenle (metin, şık, şekil)
                           </button>
                         ) : (
-                          <div style={{ marginBottom: '14px', fontSize: '0.75rem', color: '#64748b' }}>Bu soru Soru Yaz ile yazılmadığı için metni düzenlenemez; PDF'i aşağıdan değiştirebilirsiniz.</div>
+                          <div style={{ marginBottom: '14px', fontSize: '0.75rem', color: '#64748b' }}>Bu soru Soru Yaz ile yazılmadığı için metni düzenlenemez; Ders/Konu/Kazanım/Doğru Cevap'ı buradan, PDF'i aşağıdan değiştirebilirsiniz.</div>
                         )}
                         <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Soru Grubu Kodu (ortak metne bağlı sorular)</label>
                         <input
@@ -5901,6 +5917,11 @@ export default function App() {
                           style={{ width: '100%', marginBottom: '16px', boxSizing: 'border-box' }}
                         />
 
+                        {row.source_json ? (
+                          <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '12px', marginBottom: '14px', fontSize: '0.74rem', color: '#64748b', lineHeight: 1.5 }}>
+                            Ders, Konu, Kazanım, Doğru Cevap ve PDF'ler bu soruda yalnızca <b>✏️ Soruyu Düzenle</b> ekranından değiştirilir; böylece PDF ile kayıt birbirinden ayrılmaz.
+                          </div>
+                        ) : (
                         <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '14px', marginBottom: '14px' }}>
                           <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>Soru PDF'i</label>
                           <input type="file" accept="application/pdf" onChange={(e) => handlePoolDetailPdfReplace('pdf_file', e)} disabled={poolDetailUploading} style={{ fontSize: '0.78rem' }} />
@@ -5909,6 +5930,7 @@ export default function App() {
                           <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', margin: '12px 0 6px' }}>Çözüm PDF'i {row.solution_pdf_file ? '' : '(yok)'}</label>
                           <input type="file" accept="application/pdf" onChange={(e) => handlePoolDetailPdfReplace('solution_pdf_file', e)} disabled={poolDetailUploading} style={{ fontSize: '0.78rem' }} />
                         </div>
+                        )}
 
                         <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '14px' }}>
                           <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>Kullanıldığı Testler</label>

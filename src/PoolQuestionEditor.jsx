@@ -5,6 +5,8 @@ import { Extension } from '@tiptap/core';
 import { TextStyle, FontSize, FontFamily } from '@tiptap/extension-text-style';
 import { Table, TableRow, TableHeader, TableCell, TableView } from '@tiptap/extension-table';
 import { selectedRect } from '@tiptap/pm/tables';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
 import TextAlign from '@tiptap/extension-text-align';
@@ -79,6 +81,11 @@ const ParaFormat = Extension.create({
         firstLine: mmAttr('firstLine', 'text-indent', 'data-fl'),
         spaceBefore: mmAttr('spaceBefore', 'margin-top', 'data-sb'),
         spaceAfter: mmAttr('spaceAfter', 'margin-bottom', 'data-sa'),
+        tabs: {
+          default: null,
+          parseHTML: (el) => { try { const v = el.getAttribute('data-tabs'); return v ? JSON.parse(v) : null; } catch (e) { return null; } },
+          renderHTML: (attrs) => (attrs.tabs && attrs.tabs.length ? { 'data-tabs': JSON.stringify(attrs.tabs) } : {}),
+        },
         leading: {
           default: null,
           parseHTML: (el) => { const v = el.getAttribute('data-ld'); return v == null ? null : Number(v); },
@@ -88,9 +95,86 @@ const ParaFormat = Extension.create({
     }];
   },
 });
+// Sekme (Tab) karakterlerinin genişliği: tarayıcı Tab'ı iki yana yaslı satırlarda esnetiyor (ilk satır
+// kayıyordu). Bu yüzden her Tab'ı, bir sonraki durağa kadar ölçülmüş sabit genişlikte bir kutuya çeviriyoruz.
+// Durak sırası: paragrafa özel durak listesi (tabs, mm) -> asılı girintinin sol girinti noktası -> 7 mm ızgara.
+const tabPluginKey = new PluginKey('pqTabs');
+const TAB_GRID_MM = 7;
+function buildTabDeco(doc, widths) {
+  const decos = [];
+  widths.forEach((w, pos) => {
+    if (pos >= 0 && pos < doc.content.size && doc.textBetween(pos, pos + 1) === '\t') {
+      decos.push(Decoration.inline(pos, pos + 1, { class: 'pq-tab', style: `display:inline-block;width:${w.toFixed(1)}px;white-space:pre;text-indent:0;overflow:hidden;vertical-align:bottom;` }));
+    }
+  });
+  return DecorationSet.create(doc, decos);
+}
+function measureTabs(view) {
+  const st = tabPluginKey.getState(view.state);
+  if (!st) return;
+  const doc = view.state.doc;
+  const next = new Map();
+  const rootRect = view.dom.getBoundingClientRect();
+  doc.descendants((node, pos, parent) => {
+    if (!node.isText || !node.text || node.text.indexOf('\t') < 0) return;
+    for (let i = 0; i < node.text.length; i++) {
+      if (node.text[i] !== '\t') continue;
+      const tp = pos + i;
+      let left;
+      try { left = view.coordsAtPos(tp).left; } catch (e) { continue; }
+      const $p = doc.resolve(tp);
+      let frameLeft = rootRect.left;
+      for (let d = $p.depth; d > 0; d--) {
+        const nm = $p.node(d).type.name;
+        if (nm === 'tableCell' || nm === 'tableHeader') {
+          const el = view.nodeDOM($p.before(d));
+          if (el && el.getBoundingClientRect) { const cs = getComputedStyle(el); frameLeft = el.getBoundingClientRect().left + (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.borderLeftWidth) || 0); }
+          break;
+        }
+      }
+      const x = left - frameLeft;
+      const pa = $p.parent.attrs || {};
+      const stops = (Array.isArray(pa.tabs) ? pa.tabs : []).map((m) => m * MM_PX).sort((a, b) => a - b);
+      let stop = stops.find((sx) => sx > x + 1);
+      if (stop == null) {
+        const hang = (pa.indentLeft || 0) * MM_PX;
+        if ((pa.firstLine || 0) < 0 && x < hang - 1) stop = hang;
+        else { const g = TAB_GRID_MM * MM_PX; stop = (Math.floor((x + 1) / g) + 1) * g; }
+      }
+      next.set(tp, Math.max(4, stop - x));
+    }
+  });
+  let same = next.size === st.widths.size;
+  if (same) next.forEach((w, k) => { const o = st.widths.get(k); if (o == null || Math.abs(o - w) > 0.5) same = false; });
+  if (same) return;
+  if (st.pass >= 5) return; // sonsuz döngüye karşı
+  view.dispatch(view.state.tr.setMeta(tabPluginKey, { widths: next, pass: st.pass + 1 }).setMeta('addToHistory', false));
+}
+const tabPlugin = () => new Plugin({
+  key: tabPluginKey,
+  state: {
+    init: () => ({ widths: new Map(), deco: DecorationSet.empty, pass: 0 }),
+    apply(tr, st) {
+      const meta = tr.getMeta(tabPluginKey);
+      if (meta) return { widths: meta.widths, deco: buildTabDeco(tr.doc, meta.widths), pass: meta.pass };
+      if (tr.docChanged) {
+        const w = new Map(); st.widths.forEach((v, k) => w.set(tr.mapping.map(k), v));
+        return { widths: w, deco: st.deco.map(tr.mapping, tr.doc), pass: 0 };
+      }
+      return st;
+    },
+  },
+  props: { decorations(state) { const s2 = tabPluginKey.getState(state); return s2 ? s2.deco : null; } },
+  view(view) {
+    let scheduled = false;
+    return { update() { if (scheduled) return; scheduled = true; Promise.resolve().then(() => { scheduled = false; if (view.dom.isConnected) measureTabs(view); }); } };
+  },
+});
+
 // Tab tuşu: şıklardaki "A)<tab>metin" gibi sekme boşluğu bırakır (tabloda hücreler arası geçer).
 const TabKey = Extension.create({
   name: 'tabKey',
+  addProseMirrorPlugins() { return [tabPlugin()]; },
   addKeyboardShortcuts() {
     return {
       Tab: () => { if (this.editor.isActive('table')) return false; return this.editor.commands.insertContent({ type: 'text', text: '\t' }); },
@@ -268,7 +352,19 @@ function parseIcml(xmlText) {
         spaceBefore: round1((num(pa('SpaceBefore')) || 0) * PT_MM),
         spaceAfter: round1((num(pa('SpaceAfter')) || 0) * PT_MM),
         leading: null,
+        tabs: null,
       };
+      { // sekme durakları (yalnızca sola hizalı olanlar), pt -> mm
+        const tl = kids(psr, 'Properties')[0] ? kids(kids(psr, 'Properties')[0], 'TabList')[0] : null;
+        if (tl) {
+          const arr = [];
+          kids(tl, 'ListItem').forEach((li) => {
+            const al = kids(li, 'Alignment')[0], po = kids(li, 'Position')[0];
+            if (po && (!al || /LeftAlign/.test(al.textContent)) && num(po.textContent) != null) arr.push(round1(num(po.textContent) * PT_MM));
+          });
+          if (arr.length) pfmt.tabs = arr;
+        }
+      }
       if (ps.leading != null && num(ps.leading) != null) pfmt.leading = num(ps.leading);
       let cur = { segs: [], ...pfmt }; let open = false;
       const push = () => { paras.push(cur); cur = { segs: [], ...pfmt, leading: cur.leading }; open = false; };
@@ -340,7 +436,7 @@ function extractAnswer(paras) {
   return { answer: heavy.size === 1 ? [...heavy][0] : null, paras: rest, found: true };
 }
 const icmlParasToJson = (paras) => paras.map((p) => {
-  const attrs = { indentLeft: p.indentLeft, indentRight: p.indentRight, firstLine: p.firstLine, spaceBefore: p.spaceBefore, spaceAfter: p.spaceAfter, leading: p.leading };
+  const attrs = { indentLeft: p.indentLeft, indentRight: p.indentRight, firstLine: p.firstLine, spaceBefore: p.spaceBefore, spaceAfter: p.spaceAfter, leading: p.leading, tabs: p.tabs || null };
   if (p.textAlign) attrs.textAlign = p.textAlign;
   const content = [];
   p.segs.forEach((g) => {
@@ -359,6 +455,30 @@ const icmlParasToJson = (paras) => paras.map((p) => {
   });
   return content.length ? { type: 'paragraph', attrs, content } : { type: 'paragraph', attrs };
 });
+
+// Sekme durakları: "20, 33.5, 48" gibi mm değerleri (soldan, metin alanının sol kenarından ölçülür).
+function TabsField({ value, onCommit, onEnterDone }) {
+  const show = (v) => (Array.isArray(v) && v.length ? v.join(', ') : '');
+  const [t, setT] = useState('');
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { if (!editing) setT(show(value)); }, [value, editing]); // eslint-disable-line react-hooks/exhaustive-deps
+  const commit = () => {
+    setEditing(false);
+    const nums = t.split(/[\s,;]+/).map((x) => parseFloat(x.replace(',', '.'))).filter((n) => Number.isFinite(n) && n > 0 && n < 400);
+    const uniq = [...new Set(nums.map((n) => Math.round(n * 10) / 10))].sort((a, b) => a - b);
+    onCommit(uniq.length ? uniq : null);
+    setT(uniq.join(', '));
+  };
+  return (
+    <label title="Sekme durakları (mm), virgülle ayırın: 20, 33.5, 48. Tab tuşu sıradaki durağa gider. Boş = varsayılan" style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '0.72rem', color: '#475569' }}>
+      Sekme
+      <input type="text" value={t} placeholder="mm, mm…" onFocus={() => setEditing(true)} onChange={(e) => setT(e.target.value)} onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); if (onEnterDone) setTimeout(onEnterDone, 0); } }}
+        style={{ width: '120px', height: '28px', borderRadius: '5px', border: '1px solid #cbd5e1', padding: '0 5px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+      <span style={{ color: '#94a3b8' }}>mm</span>
+    </label>
+  );
+}
 
 function NumField({ label, title, value, onCommit, onEnterDone, width = 50, unit }) {
   const [t, setT] = useState('');
@@ -980,6 +1100,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
               {sep}
               <NumField label="Sol girinti" title="Soldan girinti (mm)" unit="mm" value={pa.indentLeft == null ? 0 : pa.indentLeft} onEnterDone={refocus} onCommit={(v) => setPara('indentLeft', v)} />
               <NumField label="Sağ girinti" title="Sağdan girinti (mm)" unit="mm" value={pa.indentRight == null ? 0 : pa.indentRight} onEnterDone={refocus} onCommit={(v) => setPara('indentRight', v)} />
+              <TabsField value={pa.tabs} onEnterDone={refocus} onCommit={(arr) => setPara('tabs', arr)} />
               <NumField label="İlk satır" title="Paragraf başı girintisi (mm). Negatif değer = asılı girinti" unit="mm" value={pa.firstLine == null ? 0 : pa.firstLine} onEnterDone={refocus} onCommit={(v) => setPara('firstLine', v)} />
               {sep}
               <NumField label="Önce" title="Paragraftan önce boşluk (mm)" unit="mm" value={pa.spaceBefore == null ? 0 : pa.spaceBefore} onEnterDone={refocus} onCommit={(v) => setPara('spaceBefore', v)} />
