@@ -45,6 +45,12 @@ const ResizableImage = Image.extend({
         parseHTML: (el) => Number(el.getAttribute('data-w')) || 50,
         renderHTML: (attrs) => (attrs.widthMm != null ? { 'data-w': attrs.width } : { 'data-w': attrs.width, style: `width:${attrs.width}%;height:auto;` }),
       },
+      // Kaynak dosya adı (InDesign "Bağlantılar" gibi): resim hangi dosyadan eklendi.
+      srcName: {
+        default: null,
+        parseHTML: (el) => el.getAttribute('data-src-name'),
+        renderHTML: (attrs) => (attrs.srcName ? { 'data-src-name': attrs.srcName } : {}),
+      },
       // Mutlak genişlik (mm): sayfa boyutu değişse de resim küçülmez/büyümez.
       widthMm: {
         default: null,
@@ -311,7 +317,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     if (!f || !ed) return;
     try {
       const dataUrl = await fileToPngDataUrl(f);
-      ed.chain().focus().setImage({ src: dataUrl, width: 45, widthMm: Math.round(Math.min(60, availMm * 0.45)) }).run();
+      ed.chain().focus().setImage({ src: dataUrl, srcName: f.name, width: 45, widthMm: Math.round(Math.min(60, availMm * 0.45)) }).run();
     } catch (err) {
       alert('Şekil eklenemedi: ' + err.message + '\n(Illustrator dosyasını PDF, SVG veya PNG olarak dışa aktarıp deneyin.)');
     }
@@ -540,6 +546,13 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const curSizePt = curSizePx ? String(Math.round(parseFloat(curSizePx) / PX_PER_PT)) : '';
   const curFont = ed ? (ed.getAttributes('textStyle').fontFamily || '').replace(/["']/g, '').split(',')[0] : '';
   const imgSelected = ed && ed.isActive('image');
+  // Bağlantılar: iki sayfadaki tüm resimler ve geldikleri dosya adları
+  const imgLinks = [];
+  [['q', qEditor, 'Soru'], ['s', sEditor, 'Çözüm']].forEach(([k, e, label]) => {
+    if (!e) return;
+    e.state.doc.descendants((node, pos) => { if (node.type.name === 'image') imgLinks.push({ k, e, pos, label, name: node.attrs.srcName }); });
+  });
+  const selectLink = (l) => { setActive(l.k); l.e.chain().focus().setNodeSelection(l.pos).run(); };
 
   // ---- 1) Sayfa boyutu seçimi ----
   if (stage === 'size') {
@@ -769,6 +782,17 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
             <input type="text" inputMode="decimal" value={wInput} onChange={(e) => setWInput(e.target.value)} onBlur={() => commitSize('w')} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }} style={inp} />
             <span>×</span>
             <input type="text" inputMode="decimal" value={hInput} onChange={(e) => setHInput(e.target.value)} onBlur={() => commitSize('h')} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }} style={inp} />
+          </div>
+          <div style={{ marginTop: '16px' }}>
+            <label style={lbl}>🔗 Bağlantılar (resim dosyaları)</label>
+            {imgLinks.length === 0 && <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Henüz resim yok.</div>}
+            {imgLinks.map((l, i) => (
+              <div key={i} onClick={() => selectLink(l)} title="Resmi seç. Dosya adını kopyalamak için sağdaki düğme" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '6px', marginBottom: '4px', cursor: 'pointer', fontSize: '0.78rem', backgroundColor: '#f8fafc' }}>
+                <span style={{ color: '#64748b', flexShrink: 0 }}>{l.label}</span>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 'bold', color: l.name ? '#1d4ed8' : '#94a3b8' }}>{l.name || '(dosya adı kayıtlı değil)'}</span>
+                {l.name && <button onClick={(ev) => { ev.stopPropagation(); try { navigator.clipboard.writeText(l.name); } catch (e2) { /* yoksay */ } }} style={{ border: '1px solid #cbd5e1', borderRadius: '4px', background: '#fff', cursor: 'pointer', fontSize: '0.7rem' }}>Kopyala</button>}
+              </div>
+            ))}
           </div>
           <div style={{ marginTop: '14px', fontSize: '0.75rem', color: '#64748b', lineHeight: 1.5 }}>
             İpucu: Yazı alanına tıklayıp yazın; üstteki araçlar imlecin bulunduğu sayfaya (Soru ya da Çözüm) uygulanır. “＋ Şık ekle” soru sayfasının sonuna A–E satırlarını açar.
