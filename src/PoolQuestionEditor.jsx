@@ -3,7 +3,8 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Extension } from '@tiptap/core';
 import { TextStyle, FontSize, FontFamily } from '@tiptap/extension-text-style';
-import { Table, TableRow, TableHeader, TableCell } from '@tiptap/extension-table';
+import { Table, TableRow, TableHeader, TableCell, TableView } from '@tiptap/extension-table';
+import { selectedRect } from '@tiptap/pm/tables';
 import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
 import TextAlign from '@tiptap/extension-text-align';
@@ -42,7 +43,13 @@ const ResizableImage = Image.extend({
       width: {
         default: 50,
         parseHTML: (el) => Number(el.getAttribute('data-w')) || 50,
-        renderHTML: (attrs) => ({ 'data-w': attrs.width, style: `width:${attrs.width}%;height:auto;` }),
+        renderHTML: (attrs) => (attrs.widthMm != null ? { 'data-w': attrs.width } : { 'data-w': attrs.width, style: `width:${attrs.width}%;height:auto;` }),
+      },
+      // Mutlak genişlik (mm): sayfa boyutu değişse de resim küçülmez/büyümez.
+      widthMm: {
+        default: null,
+        parseHTML: (el) => { const v = el.getAttribute('data-wmm'); return v == null ? null : Number(v); },
+        renderHTML: (attrs) => (attrs.widthMm == null ? {} : { 'data-wmm': attrs.widthMm, style: `width:${(attrs.widthMm * MM_PX).toFixed(1)}px;height:auto;` }),
       },
     };
   },
@@ -85,10 +92,39 @@ const TabKey = Extension.create({
   },
 });
 
+// Tablo: çerçeve kalınlığı (pt) ve "yazıya göre genişlik" tablo özelliği; satır yüksekliği (mm, en az) satır özelliği.
+class PqTableView extends TableView {
+  constructor(node, cellMinWidth, view, attrs) { super(node, cellMinWidth, view, attrs); this.pqApply(node); }
+  update(node) { const ok = super.update(node); if (ok) this.pqApply(node); return ok; }
+  pqApply(node) {
+    const bw = node.attrs.borderW == null ? 0.75 : node.attrs.borderW;
+    this.table.style.setProperty('--bw', `${(bw * PX_PER_PT).toFixed(2)}px`);
+    this.table.classList.toggle('pq-noborder', bw <= 0);
+    this.table.classList.toggle('pq-fit', !!node.attrs.fit);
+  }
+}
+const PqTable = Table.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      borderW: { default: 0.75, parseHTML: (el) => { const v = el.getAttribute('data-bw'); return v == null ? 0.75 : Number(v); }, renderHTML: (a) => ({ 'data-bw': a.borderW }) },
+      fit: { default: false, parseHTML: (el) => el.getAttribute('data-fit') === '1', renderHTML: (a) => (a.fit ? { 'data-fit': '1' } : {}) },
+    };
+  },
+});
+const PqTableRow = TableRow.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      rowH: { default: null, parseHTML: (el) => { const v = el.getAttribute('data-rh'); return v == null ? null : Number(v); }, renderHTML: (a) => (a.rowH == null ? {} : { 'data-rh': a.rowH, style: `height:${(a.rowH * MM_PX).toFixed(1)}px` }) },
+    };
+  },
+});
+
 const baseExtensions = () => [
   StarterKit.configure({ heading: false, blockquote: false, codeBlock: false, code: false, horizontalRule: false, link: false, trailingNode: false, bulletList: false, orderedList: false, listItem: false, listKeymap: false, strike: false }),
   TextStyle, FontSize, FontFamily, ParaFormat, TabKey,
-  Table.configure({ resizable: true }), TableRow, TableHeader, TableCell,
+  PqTable.configure({ resizable: true, View: PqTableView }), PqTableRow, TableHeader, TableCell,
   Subscript, Superscript,
   TextAlign.configure({ types: ['paragraph'] }),
   ResizableImage,
@@ -232,6 +268,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const fileRef = useRef(null);
 
   const contentPxW = pageW * PX_PER_CM;
+  const availMm = (contentPxW - 2 * PAD_X) / MM_PX; // yazı alanı genişliği (mm)
   const contentPxH = pageH * PX_PER_CM;
 
   const initialQ = isV2 ? src.q : (isLegacy ? legacyQuestionHtml(src) : '');
@@ -274,7 +311,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     if (!f || !ed) return;
     try {
       const dataUrl = await fileToPngDataUrl(f);
-      ed.chain().focus().setImage({ src: dataUrl, width: 45 }).run();
+      ed.chain().focus().setImage({ src: dataUrl, width: 45, widthMm: Math.round(Math.min(60, availMm * 0.45)) }).run();
     } catch (err) {
       alert('Şekil eklenemedi: ' + err.message + '\n(Illustrator dosyasını PDF, SVG veya PNG olarak dışa aktarıp deneyin.)');
     }
@@ -373,11 +410,24 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const kazanimlar = learningOutcomes.filter((lo) => String(lo.topic_id) === String(konuId));
 
   // Boyut kutuları: yazarken serbest; kutudan çıkınca (ya da Enter) 5-30 cm arasına çekilip uygulanır.
+  // Sayfa boyutu değişmeden önce yüzdeyle (eski) ölçülmüş resimleri mm'ye sabitler.
+  const freezeImages = () => {
+    [qEditor, sEditor].forEach((e) => {
+      if (!e) return;
+      const found = [];
+      e.state.doc.descendants((node, pos) => { if (node.type.name === 'image' && node.attrs.widthMm == null) found.push({ node, pos }); });
+      if (!found.length) return;
+      const tr = e.state.tr;
+      found.forEach(({ node, pos }) => tr.setNodeMarkup(pos, undefined, { ...node.attrs, widthMm: Math.round((node.attrs.width || 50) * availMm) / 100 }));
+      e.view.dispatch(tr);
+    });
+  };
   const commitSize = (which) => {
     const raw = which === 'w' ? wInput : hInput;
     const n = parseFloat(String(raw).replace(',', '.'));
     const cur = which === 'w' ? pageW : pageH;
     const v = Number.isFinite(n) ? Math.min(30, Math.max(5, n)) : cur;
+    if (v !== cur) freezeImages();
     if (which === 'w') { setPageW(v); setWInput(String(v)); } else { setPageH(v); setHInput(String(v)); }
   };
   const pa = ed ? ed.getAttributes('paragraph') : {};
@@ -385,6 +435,66 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const refocus = () => { if (ed) ed.commands.focus(); };
   const inTable = !!ed && ed.isActive('table');
   const doTable = (fn) => () => { if (ed) fn(ed.chain().focus()).run(); };
+  // Tablo ayarları (mm / pt). Hepsi imlecin bulunduğu tabloya uygulanır.
+  const tableInfo = () => {
+    if (!ed || !inTable) return null;
+    try {
+      const rect = selectedRect(ed.state);
+      const { map, table, tableStart } = rect;
+      const cellAt = (r, c) => table.nodeAt(map.map[r * map.width + c]);
+      const cw = cellAt(rect.top, rect.left).attrs.colwidth;
+      let total = 0, all = true;
+      for (let c = 0; c < map.width; c++) { const w = cellAt(0, c).attrs.colwidth; if (w && w[0]) total += w[0]; else all = false; }
+      const rowNode = table.child(rect.top);
+      return { rect, map, table, tableStart, colMm: cw && cw[0] ? cw[0] / MM_PX : null, tableMm: all ? total / MM_PX : null, rowH: rowNode.attrs.rowH, bw: table.attrs.borderW == null ? 0.75 : table.attrs.borderW, fit: !!table.attrs.fit };
+    } catch (e) { return null; }
+  };
+  const tblSetColW = (mm, wholeTable) => {
+    const ti = tableInfo(); if (!ti || !(mm > 0)) return;
+    const { map, table, tableStart, rect } = ti;
+    const px = Math.max(20, Math.round(mm * MM_PX));
+    const tr = ed.state.tr;
+    const cols = wholeTable ? Array.from({ length: map.width }, (_, i) => i) : [rect.left];
+    const per = wholeTable ? Math.max(20, Math.round(mm * MM_PX / map.width)) : px;
+    cols.forEach((c) => {
+      for (let r = 0; r < map.height; r++) {
+        const pos = map.map[r * map.width + c];
+        const node = table.nodeAt(pos);
+        if (node.attrs.colspan > 1) continue;
+        tr.setNodeMarkup(tableStart + pos, undefined, { ...node.attrs, colwidth: [per] });
+      }
+    });
+    tr.setNodeMarkup(tableStart - 1, undefined, { ...table.attrs, fit: false });
+    ed.view.dispatch(tr);
+  };
+  const tblResetW = () => {
+    const ti = tableInfo(); if (!ti) return;
+    const { map, table, tableStart } = ti;
+    const tr = ed.state.tr;
+    for (let r = 0; r < map.height; r++) for (let c = 0; c < map.width; c++) {
+      const pos = map.map[r * map.width + c];
+      const node = table.nodeAt(pos);
+      if (node.attrs.colwidth) tr.setNodeMarkup(tableStart + pos, undefined, { ...node.attrs, colwidth: null });
+    }
+    ed.view.dispatch(tr);
+  };
+  const tblSetAttr = (k, v) => {
+    const ti = tableInfo(); if (!ti) return;
+    ed.view.dispatch(ed.state.tr.setNodeMarkup(ti.tableStart - 1, undefined, { ...ti.table.attrs, [k]: v }));
+  };
+  const tblFit = (on) => { if (on) tblResetW(); tblSetAttr('fit', on); };
+  const tblSetRowH = (mm) => {
+    const ti = tableInfo(); if (!ti) return;
+    const { table, tableStart, rect } = ti;
+    const tr = ed.state.tr;
+    let pos = tableStart;
+    table.forEach((row, _o, i) => {
+      if (i >= rect.top && i < rect.bottom) tr.setNodeMarkup(pos, undefined, { ...row.attrs, rowH: mm > 0 ? mm : null });
+      pos += row.nodeSize;
+    });
+    ed.view.dispatch(tr);
+  };
+  const ti = tableInfo();
 
   // Seçili şık paragraflarını asılı girintiye çevirir: sol girinti 7 mm, ilk satır -7 mm,
   // "A) metin" -> "A)<tab>metin" (InDesign'daki şık düzeni).
@@ -481,7 +591,9 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         .pq-page .ProseMirror { outline: none; min-height: ${contentPxH - PAD_Y * 2}px; hyphens: ${hyph ? 'auto' : 'manual'}; -webkit-hyphens: ${hyph ? 'auto' : 'manual'}; tab-size: ${7 * MM_PX}px; }
         .pq-page .ProseMirror p { margin: 0 0 ${MM_PX}px; }
         .pq-page .ProseMirror table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 4px 0; }
-        .pq-page .ProseMirror td, .pq-page .ProseMirror th { border: 1px solid #000; padding: 2px 5px; vertical-align: top; position: relative; box-sizing: border-box; min-width: 1em; }
+        .pq-page .ProseMirror table.pq-fit { table-layout: auto; width: auto; }
+        .pq-page .ProseMirror table.pq-noborder td, .pq-page .ProseMirror table.pq-noborder th { border-color: transparent; }
+        .pq-page .ProseMirror td, .pq-page .ProseMirror th { border: var(--bw, 1px) solid #000; padding: 2px 5px; vertical-align: top; position: relative; box-sizing: border-box; min-width: 1em; }
         .pq-page .ProseMirror td p, .pq-page .ProseMirror th p { margin: 0; }
         .pq-page .ProseMirror .selectedCell:after { content: ''; position: absolute; inset: 0; background: rgba(37,99,235,0.18); pointer-events: none; }
         .pq-page .ProseMirror .column-resize-handle { position: absolute; right: -2px; top: 0; bottom: 0; width: 4px; background: #2563eb; pointer-events: none; }
@@ -554,10 +666,9 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
               <button title="İmlecin olduğu yere resim ekle" onMouseDown={keep} onClick={() => fileRef.current && fileRef.current.click()} style={tbBtn(false)}>🖼 Resim ekle</button>
               <input ref={fileRef} type="file" accept="image/*,.pdf,.svg" style={{ display: 'none' }} onChange={handleImageFile} />
               {imgSelected && (
-                <select title="Resim boyutu" style={{ ...tbSelect, width: '90px' }} value={ed.getAttributes('image').width || 50}
-                  onChange={(e) => ed.chain().focus().updateAttributes('image', { width: Number(e.target.value) }).run()}>
-                  {[15, 20, 25, 30, 40, 50, 60, 75, 90, 100].map((n) => <option key={n} value={n}>Resim %{n}</option>)}
-                </select>
+                <NumField label="Resim gen." title="Resim genişliği (mm). Sayfa boyutu değişse de sabit kalır" width={52} unit="mm"
+                  value={(() => { const a = ed.getAttributes('image'); return a.widthMm != null ? Math.round(a.widthMm * 10) / 10 : Math.round((a.width || 50) * availMm) / 100; })()}
+                  onEnterDone={refocus} onCommit={(v) => { if (v > 0) ed.chain().updateAttributes('image', { widthMm: Math.min(v, Math.round(availMm)) }).run(); }} />
               )}
               <span style={{ position: 'relative', display: 'inline-block' }}>
                 <button title="Tablo ekle" onMouseDown={keep} onClick={() => setShowTable((v) => !v)} style={tbBtn(showTable)}>▦ Tablo ekle</button>
@@ -579,6 +690,19 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                   ['Satırı sil', (c) => c.deleteRow()], ['Sütunu sil', (c) => c.deleteColumn()], ['Hücreleri birleştir', (c) => c.mergeCells()], ['Hücreyi böl', (c) => c.splitCell()], ['Tabloyu sil', (c) => c.deleteTable()]].map(([t, fn]) => (
                   <button key={t} onMouseDown={keep} onClick={doTable(fn)} style={tbBtn(false)}>{t}</button>
                 ))}
+              </div>
+            )}
+            {inTable && ti && (
+              <div style={{ ...rowStyle, borderTop: '1px dashed #cbd5e1', marginTop: '2px' }}>
+                <span style={rowTag} title="Tablo ayarları">⚙</span>
+                <NumField label="Tablo gen." title="Tablonun toplam genişliği (mm); sütunlar eşit bölünür" width={50} unit="mm" value={ti.tableMm == null ? null : Math.round(ti.tableMm * 10) / 10} onEnterDone={refocus} onCommit={(v) => tblSetColW(v, true)} />
+                <NumField label="Sütun gen." title="İmlecin olduğu sütunun genişliği (mm)" width={50} unit="mm" value={ti.colMm == null ? null : Math.round(ti.colMm * 10) / 10} onEnterDone={refocus} onCommit={(v) => tblSetColW(v, false)} />
+                <NumField label="Satır yük." title="Seçili satırların en az yüksekliği (mm). Yazı sığmazsa hücre otomatik büyür. Boş/0 = otomatik" width={50} unit="mm" value={ti.rowH} onEnterDone={refocus} onCommit={(v) => tblSetRowH(v)} />
+                <NumField label="Çerçeve" title="Çerçeve kalınlığı (pt). 0 = çerçevesiz" width={46} unit="pt" value={ti.bw} onEnterDone={refocus} onCommit={(v) => tblSetAttr('borderW', Math.min(6, Math.max(0, v == null ? 0.75 : v)))} />
+                <label style={{ fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Sütun genişlikleri yazıya göre otomatik olur">
+                  <input type="checkbox" checked={ti.fit} onMouseDown={keep} onChange={(e) => tblFit(e.target.checked)} />Genişlik yazıya göre
+                </label>
+                <button title="Elle verilen sütun genişliklerini sıfırlar (sayfaya eşit yayılır)" onMouseDown={keep} onClick={tblResetW} style={tbBtn(false)}>Genişliği sıfırla</button>
               </div>
             )}
           </div>
