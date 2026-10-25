@@ -218,6 +218,112 @@ const tbSelect = { height: '30px', borderRadius: '5px', border: '1px solid #cbd5
 const sep = <span style={{ width: '1px', height: '22px', backgroundColor: '#cbd5e1', margin: '0 4px' }} />;
 
 // Küçük sayı kutusu: yazarken serbest, kutudan çıkınca (ya da Enter) uygulanır; boş = varsayılan.
+
+// ---- InDesign (.icml / InCopy Document) içe aktarma ----
+// ICML bir XML dosyasıdır: paragraf ve karakter biçimleri (nokta/pt cinsinden) dosyanın içinde durur.
+const PT_MM = 25.4 / 72;
+const round1 = (v) => Math.round(v * 10) / 10;
+const kids = (el, tag) => Array.from(el.children).filter((c) => c.tagName === tag);
+function parseIcml(xmlText) {
+  const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+  if (doc.querySelector('parsererror') || !doc.documentElement) throw new Error('Dosya okunamadı (geçerli bir .icml değil).');
+  // Stil tablosu: Self -> {attrs, base, leading}
+  const styles = {};
+  doc.querySelectorAll('ParagraphStyle, CharacterStyle').forEach((st) => {
+    const props = kids(st, 'Properties')[0];
+    const base = props ? kids(props, 'BasedOn')[0] : null;
+    const lead = props ? kids(props, 'Leading')[0] : null;
+    styles[st.getAttribute('Self')] = { el: st, base: base ? (base.textContent || '').trim() : null, leading: lead ? lead.textContent.trim() : null };
+  });
+  const resolveStyle = (self) => {
+    const chain = []; let cur = self, guard = 0;
+    while (cur && styles[cur] && guard++ < 8) { chain.unshift(styles[cur]); cur = styles[cur].base; }
+    const attrs = {}; let leading = null;
+    chain.forEach((st) => { Array.from(st.el.attributes).forEach((a) => { attrs[a.name] = a.value; }); if (st.leading != null) leading = st.leading; });
+    return { attrs, leading };
+  };
+  const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
+  let skippedTables = 0;
+  const collectPsr = (node, out) => {
+    Array.from(node.children).forEach((c) => {
+      if (c.tagName === 'ParagraphStyleRange') out.push(c);
+      else if (c.tagName === 'Table') skippedTables++;
+      else if (c.tagName === 'XMLElement') collectPsr(c, out);
+    });
+  };
+  const stories = [];
+  doc.querySelectorAll('Story').forEach((story) => {
+    const psrs = []; collectPsr(story, psrs);
+    const paras = [];
+    psrs.forEach((psr) => {
+      const ps = resolveStyle(psr.getAttribute('AppliedParagraphStyle'));
+      const pa = (n) => (psr.hasAttribute(n) ? psr.getAttribute(n) : ps.attrs[n]);
+      const just = pa('Justification');
+      const pfmt = {
+        textAlign: just === 'CenterAlign' ? 'center' : just === 'RightAlign' ? 'right' : (just && /Justified/.test(just) ? 'justify' : null),
+        indentLeft: num(pa('LeftIndent')) != null ? round1(num(pa('LeftIndent')) * PT_MM) : null,
+        indentRight: num(pa('RightIndent')) != null ? round1(num(pa('RightIndent')) * PT_MM) : null,
+        firstLine: num(pa('FirstLineIndent')) != null ? round1(num(pa('FirstLineIndent')) * PT_MM) : null,
+        spaceBefore: round1((num(pa('SpaceBefore')) || 0) * PT_MM),
+        spaceAfter: round1((num(pa('SpaceAfter')) || 0) * PT_MM),
+        leading: null,
+      };
+      if (ps.leading != null && num(ps.leading) != null) pfmt.leading = num(ps.leading);
+      let cur = { segs: [], ...pfmt }; let open = false;
+      const push = () => { paras.push(cur); cur = { segs: [], ...pfmt, leading: cur.leading }; open = false; };
+      kids(psr, 'CharacterStyleRange').forEach((csr) => {
+        const cs = resolveStyle(csr.getAttribute('AppliedCharacterStyle'));
+        const ca = (n) => (csr.hasAttribute(n) ? csr.getAttribute(n) : cs.attrs[n]);
+        const props = kids(csr, 'Properties')[0];
+        const ld = props ? kids(props, 'Leading')[0] : null;
+        if (ld && num(ld.textContent) != null && cur.leading == null) cur.leading = num(ld.textContent);
+        const fs = ca('FontStyle') || '';
+        const pos = ca('Position') || '';
+        const fam = props && kids(props, 'AppliedFont')[0] ? kids(props, 'AppliedFont')[0].textContent.trim() : null;
+        const marks = {
+          bold: /Bold|Black|Heavy/i.test(fs), italic: /Italic|Oblique/i.test(fs), underline: ca('Underline') === 'true',
+          sup: /Superscript/i.test(pos), sub: /Subscript/i.test(pos), size: num(ca('PointSize')), fam,
+        };
+        Array.from(csr.children).forEach((ch) => {
+          if (ch.tagName === 'Content') {
+            const parts = (ch.textContent || '').split(' ');
+            parts.forEach((t, i) => { if (i > 0) { cur.segs.push({ br: true }); } if (t) cur.segs.push({ text: t, marks }); });
+            open = true;
+          } else if (ch.tagName === 'Br') { push(); }
+        });
+      });
+      if (open || cur.segs.length) paras.push(cur);
+    });
+    // bloklara böl: tamamen boş paragraflar (içinde hiçbir karakter olmayan) ayırıcıdır
+    const textOf = (p) => p.segs.map((g) => g.text || '').join('');
+    const blocks = []; let b = [];
+    paras.forEach((p) => { if (textOf(p).length === 0) { if (b.length) { blocks.push(b); b = []; } } else b.push(p); });
+    if (b.length) blocks.push(b);
+    blocks.forEach((bl) => stories.push({ paras: bl, label: textOf(bl[0]).replace(/\s+/g, ' ').trim().slice(0, 110) || textOf(bl[bl.length - 1]).trim().slice(0, 110), count: bl.length }));
+  });
+  return { blocks: stories, skippedTables };
+}
+const icmlParasToJson = (paras) => paras.map((p) => {
+  const attrs = { indentLeft: p.indentLeft, indentRight: p.indentRight, firstLine: p.firstLine, spaceBefore: p.spaceBefore, spaceAfter: p.spaceAfter, leading: p.leading };
+  if (p.textAlign) attrs.textAlign = p.textAlign;
+  const content = [];
+  p.segs.forEach((g) => {
+    if (g.br) { content.push({ type: 'hardBreak' }); return; }
+    const m = g.marks; const marks = [];
+    if (m.bold) marks.push({ type: 'bold' });
+    if (m.italic) marks.push({ type: 'italic' });
+    if (m.underline) marks.push({ type: 'underline' });
+    if (m.sup) marks.push({ type: 'superscript' });
+    if (m.sub) marks.push({ type: 'subscript' });
+    const ts = {};
+    if (m.size) ts.fontSize = `${(m.size * PX_PER_PT).toFixed(2)}px`;
+    if (m.fam && FONTS.includes(m.fam)) ts.fontFamily = m.fam;
+    if (Object.keys(ts).length) marks.push({ type: 'textStyle', attrs: ts });
+    content.push(marks.length ? { type: 'text', text: g.text, marks } : { type: 'text', text: g.text });
+  });
+  return content.length ? { type: 'paragraph', attrs, content } : { type: 'paragraph', attrs };
+});
+
 function NumField({ label, title, value, onCommit, onEnterDone, width = 50, unit }) {
   const [t, setT] = useState('');
   const [editing, setEditing] = useState(false);
@@ -255,6 +361,8 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const [hInput, setHInput] = useState(String(src.h || 9));
   const [hyph, setHyph] = useState(src.hyph !== false); // tireleme (kelime bölme)
   const [showTable, setShowTable] = useState(false);
+  const [icml, setIcml] = useState(null); // {blocks, skippedTables} içe aktarma penceresi
+  const icmlRef = useRef(null);
   const [tRows, setTRows] = useState('3');
   const [tCols, setTCols] = useState('3');
   const [batchName, setBatchName] = useState(isEdit ? (editRow.upload_batch_id || '') : '');
@@ -310,6 +418,24 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     const t = setTimeout(measure, 150);
     return () => clearTimeout(t);
   });
+
+  const handleIcmlFile = async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const res = parseIcml(await f.text());
+      if (!res.blocks.length) { alert('Dosyada aktarılacak yazı bulunamadı.'); return; }
+      setIcml(res);
+    } catch (err) { alert('InDesign dosyası okunamadı: ' + err.message); }
+  };
+  const importIcmlBlocks = (paras) => {
+    if (!ed) return;
+    const json = icmlParasToJson(paras);
+    if (ed.isEmpty) ed.chain().focus().setContent({ type: 'doc', content: json }).run();
+    else ed.chain().focus('end').insertContent(json).run();
+    setIcml(null);
+  };
 
   const handleImageFile = async (e) => {
     const f = e.target.files[0];
@@ -615,6 +741,28 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         .pq-page .ProseMirror img.ProseMirror-selectednode { outline: 2px solid #2563eb; }
         .pq-page .ProseMirror sub, .pq-page .ProseMirror sup { line-height: 0; }
       `}</style>
+      {icml && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.55)', zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '20px', width: '640px', maxWidth: '100%', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <h3 style={{ margin: '0 0 6px' }}>📥 InDesign'dan aktar</h3>
+            <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '10px' }}>
+              Dosyada {icml.blocks.length} bölüm bulundu (boş satırlarla ayrılmış). Aktarılacak bölüme tıklayın; {active === 'q' ? 'Soru' : 'Çözüm'} sayfasına eklenir.
+              {icml.skippedTables > 0 && <span style={{ color: '#b45309' }}> ⚠ {icml.skippedTables} tablo atlandı (tabloyu editörden ekleyin).</span>}
+            </div>
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {icml.blocks.map((b, i) => (
+                <div key={i} onClick={() => importIcmlBlocks(b.paras)} style={{ padding: '8px 10px', border: '1px solid #e2e8f0', borderRadius: '6px', marginBottom: '5px', cursor: 'pointer', fontSize: '0.82rem', backgroundColor: '#f8fafc' }}>
+                  <b style={{ color: '#2563eb' }}>{i + 1}.</b> {b.label || '(boş)'} <span style={{ color: '#94a3b8' }}>· {b.count} paragraf</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' }}>
+              <button onClick={() => importIcmlBlocks(icml.blocks.flatMap((b, i) => (i ? [{ segs: [], indentLeft: null, indentRight: null, firstLine: null, spaceBefore: 0, spaceAfter: 0, leading: null }, ...b.paras] : b.paras)))} style={{ ...tbBtn(false), height: '34px' }}>Hepsini aktar</button>
+              <button onClick={() => setIcml(null)} style={{ ...tbBtn(false), height: '34px' }}>Vazgeç</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#fff', borderBottom: '1px solid #e2e8f0', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
         <h2 style={{ margin: 0, fontSize: '1.15rem' }}>
           {isEdit ? `✏️ Soruyu Düzenle (#${editRow.id})` : '✏️ Soru Yaz'} {savedCount > 0 && <span style={{ fontSize: '0.8rem', color: '#16a34a' }}>({savedCount} soru eklendi)</span>}
@@ -693,6 +841,8 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                   </div>
                 )}
               </span>
+              <button title="InDesign'dan dışa aktardığınız InCopy Document (.icml) dosyasındaki yazıyı biçimiyle birlikte getirir" onMouseDown={keep} onClick={() => icmlRef.current && icmlRef.current.click()} style={tbBtn(false)}>📥 InDesign'dan aktar</button>
+              <input ref={icmlRef} type="file" accept=".icml,.xml,.incx" style={{ display: 'none' }} onChange={handleIcmlFile} />
               <button title="Soru sayfasının sonuna A–E şık satırları ekler" onMouseDown={keep} onClick={insertOptions} style={tbBtn(false)}>＋ Şık ekle</button>
             </div>
             {/* Satır 4: tablo içindeyken */}
