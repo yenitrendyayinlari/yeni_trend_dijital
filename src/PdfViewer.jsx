@@ -99,7 +99,15 @@ export default function PdfViewer({ file, pageNumber, onDocumentLoadSuccess }) {
 
       // İç dolgu (padding) payını düşüp gerçek kullanılabilir genişliği
       // hesaplıyoruz (bkz. aşağıdaki dış div'in padding değeri).
-      const availableWidth = Math.max((container.clientWidth || baseViewport.width) - 20, 100);
+      let availableWidth = Math.max((container.clientWidth || baseViewport.width) - 20, 100);
+      // Dar sayfalar (ör. 9 x 16 cm Soru Yaz sayfası) kutuyu doldurup şişmesin diye:
+      // sayfanın GERÇEK genişliği (pt -> cm) 16 cm'den darsa, genişlik 16 cm'ye oranla
+      // küçültülür (9 cm ~ %56). Telefonda aşırı küçülmesin diye en az 320 px (ya da kutu
+      // daha darsa kutu genişliği) korunur. 16 cm ve geniş sayfalar (A4 vb.) eskisi gibi doldurur.
+      const pageCm = baseViewport.width / 28.3465;
+      if (pageCm < 15.9) {
+        availableWidth = Math.max(availableWidth * (pageCm / 16), Math.min(availableWidth, 320));
+      }
       const displayScale = availableWidth / baseViewport.width;
 
       // Retina/yüksek çözünürlüklü ekranlarda net görünmesi için canvas'ın
