@@ -332,7 +332,7 @@ export default function App() {
   const [poolEditorRow, setPoolEditorRow] = useState(null); // null = yeni soru, dolu = düzenlenen havuz satırı
   const [poolBrowserLoading, setPoolBrowserLoading] = useState(false);
   const [poolBrowserRows, setPoolBrowserRows] = useState([]);
-  const [poolTreeOpen, setPoolTreeOpen] = useState({}); // Soru Havuzu ağacında açık düğümler: { 'd:12': true, 't:5': true, 'o:9': true }
+  const [poolTreeOpen, setPoolTreeOpen] = useState({}); // Soru Havuzu ağacında açık düğümler
   const [poolBrowserFilterTag, setPoolBrowserFilterTag] = useState('tagged'); // Soru Havuzu yalnızca etiketli soruları gösterir
   const [poolBrowserGroups, setPoolBrowserGroups] = useState([]); // [{key, count}] -- key: grup adı ya da '__none__' (isimsiz)
   const [poolBrowserGroup, setPoolBrowserGroup] = useState(''); // '' = tüm gruplar
@@ -2438,6 +2438,91 @@ export default function App() {
   const fetchUnlabeledPoolQuestions = async (batchId) => {
     if (!batchId) { setPoolUntagged([]); return; }
     setPoolTaggingLoading(true);
+    let query = supabase
+      .from('question_pool')
+      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, source_label, created_at, upload_batch_id')
+      .is('outcome_id', null)
+      .order('created_at', { ascending: false });
+    query = batchId === 'grupsuz' ? query.is('upload_batch_id', null) : query.eq('upload_batch_id', batchId);
+    const { data, error } = await query;
+    setPoolTaggingLoading(false);
+    if (!error && data) {
+      setPoolUntagged(data);
+    } else if (error) {
+      console.error('Etiketlenmemiş havuz soruları okunamadı:', error);
+    }
+  };
+
+  // "⚡ Tek Kazanım Uygula" -- şu an listede görünen (etiketlenmemiş) TÜM
+  // havuz sorularına aynı Ders/Konu/Kazanım'ı bir kerede uygular. Ders/
+  // Konu/Kazanım isimleri zaten dropdown'dan (master listeden) geldiği
+  // için burada bir metin-eşleştirme riski yok.
+  const applyQuickKazanimToPool = async (dersName, konuName, kazanimName) => {
+    const ders = lcByKey(dersName);
+    const konu = ders && topics.find((t) => t.name === konuName && t.lesson_category_id === ders.id);
+    const kazanim = konu && learningOutcomes.find((lo) => lo.name === kazanimName && lo.topic_id === konu.id);
+    if (!ders || !konu || !kazanim) {
+      alert('Ders, Konu ve Kazanım alanlarını doldurun.');
+      return;
+    }
+    if (poolUntagged.length === 0) {
+      alert('Etiketlenecek soru yok.');
+      return;
+    }
+    const ids = poolUntagged.map((r) => r.id);
+    const { error } = await supabase
+      .from('question_pool')
+      .update({ lesson_category_id: ders.id, topic_id: konu.id, outcome_id: kazanim.id })
+      .in('id', ids);
+    if (error) {
+      alert('Uygulanamadı: ' + error.message);
+      return;
+    }
+    alert(`✓ ${ids.length} sorunun tamamına "${ders.name} / ${konu.name} / ${kazanim.name}" uygulandı.`);
+    setPoolUntagged([]);
+    setSelectedPoolBatch(null);
+    fetchPoolBatches();
+  };
+
+  // Satır satır etiketleme: her dropdown değişikliği ANINDA o havuz
+  // satırına yazılır -- Kazanım seçilince satır artık "etiketlenmemiş"
+  // olmaktan çıktığı için listeden kaldırılır.
+  const updatePoolRowDers = async (rowId, dersName) => {
+    const ders = lcByKey(dersName);
+    await supabase.from('question_pool').update({ lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null }).eq('id', rowId);
+    setPoolUntagged((prev) => prev.map((r) => r.id === rowId ? { ...r, lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null } : r));
+  };
+
+  const updatePoolRowKonu = async (rowId, dersId, konuName) => {
+    const konu = topics.find((t) => t.name === konuName && t.lesson_category_id === dersId);
+    await supabase.from('question_pool').update({ topic_id: konu ? konu.id : null, outcome_id: null }).eq('id', rowId);
+    setPoolUntagged((prev) => prev.map((r) => r.id === rowId ? { ...r, topic_id: konu ? konu.id : null, outcome_id: null } : r));
+  };
+
+  const updatePoolRowKazanim = async (rowId, topicId, kazanimName) => {
+    const kazanim = learningOutcomes.find((lo) => lo.name === kazanimName && lo.topic_id === topicId);
+    if (!kazanim) return;
+    await supabase.from('question_pool').update({ outcome_id: kazanim.id }).eq('id', rowId);
+    // Kazanım atandı -- bu satır artık "etiketlenmemiş" değil, listeden çıkar.
+    setPoolUntagged((prev) => {
+      const updated = prev.filter((r) => r.id !== rowId);
+      // Bu, seçili gruptaki SON soruysa, grup listesini de tazeleyip
+      // grup seçimini sıfırlıyoruz -- artık tamamen etiketlenmiş bir grup
+      // için "0 soru" gösteren eski bir buton kalmasın.
+      if (updated.length === 0) {
+        fetchPoolBatches();
+        setSelectedPoolBatch(null);
+      }
+      return updated;
+    });
+  };
+
+  // --- Havuz Listesi + Detay Paneli ---
+
+  const fetchPoolBrowserRows = async (overrides = {}) => {
+    const tagFilter = overrides.tag !== undefined ? overrides.tag : poolBrowserFilterTag;
+    const groupFilter = overrides.group !== undefined ? overrides.group : poolBrowserGroup;
+    setPoolBrowserLoading(true);
     const rows = [];
     let failed = null;
     const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir -- sayfalayarak hepsini alıyoruz
