@@ -134,13 +134,12 @@ function measureTabs(view) {
       }
       const x = left - frameLeft;
       const pa = $p.parent.attrs || {};
-      const stops = (Array.isArray(pa.tabs) ? pa.tabs : []).map((m) => m * MM_PX).sort((a, b) => a - b);
+      const stops = (Array.isArray(pa.tabs) ? pa.tabs : []).map((m) => m * MM_PX);
+      // asılı girintide sol girinti noktası da (ilk satırdan sonraki) örtük bir sekme durağıdır
+      if ((pa.firstLine || 0) < 0 && (pa.indentLeft || 0) > 0) stops.push(pa.indentLeft * MM_PX);
+      stops.sort((a, b) => a - b);
       let stop = stops.find((sx) => sx > x + 1);
-      if (stop == null) {
-        const hang = (pa.indentLeft || 0) * MM_PX;
-        if ((pa.firstLine || 0) < 0 && x < hang - 1) stop = hang;
-        else { const g = TAB_GRID_MM * MM_PX; stop = (Math.floor((x + 1) / g) + 1) * g; }
-      }
+      if (stop == null) { const g = TAB_GRID_MM * MM_PX; stop = (Math.floor((x + 1) / g) + 1) * g; }
       next.set(tp, Math.max(4, stop - x));
     }
   });
@@ -521,6 +520,8 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const icmlRef = useRef(null);
   const [bulk, setBulk] = useState(null); // toplu aktarma penceresi: {items, notes, from, to, running, done, log}
   const bulkStop = useRef(false);
+  const bulkLogMap = useRef(new Map());
+  const cssRef = useRef(null);
   const [tRows, setTRows] = useState('3');
   const [tCols, setTCols] = useState('3');
   const [batchName, setBatchName] = useState(isEdit ? (editRow.upload_batch_id || '') : '');
@@ -645,9 +646,9 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       const it = bulk.items[n - 1];
       try {
         if (!it.answer) throw new Error(it.answerLine ? 'doğru cevap okunamadı (kalın harf yok ya da birden fazla)' : 'çözüm dosyasında cevap satırı bulunamadı');
-        qEditor.commands.setContent({ type: 'doc', content: icmlParasToJson(it.q) });
+        qEditor.chain().setMeta('addToHistory', false).setContent({ type: 'doc', content: icmlParasToJson(it.q) }).run(); // geri al geçmişi şişmesin
         const hasSol = it.s && it.s.some((p) => (p.segs || []).length);
-        sEditor.commands.setContent(hasSol ? { type: 'doc', content: icmlParasToJson(it.s) } : '');
+        sEditor.chain().setMeta('addToHistory', false).setContent(hasSol ? { type: 'doc', content: icmlParasToJson(it.s) } : '').run();
         setAnswer(it.answer);
         await sleep(420);
         const qh = qPageRef.current.querySelector('.ProseMirror').offsetHeight;
@@ -700,10 +701,31 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     setActive('q');
   };
 
+  // html2canvas normalde TÜM sayfanın (admin panelinin bütün listeleri dahil) kopyasını çıkarıyor; uygulama büyüdükçe
+  // her soru onlarca saniye sürüyordu. Bu yüzden sayfayı küçük, boş bir iframe'e kopyalayıp orada çekiyoruz.
+  const captureCanvas = async (node) => {
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.cssText = `position:fixed;left:-99999px;top:0;border:0;width:${node.offsetWidth + 4}px;height:${node.offsetHeight + 4}px;`;
+    document.body.appendChild(iframe);
+    try {
+      const idoc = iframe.contentDocument;
+      idoc.open();
+      idoc.write(`<!doctype html><html lang="tr"><head><meta charset="utf-8"><style>${cssRef.current ? cssRef.current.textContent : ''}\nbody{margin:0;background:#fff}</style></head><body></body></html>`);
+      idoc.close();
+      const clone = node.cloneNode(true);
+      clone.style.boxShadow = 'none';
+      idoc.body.appendChild(clone);
+      return await html2canvas(clone, { scale: 3, backgroundColor: '#ffffff', logging: false });
+    } finally {
+      iframe.remove();
+    }
+  };
   const pageToPdfBytes = async (node) => {
-    const canvas = await html2canvas(node, { scale: 3, backgroundColor: '#ffffff', logging: false });
+    const canvas = await captureCanvas(node);
     const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
     const pngBytes = new Uint8Array(await blob.arrayBuffer());
+    canvas.width = 0; canvas.height = 0; // büyük tuvali hemen bırak (toplu yüklemede bellek şişmesin)
     const pdf = await PDFDocument.create();
     const image = await pdf.embedPng(pngBytes);
     const page = pdf.addPage([pageW * PT_PER_CM, pageH * PT_PER_CM]);
@@ -975,7 +997,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   // ---- 2) Yazma ekranı ----
   return (
     <div style={{ position: 'fixed', inset: 0, backgroundColor: '#fff', zIndex: 1100, overflowY: 'auto' }}>
-      <style>{`
+      <style ref={cssRef}>{`
         .pq-page .ProseMirror { outline: none; min-height: ${contentPxH - PAD_Y * 2}px; hyphens: ${hyph ? 'auto' : 'manual'}; -webkit-hyphens: ${hyph ? 'auto' : 'manual'}; tab-size: ${7 * MM_PX}px; }
         .pq-page .ProseMirror p { margin: 0 0 ${MM_PX}px; }
         .pq-page .ProseMirror table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 4px 0; }
@@ -1019,8 +1041,9 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                 </div>
                 {bulk.notes.map((t, i) => <div key={i} style={{ fontSize: '0.78rem', color: '#b45309', marginBottom: '3px' }}>⚠ {t}</div>)}
                 <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #e2e8f0', borderRadius: '8px', margin: '8px 0', minHeight: '140px' }}>
+                  {(() => { bulkLogMap.current = new Map(bulk.log.map((l) => [l.n, l])); return null; })()}
                   {bulk.items.map((it) => {
-                    const lg = bulk.log.find((l) => l.n === it.n);
+                    const lg = bulkLogMap.current.get(it.n);
                     return (
                       <div key={it.n} style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '5px 8px', fontSize: '0.78rem', borderBottom: '1px solid #f1f5f9', backgroundColor: lg ? (lg.ok ? '#f0fdf4' : '#fef2f2') : 'transparent' }}>
                         <b style={{ width: '34px', color: '#2563eb' }}>{it.n}</b>
