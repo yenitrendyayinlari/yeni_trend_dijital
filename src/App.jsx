@@ -115,12 +115,9 @@ export default function App() {
   const [lessonCategories, setLessonCategories] = useState([]); // [{id, name, exam_category_id}]
   // Aynı adlı birden fazla ders türü olabilir (ör. farklı sınav kategorilerinde "Tarih"). Havuz ekranlarında
   // dersler adla eşleştirildiği için ilkine düşüyordu; bu yüzden tekrarlayan adlara sınav kategorisi eklenir.
-  const lcKey = (lc) => {
-    if (!lc) return '';
-    if (lessonCategories.filter((x) => x.name === lc.name).length <= 1) return lc.name;
-    const cat = examCategories.find((c) => c.id === lc.exam_category_id);
-    return `${lc.name} (${cat ? cat.name : '#' + lc.id})`;
-  };
+  // Aynı adlı dersler (ör. KPSS ve MEB-AGS'deki 'Tarih') listelerde TEK ders olarak gösterilir; havuz soruları ad üzerinden ortak kullanılır.
+  const lcKey = (lc) => (lc ? lc.name : '');
+  const lessonUniq = lessonCategories.filter((lc, i, a) => a.findIndex((x) => x.name === lc.name) === i);
   const lcByKey = (key) => lessonCategories.find((lc) => lcKey(lc) === key);
   // Ders ADIYLA (Kazanım Haritası, Excel, hızlı atama gibi ad bazlı ekranlar): aynı adlı birden fazla ders türü varsa
   // verilen konuyu içereni seçer (ilk bulunana değil), böylece "Tarih" iki kategoride olsa da konu/kazanım listeleri boş gelmez.
@@ -2547,6 +2544,7 @@ export default function App() {
   };
 
   // Soru Havuzu ağacı sırası: Ders -> Konu -> Kazanım -> soru no. Önceki/Sonraki soru da bu sırayı izler.
+  const poolNm = (list, id, fb) => { const x = list.find((e) => e.id === id); return x ? x.name : fb; };
   const sortPoolRowsByTree = (rows) => {
     const dName = (r) => { const d = lessonCategories.find((lc) => lc.id === r.lesson_category_id); return d ? lcKey(d) : '\uffff'; };
     const tName = (r) => (topics.find((t) => t.id === r.topic_id)?.name) || '\uffff';
@@ -5584,7 +5582,7 @@ export default function App() {
                           style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
                         >
                           <option value="">Ders Türü Seçin</option>
-                          {lessonCategories.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
+                          {lessonUniq.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
                         </select>
 
                         <select
@@ -5708,7 +5706,7 @@ export default function App() {
                                     style={{ padding: '4px 6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.76rem' }}
                                   >
                                     <option value="">Ders Seçin</option>
-                                    {lessonCategories.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
+                                    {lessonUniq.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
                                   </select>
                                 </td>
                                 <td style={{ padding: '5px 8px' }}>
@@ -5783,7 +5781,7 @@ export default function App() {
                         🗑️ Bu Grubu Tümden Sil
                       </button>
                     )}
-                    <button onClick={() => { const o = {}; poolBrowserRows.forEach((r) => { o[`d:${r.lesson_category_id}`] = true; o[`t:${r.lesson_category_id}:${r.topic_id}`] = true; o[`o:${r.lesson_category_id}:${r.topic_id}:${r.outcome_id}`] = true; }); setPoolTreeOpen(o); }} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini aç</button>
+                    <button onClick={() => { const o = {}; poolBrowserRows.forEach((r) => { const dn = poolNm(lessonCategories, r.lesson_category_id, 'Dersi belirsiz'), tn = poolNm(topics, r.topic_id, 'Konusuz'), on = poolNm(learningOutcomes, r.outcome_id, 'Kazanımsız'); o[`d:${dn}`] = true; o[`t:${dn}:${tn}`] = true; o[`o:${dn}:${tn}:${on}`] = true; }); setPoolTreeOpen(o); }} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini aç</button>
                     <button onClick={() => setPoolTreeOpen({})} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini kapat</button>
                     <span style={{ fontSize: '0.78rem', color: '#64748b', marginLeft: 'auto' }}>{poolBrowserRows.length} soru</span>
                   </div>
@@ -5799,14 +5797,17 @@ export default function App() {
                         // poolBrowserRows zaten ağaç sırasında; ders > konu > kazanım olarak grupluyoruz
                         const dersler = [];
                         poolBrowserRows.forEach((r) => {
+                          const dn = poolNm(lessonCategories, r.lesson_category_id, 'Dersi belirsiz');
+                          const tn = poolNm(topics, r.topic_id, 'Konusuz');
+                          const on = poolNm(learningOutcomes, r.outcome_id, 'Kazanımsız');
                           let d = dersler[dersler.length - 1];
-                          if (!d || d.id !== r.lesson_category_id) { d = { id: r.lesson_category_id, konular: [], n: 0 }; dersler.push(d); }
+                          if (!d || d.id !== dn) { d = { id: dn, konular: [], n: 0 }; dersler.push(d); }
                           d.n += 1;
                           let t = d.konular[d.konular.length - 1];
-                          if (!t || t.id !== r.topic_id) { t = { id: r.topic_id, kazanimlar: [], n: 0 }; d.konular.push(t); }
+                          if (!t || t.id !== tn) { t = { id: tn, kazanimlar: [], n: 0 }; d.konular.push(t); }
                           t.n += 1;
                           let o = t.kazanimlar[t.kazanimlar.length - 1];
-                          if (!o || o.id !== r.outcome_id) { o = { id: r.outcome_id, rows: [] }; t.kazanimlar.push(o); }
+                          if (!o || o.id !== on) { o = { id: on, rows: [] }; t.kazanimlar.push(o); }
                           o.rows.push(r);
                         });
                         const head = (open, label, n, level, onClick, color) => (
@@ -5819,23 +5820,20 @@ export default function App() {
                           </div>
                         );
                         return dersler.map((d) => {
-                          const ders = lessonCategories.find((lc) => lc.id === d.id);
                           const dk = `d:${d.id}`;
                           return (
                             <div key={dk} style={{ marginBottom: '4px' }}>
-                              {head(!!poolTreeOpen[dk], ders ? lcKey(ders) : 'Dersi belirsiz', d.n, 0, () => toggle(dk))}
+                              {head(!!poolTreeOpen[dk], d.id, d.n, 0, () => toggle(dk))}
                               {poolTreeOpen[dk] && d.konular.map((t) => {
-                                const konu = topics.find((x) => x.id === t.id);
                                 const tk = `t:${d.id}:${t.id}`;
                                 return (
                                   <div key={tk}>
-                                    {head(!!poolTreeOpen[tk], konu ? konu.name : 'Konusuz', t.n, 1, () => toggle(tk))}
+                                    {head(!!poolTreeOpen[tk], t.id, t.n, 1, () => toggle(tk))}
                                     {poolTreeOpen[tk] && t.kazanimlar.map((o) => {
-                                      const kaz = learningOutcomes.find((x) => x.id === o.id);
                                       const ok = `o:${d.id}:${t.id}:${o.id}`;
                                       return (
                                         <div key={ok}>
-                                          {head(!!poolTreeOpen[ok], kaz ? kaz.name : 'Kazanımsız', o.rows.length, 2, () => toggle(ok))}
+                                          {head(!!poolTreeOpen[ok], o.id, o.rows.length, 2, () => toggle(ok))}
                                           {poolTreeOpen[ok] && (
                                             <table style={{ width: 'calc(100% - 72px)', marginLeft: 72, borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                                               <tbody>
@@ -5941,7 +5939,7 @@ export default function App() {
                           style={{ width: '100%', marginBottom: '10px' }}
                         >
                           <option value="">Ders Seçin</option>
-                          {lessonCategories.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
+                          {lessonUniq.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
                         </select>
                         )}
 
@@ -6109,7 +6107,7 @@ export default function App() {
                         <label style={lblStyle}>Ders</label>
                         <select className="yt-input" style={selStyle} value={poolGenTestDers} onChange={(e) => { setPoolGenTestDers(e.target.value); setPoolGenTestKonu(''); setPoolGenTestKazanim(''); }}>
                           <option value="">Seçin</option>
-                          {lessonCategories.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
+                          {lessonUniq.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
                         </select>
                       </div>
                       <div>
@@ -6159,7 +6157,7 @@ export default function App() {
                           {idx === 0 && <label style={lblStyle}>Ders</label>}
                           <select className="yt-input" style={selStyle} value={row.ders} onChange={(e) => updateRow(idx, { ders: e.target.value, konu: '', kazanim: '' })}>
                             <option value="">Ders</option>
-                            {lessonCategories.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
+                            {lessonUniq.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
                           </select>
                         </div>
                         <div>
@@ -6223,7 +6221,7 @@ export default function App() {
 
         {showPoolEditor && (
           <PoolQuestionEditor
-            lessonCategories={lessonCategories.map((lc) => ({ ...lc, name: lcKey(lc) }))}
+            lessonCategories={lessonCategories}
             topics={topics}
             learningOutcomes={learningOutcomes}
             existingGroups={poolBrowserGroups.filter((g) => g.key !== '__none__').map((g) => g.key)}

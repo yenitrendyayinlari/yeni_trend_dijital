@@ -535,9 +535,22 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const [tRows, setTRows] = useState('3');
   const [tCols, setTCols] = useState('3');
   const [batchName, setBatchName] = useState(isEdit ? (editRow.upload_batch_id || '') : '');
-  const [dersId, setDersId] = useState(isEdit && editRow.lesson_category_id != null ? String(editRow.lesson_category_id) : '');
-  const [konuId, setKonuId] = useState(isEdit && editRow.topic_id != null ? String(editRow.topic_id) : '');
-  const [kazanimId, setKazanimId] = useState(isEdit && editRow.outcome_id != null ? String(editRow.outcome_id) : '');
+  // Aynı adlı dersler (KPSS/MEB-AGS 'Tarih' gibi) tek ders olarak listelenir; kayıtlı soru ilk kopyaya çevrilir.
+  const lessonsUniq = lessonCategories.filter((lc, i, a) => a.findIndex((x) => x.name === lc.name) === i);
+  const canon = (() => {
+    if (!isEdit || editRow.lesson_category_id == null) return { d: '', k: '', z: '' };
+    const l = lessonCategories.find((x) => String(x.id) === String(editRow.lesson_category_id));
+    const cl = l ? lessonCategories.find((x) => x.name === l.name) : null;
+    const dId = cl ? cl.id : editRow.lesson_category_id;
+    const t = topics.find((x) => String(x.id) === String(editRow.topic_id));
+    const ct = t ? (topics.find((x) => x.lesson_category_id === dId && x.name === t.name) || t) : null;
+    const o = learningOutcomes.find((x) => String(x.id) === String(editRow.outcome_id));
+    const co = o ? (learningOutcomes.find((x) => ct && x.topic_id === ct.id && x.name === o.name) || o) : null;
+    return { d: String(dId), k: ct ? String(ct.id) : (editRow.topic_id != null ? String(editRow.topic_id) : ''), z: co ? String(co.id) : (editRow.outcome_id != null ? String(editRow.outcome_id) : '') };
+  })();
+  const [dersId, setDersId] = useState(canon.d);
+  const [konuId, setKonuId] = useState(canon.k);
+  const [kazanimId, setKazanimId] = useState(canon.z);
   const [setCode, setSetCode] = useState(isEdit && editRow.set_key ? editRow.set_key.split('::').slice(1).join('::') : '');
   const [answer, setAnswer] = useState(isEdit ? (editRow.correct_answer || '') : '');
   // Ek etiketler: aynı soru başka ders/konu/kazanımda da (ör. KPSS Tarih + MEB-AGS Tarih + TYT) kullanılabilsin.
@@ -1211,7 +1224,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
           <label style={lbl}>Ders</label>
           <select style={inp} value={dersId} onChange={(e) => { setDersId(e.target.value); setKonuId(''); setKazanimId(''); }}>
             <option value="">Seçin</option>
-            {lessonCategories.map((lc) => <option key={lc.id} value={lc.id}>{lc.name}</option>)}
+            {lessonsUniq.map((lc) => <option key={lc.id} value={lc.id}>{lc.name}</option>)}
           </select>
           <label style={lbl}>Konu</label>
           <select style={inp} value={konuId} disabled={!dersId} onChange={(e) => { setKonuId(e.target.value); setKazanimId(''); }}>
@@ -1235,7 +1248,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                 </div>
                 <select style={{ ...inp, marginBottom: '5px' }} value={x.dersId} onChange={(e) => updExtra(i, { dersId: e.target.value, konuId: '', kazanimId: '' })}>
                   <option value="">Ders seçin</option>
-                  {lessonCategories.map((lc) => <option key={lc.id} value={lc.id}>{lc.name}</option>)}
+                  {lessonsUniq.map((lc) => <option key={lc.id} value={lc.id}>{lc.name}</option>)}
                 </select>
                 <select style={{ ...inp, marginBottom: '5px' }} value={x.konuId} disabled={!x.dersId} onChange={(e) => updExtra(i, { konuId: e.target.value, kazanimId: '' })}>
                   <option value="">{x.dersId ? 'Konu seçin' : 'Önce Ders seçin'}</option>
