@@ -134,12 +134,24 @@ function measureTabs(view) {
       }
       const x = left - frameLeft;
       const pa = $p.parent.attrs || {};
-      const stops = (Array.isArray(pa.tabs) ? pa.tabs : []).map((m) => m * MM_PX);
+      // tabs: pozitif = sola hizalı durak (mm), negatif = sağa hizalı durak (mm, işareti eksi)
+      const stops = (Array.isArray(pa.tabs) ? pa.tabs : []).map((m) => ({ x: Math.abs(m) * MM_PX, r: m < 0 }));
       // asılı girintide sol girinti noktası da (ilk satırdan sonraki) örtük bir sekme durağıdır
-      if ((pa.firstLine || 0) < 0 && (pa.indentLeft || 0) > 0) stops.push(pa.indentLeft * MM_PX);
-      stops.sort((a, b) => a - b);
-      let stop = stops.find((sx) => sx > x + 1);
-      if (stop == null) { const g = TAB_GRID_MM * MM_PX; stop = (Math.floor((x + 1) / g) + 1) * g; }
+      if ((pa.firstLine || 0) < 0 && (pa.indentLeft || 0) > 0) stops.push({ x: pa.indentLeft * MM_PX, r: false });
+      stops.sort((a, b) => a.x - b.x);
+      const hit = stops.find((sx) => sx.x > x + 1);
+      let stop;
+      if (hit && hit.r) {
+        // sağa hizalı: sekmeden sonraki metin (bir sonraki sekme/paragraf sonuna kadar) durakta bitsin
+        let endPos = $p.end();
+        const txt = $p.parent.textContent; const startInPar = tp + 1 - $p.start();
+        const nt = txt.indexOf('\t', startInPar);
+        if (nt >= 0) endPos = $p.start() + nt;
+        let tw = 0;
+        try { tw = Math.max(0, view.coordsAtPos(endPos).left - view.coordsAtPos(tp + 1).left); } catch (e) { tw = 0; }
+        stop = Math.max(x + 4, hit.x - tw);
+      } else if (hit) stop = hit.x;
+      else { const g = TAB_GRID_MM * MM_PX; stop = (Math.floor((x + 1) / g) + 1) * g; }
       next.set(tp, Math.max(4, stop - x));
     }
   });
@@ -359,7 +371,7 @@ function parseIcml(xmlText) {
           const arr = [];
           kids(tl, 'ListItem').forEach((li) => {
             const al = kids(li, 'Alignment')[0], po = kids(li, 'Position')[0];
-            if (po && (!al || /LeftAlign/.test(al.textContent)) && num(po.textContent) != null) arr.push(round1(num(po.textContent) * PT_MM));
+            if (po && num(po.textContent) != null) { const v = round1(num(po.textContent) * PT_MM); if (!al || /LeftAlign/.test(al.textContent)) arr.push(v); else if (/RightAlign/.test(al.textContent)) arr.push(-v); else arr.push(v); }
           });
           if (arr.length) pfmt.tabs = arr;
         }
@@ -457,19 +469,19 @@ const icmlParasToJson = (paras) => paras.map((p) => {
 
 // Sekme durakları: "20, 33.5, 48" gibi mm değerleri (soldan, metin alanının sol kenarından ölçülür).
 function TabsField({ value, onCommit, onEnterDone }) {
-  const show = (v) => (Array.isArray(v) && v.length ? v.join(', ') : '');
+  const show = (v) => (Array.isArray(v) && v.length ? v.map((n) => (n < 0 ? `${-n}r` : n)).join(', ') : '');
   const [t, setT] = useState('');
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editing) setT(show(value)); }, [value, editing]); // eslint-disable-line react-hooks/exhaustive-deps
   const commit = () => {
     setEditing(false);
-    const nums = t.split(/[\s,;]+/).map((x) => parseFloat(x.replace(',', '.'))).filter((n) => Number.isFinite(n) && n > 0 && n < 400);
-    const uniq = [...new Set(nums.map((n) => Math.round(n * 10) / 10))].sort((a, b) => a - b);
+    const nums = t.split(/[\s,;]+/).filter(Boolean).map((x) => { const r = /[rRsS]$/.test(x); const n = parseFloat(x.replace(',', '.')); return Number.isFinite(n) && n > 0 && n < 400 ? (r ? -n : n) : null; }).filter((n) => n != null);
+    const uniq = [...new Set(nums.map((n) => Math.round(n * 10) / 10))].sort((a, b) => Math.abs(a) - Math.abs(b));
     onCommit(uniq.length ? uniq : null);
-    setT(uniq.join(', '));
+    setT(uniq.map((n) => (n < 0 ? `${-n}r` : n)).join(', '));
   };
   return (
-    <label title="Sekme durakları (mm), virgülle ayırın: 20, 33.5, 48. Tab tuşu sıradaki durağa gider. Boş = varsayılan" style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '0.72rem', color: '#475569' }}>
+    <label title="Sekme durakları (mm), virgülle ayırın: 20, 33.5, 48. Sağa hizalı durak için sayının sonuna r yazın: 12r. Tab tuşu sıradaki durağa gider. Boş = varsayılan" style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '0.72rem', color: '#475569' }}>
       Sekme
       <input type="text" value={t} placeholder="mm, mm…" onFocus={() => setEditing(true)} onChange={(e) => setT(e.target.value)} onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); if (onEnterDone) setTimeout(onEnterDone, 0); } }}
@@ -516,8 +528,6 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const [hInput, setHInput] = useState(String(src.h || 9));
   const [hyph, setHyph] = useState(src.hyph !== false); // tireleme (kelime bölme)
   const [showTable, setShowTable] = useState(false);
-  const [icml, setIcml] = useState(null); // {blocks, skippedTables} içe aktarma penceresi
-  const icmlRef = useRef(null);
   const [bulk, setBulk] = useState(null); // toplu aktarma penceresi: {items, notes, from, to, running, done, log}
   const bulkStop = useRef(false);
   const bulkLogMap = useRef(new Map());
@@ -588,24 +598,6 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     const t = setTimeout(measure, 150);
     return () => clearTimeout(t);
   });
-
-  const handleIcmlFile = async (e) => {
-    const f = e.target.files[0];
-    e.target.value = '';
-    if (!f) return;
-    try {
-      const res = parseIcml(await f.text());
-      if (!res.blocks.length) { alert('Dosyada aktarılacak yazı bulunamadı.'); return; }
-      setIcml(res);
-    } catch (err) { alert('InDesign dosyası okunamadı: ' + err.message); }
-  };
-  const importIcmlBlocks = (paras) => {
-    if (!ed) return;
-    const json = icmlParasToJson(paras);
-    if (ed.isEmpty) ed.chain().focus().setContent({ type: 'doc', content: json }).run();
-    else ed.chain().focus('end').insertContent(json).run();
-    setIcml(null);
-  };
 
   // ---- Toplu aktarma (soru dosyası + çözüm dosyası, her sayfa bir soru) ----
   const mainPages = (res) => (res.storyPages.slice().sort((a, b) => b.len - a.len)[0] || { pages: [] }).pages;
@@ -1077,28 +1069,6 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
           </div>
         </div>
       )}
-      {icml && (
-        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.55)', zIndex: 1200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-          <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '20px', width: '640px', maxWidth: '100%', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
-            <h3 style={{ margin: '0 0 6px' }}>📥 InDesign'dan aktar</h3>
-            <div style={{ fontSize: '0.8rem', color: '#64748b', marginBottom: '10px' }}>
-              Dosyada {icml.blocks.length} bölüm bulundu (boş satırlarla ayrılmış). Aktarılacak bölüme tıklayın; {active === 'q' ? 'Soru' : 'Çözüm'} sayfasına eklenir.
-              {icml.skippedTables > 0 && <span style={{ color: '#b45309' }}> ⚠ {icml.skippedTables} tablo atlandı (tabloyu editörden ekleyin).</span>}
-            </div>
-            <div style={{ overflowY: 'auto', flex: 1 }}>
-              {icml.blocks.map((b, i) => (
-                <div key={i} onClick={() => importIcmlBlocks(b.paras)} style={{ padding: '8px 10px', border: '1px solid #e2e8f0', borderRadius: '6px', marginBottom: '5px', cursor: 'pointer', fontSize: '0.82rem', backgroundColor: '#f8fafc' }}>
-                  <b style={{ color: '#2563eb' }}>{i + 1}.</b> {b.label || '(boş)'} <span style={{ color: '#94a3b8' }}>· {b.count} paragraf</span>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' }}>
-              <button onClick={() => importIcmlBlocks(icml.blocks.flatMap((b, i) => (i ? [{ segs: [], indentLeft: null, indentRight: null, firstLine: null, spaceBefore: 0, spaceAfter: 0, leading: null }, ...b.paras] : b.paras)))} style={{ ...tbBtn(false), height: '34px' }}>Hepsini aktar</button>
-              <button onClick={() => setIcml(null)} style={{ ...tbBtn(false), height: '34px' }}>Vazgeç</button>
-            </div>
-          </div>
-        </div>
-      )}
       <div style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#fff', borderBottom: '1px solid #e2e8f0', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
         <h2 style={{ margin: 0, fontSize: '1.15rem' }}>
           {isEdit ? `✏️ Soruyu Düzenle (#${editRow.id})` : '✏️ Soru Yaz'} {savedCount > 0 && <span style={{ fontSize: '0.8rem', color: '#16a34a' }}>({savedCount} soru eklendi)</span>}
@@ -1178,8 +1148,6 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                   </div>
                 )}
               </span>
-              <button title="InDesign'dan dışa aktardığınız InCopy Document (.icml) dosyasındaki yazıyı biçimiyle birlikte getirir" onMouseDown={keep} onClick={() => icmlRef.current && icmlRef.current.click()} style={tbBtn(false)}>📥 InDesign'dan aktar</button>
-              <input ref={icmlRef} type="file" accept=".icml,.xml,.incx" style={{ display: 'none' }} onChange={handleIcmlFile} />
               {!isEdit && <button title="500 sayfalık InDesign dosyasından (her sayfa bir soru) toplu aktarır" onMouseDown={keep} onClick={() => setBulk({ items: null })} style={tbBtn(false)}>📚 Toplu aktar</button>}
               <button title="Soru sayfasının sonuna A–E şık satırları ekler" onMouseDown={keep} onClick={insertOptions} style={tbBtn(false)}>＋ Şık ekle</button>
             </div>

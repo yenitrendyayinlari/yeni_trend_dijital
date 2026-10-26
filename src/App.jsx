@@ -332,7 +332,8 @@ export default function App() {
   const [poolEditorRow, setPoolEditorRow] = useState(null); // null = yeni soru, dolu = düzenlenen havuz satırı
   const [poolBrowserLoading, setPoolBrowserLoading] = useState(false);
   const [poolBrowserRows, setPoolBrowserRows] = useState([]);
-  const [poolBrowserFilterTag, setPoolBrowserFilterTag] = useState('all'); // all | tagged | untagged
+  const [poolTreeOpen, setPoolTreeOpen] = useState({}); // Soru Havuzu ağacında açık düğümler: { 'd:12': true, 't:5': true, 'o:9': true }
+  const [poolBrowserFilterTag, setPoolBrowserFilterTag] = useState('tagged'); // Soru Havuzu yalnızca etiketli soruları gösterir
   const [poolBrowserGroups, setPoolBrowserGroups] = useState([]); // [{key, count}] -- key: grup adı ya da '__none__' (isimsiz)
   const [poolBrowserGroup, setPoolBrowserGroup] = useState(''); // '' = tüm gruplar
   const [poolPdfVersions, setPoolPdfVersions] = useState({}); // PDF değiştirilince önizleme önbelleğini atlatmak için
@@ -2437,107 +2438,36 @@ export default function App() {
   const fetchUnlabeledPoolQuestions = async (batchId) => {
     if (!batchId) { setPoolUntagged([]); return; }
     setPoolTaggingLoading(true);
-    let query = supabase
-      .from('question_pool')
-      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, source_label, created_at, upload_batch_id')
-      .is('outcome_id', null)
-      .order('created_at', { ascending: false });
-    query = batchId === 'grupsuz' ? query.is('upload_batch_id', null) : query.eq('upload_batch_id', batchId);
-    const { data, error } = await query;
-    setPoolTaggingLoading(false);
-    if (!error && data) {
-      setPoolUntagged(data);
-    } else if (error) {
-      console.error('Etiketlenmemiş havuz soruları okunamadı:', error);
+    const rows = [];
+    let failed = null;
+    const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir -- sayfalayarak hepsini alıyoruz
+    for (let from = 0; from < 10000; from += pageSize) {
+      let query = supabase
+        .from('question_pool')
+        .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, extra_outcome_ids, upload_batch_id, set_key, source_json, used_count, created_at')
+        .order('id', { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (tagFilter === 'tagged') query = query.not('outcome_id', 'is', null);
+      if (tagFilter === 'untagged') query = query.is('outcome_id', null);
+      if (groupFilter === '__none__') query = query.is('upload_batch_id', null);
+      else if (groupFilter) query = query.eq('upload_batch_id', groupFilter);
+      const { data, error } = await query;
+      if (error) { failed = error; break; }
+      rows.push(...(data || []));
+      if (!data || data.length < pageSize) break;
     }
-  };
-
-  // "⚡ Tek Kazanım Uygula" -- şu an listede görünen (etiketlenmemiş) TÜM
-  // havuz sorularına aynı Ders/Konu/Kazanım'ı bir kerede uygular. Ders/
-  // Konu/Kazanım isimleri zaten dropdown'dan (master listeden) geldiği
-  // için burada bir metin-eşleştirme riski yok.
-  const applyQuickKazanimToPool = async (dersName, konuName, kazanimName) => {
-    const ders = lcByKey(dersName);
-    const konu = ders && topics.find((t) => t.name === konuName && t.lesson_category_id === ders.id);
-    const kazanim = konu && learningOutcomes.find((lo) => lo.name === kazanimName && lo.topic_id === konu.id);
-    if (!ders || !konu || !kazanim) {
-      alert('Ders, Konu ve Kazanım alanlarını doldurun.');
-      return;
-    }
-    if (poolUntagged.length === 0) {
-      alert('Etiketlenecek soru yok.');
-      return;
-    }
-    const ids = poolUntagged.map((r) => r.id);
-    const { error } = await supabase
-      .from('question_pool')
-      .update({ lesson_category_id: ders.id, topic_id: konu.id, outcome_id: kazanim.id })
-      .in('id', ids);
-    if (error) {
-      alert('Uygulanamadı: ' + error.message);
-      return;
-    }
-    alert(`✓ ${ids.length} sorunun tamamına "${ders.name} / ${konu.name} / ${kazanim.name}" uygulandı.`);
-    setPoolUntagged([]);
-    setSelectedPoolBatch(null);
-    fetchPoolBatches();
-  };
-
-  // Satır satır etiketleme: her dropdown değişikliği ANINDA o havuz
-  // satırına yazılır -- Kazanım seçilince satır artık "etiketlenmemiş"
-  // olmaktan çıktığı için listeden kaldırılır.
-  const updatePoolRowDers = async (rowId, dersName) => {
-    const ders = lcByKey(dersName);
-    await supabase.from('question_pool').update({ lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null }).eq('id', rowId);
-    setPoolUntagged((prev) => prev.map((r) => r.id === rowId ? { ...r, lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null } : r));
-  };
-
-  const updatePoolRowKonu = async (rowId, dersId, konuName) => {
-    const konu = topics.find((t) => t.name === konuName && t.lesson_category_id === dersId);
-    await supabase.from('question_pool').update({ topic_id: konu ? konu.id : null, outcome_id: null }).eq('id', rowId);
-    setPoolUntagged((prev) => prev.map((r) => r.id === rowId ? { ...r, topic_id: konu ? konu.id : null, outcome_id: null } : r));
-  };
-
-  const updatePoolRowKazanim = async (rowId, topicId, kazanimName) => {
-    const kazanim = learningOutcomes.find((lo) => lo.name === kazanimName && lo.topic_id === topicId);
-    if (!kazanim) return;
-    await supabase.from('question_pool').update({ outcome_id: kazanim.id }).eq('id', rowId);
-    // Kazanım atandı -- bu satır artık "etiketlenmemiş" değil, listeden çıkar.
-    setPoolUntagged((prev) => {
-      const updated = prev.filter((r) => r.id !== rowId);
-      // Bu, seçili gruptaki SON soruysa, grup listesini de tazeleyip
-      // grup seçimini sıfırlıyoruz -- artık tamamen etiketlenmiş bir grup
-      // için "0 soru" gösteren eski bir buton kalmasın.
-      if (updated.length === 0) {
-        fetchPoolBatches();
-        setSelectedPoolBatch(null);
-      }
-      return updated;
-    });
-  };
-
-  // --- Havuz Listesi + Detay Paneli ---
-
-  const fetchPoolBrowserRows = async (overrides = {}) => {
-    const tagFilter = overrides.tag !== undefined ? overrides.tag : poolBrowserFilterTag;
-    const groupFilter = overrides.group !== undefined ? overrides.group : poolBrowserGroup;
-    setPoolBrowserLoading(true);
-    let query = supabase
-      .from('question_pool')
-      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, extra_outcome_ids, upload_batch_id, set_key, source_json, used_count, created_at')
-      .order('id', { ascending: false })
-      .limit(500);
-    if (tagFilter === 'tagged') query = query.not('outcome_id', 'is', null);
-    if (tagFilter === 'untagged') query = query.is('outcome_id', null);
-    if (groupFilter === '__none__') query = query.is('upload_batch_id', null);
-    else if (groupFilter) query = query.eq('upload_batch_id', groupFilter);
-    const { data, error } = await query;
     setPoolBrowserLoading(false);
-    if (!error && data) {
-      setPoolBrowserRows(data);
-    } else if (error) {
-      console.error('Havuz listesi okunamadı:', error);
-    }
+    if (failed) console.error('Havuz listesi okunamadı:', failed);
+    else setPoolBrowserRows(sortPoolRowsByTree(rows));
+  };
+
+  // Soru Havuzu ağacı sırası: Ders -> Konu -> Kazanım -> soru no. Önceki/Sonraki soru da bu sırayı izler.
+  const sortPoolRowsByTree = (rows) => {
+    const dName = (r) => { const d = lessonCategories.find((lc) => lc.id === r.lesson_category_id); return d ? lcKey(d) : '\uffff'; };
+    const tName = (r) => (topics.find((t) => t.id === r.topic_id)?.name) || '\uffff';
+    const oName = (r) => (learningOutcomes.find((o) => o.id === r.outcome_id)?.name) || '\uffff';
+    const cmp = (a, b) => String(a).localeCompare(String(b), 'tr');
+    return [...rows].sort((a, b) => cmp(dName(a), dName(b)) || cmp(tName(a), tName(b)) || cmp(oName(a), oName(b)) || a.id - b.id);
   };
 
   // Bir soruya tıklayınca detay panelini açar -- "hangi testlerde kullanıldı"
@@ -2576,17 +2506,19 @@ export default function App() {
     for (let from = 0; ; from += pageSize) {
       const { data, error } = await supabase
         .from('question_pool')
-        .select('upload_batch_id')
+          .select('upload_batch_id, outcome_id')
         .order('id', { ascending: true })
         .range(from, from + pageSize - 1);
       if (error) { console.error('Havuz grupları okunamadı:', error); break; }
       (data || []).forEach((r) => {
         const key = r.upload_batch_id || '__none__';
-        counts.set(key, (counts.get(key) || 0) + 1);
+        const c = counts.get(key) || { count: 0, tagged: 0 };
+        c.count += 1; if (r.outcome_id != null) c.tagged += 1;
+        counts.set(key, c);
       });
       if (!data || data.length < pageSize) break;
     }
-    setPoolBrowserGroups(Array.from(counts.entries()).map(([key, count]) => ({ key, count })));
+    setPoolBrowserGroups(Array.from(counts.entries()).map(([key, c]) => ({ key, count: c.count, tagged: c.tagged })));
   };
 
   // Silinen soruların PDF dosyalarını depodan da temizler. Veritabanı kaydı
@@ -4659,16 +4591,16 @@ export default function App() {
               🧾 Faturalar
             </button>
             <button
-              onClick={() => { setShowPoolImport(true); setSelectedPoolBatch(null); setPoolUntagged([]); fetchPoolBatches(); }}
+              onClick={() => { setShowPoolImport(true); setSelectedPoolBatch(null); setPoolUntagged([]); fetchPoolBatches(); fetchPoolBrowserGroups(); }}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              ➕ Havuza Soru Ekle
+            </button>
+            <button
+              onClick={() => { setShowPoolBrowser(true); setSelectedPoolQuestionId(null); setPoolBrowserGroup(''); fetchPoolBrowserRows({ group: '', tag: 'tagged' }); fetchPoolBrowserGroups(); }}
               style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
             >
               🗂️ Soru Havuzu
-            </button>
-            <button
-              onClick={() => { setShowPoolBrowser(true); setSelectedPoolQuestionId(null); setPoolBrowserGroup(''); fetchPoolBrowserRows({ group: '' }); fetchPoolBrowserGroups(); }}
-              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
-            >
-              📋 Havuz Listesi
             </button>
             <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
           </div>
@@ -5405,14 +5337,17 @@ export default function App() {
               style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '920px', maxWidth: '100%', maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🗂️ Soru Havuzu</h2>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>➕ Havuza Soru Ekle</h2>
                 {!poolImporting && (
                   <button onClick={() => { setShowPoolImport(false); setPoolExcelRows([]); setPoolPdfFiles(new Map()); setPoolImportErrors([]); }} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
                 )}
               </div>
 
               {/* --- 1) YÜKLEME BÖLÜMÜ --- */}
-              <h3 style={{ fontSize: '0.95rem', margin: '6px 0 8px' }}>Havuza Soru Yükle</h3>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', margin: '6px 0 8px' }}>
+                <h3 style={{ fontSize: '0.95rem', margin: 0 }}>Havuza Soru Yükle</h3>
+                <button onClick={() => { setPoolEditorRow(null); setShowPoolEditor(true); }} disabled={poolImporting} style={{ fontSize: '0.8rem', padding: '7px 14px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#2563eb', cursor: 'pointer', fontWeight: 'bold' }}>✏️ Soru Yaz</button>
+              </div>
               <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
                 Sütun sırası: 1. Soru PDF (dosya adı), 2. Çözüm PDF (dosya adı, opsiyonel), 3. Doğru Cevap (A-E), 4. Soru Grubu (opsiyonel; ortak metne bağlı sorulara aynı kod: G1, G1, G1).
                 İlk satır başlık kabul edilir. Her PDF zaten TEK bir soru (1 sayfa) olmalı -- InDesign'da "Create Separate PDF Files" ile böldüğünüz dosyalar.
@@ -5737,7 +5672,7 @@ export default function App() {
               style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '1040px', maxWidth: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>📋 Havuz Listesi</h2>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🗂️ Soru Havuzu</h2>
                 <button onClick={() => setShowPoolBrowser(false)} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
               </div>
 
@@ -5745,26 +5680,16 @@ export default function App() {
                 <>
                   <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
                     <select
-                      value={poolBrowserFilterTag}
-                      onChange={(e) => { setPoolBrowserFilterTag(e.target.value); fetchPoolBrowserRows({ tag: e.target.value }); }}
-                      style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.82rem' }}
-                    >
-                      <option value="all">Hepsi</option>
-                      <option value="tagged">Sadece Etiketli</option>
-                      <option value="untagged">Sadece Etiketsiz</option>
-                    </select>
-                    <select
                       value={poolBrowserGroup}
                       onChange={(e) => { setPoolBrowserGroup(e.target.value); fetchPoolBrowserRows({ group: e.target.value }); }}
                       style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.82rem', maxWidth: '260px' }}
                     >
                       <option value="">Tüm Gruplar</option>
-                      {poolBrowserGroups.map((g) => (
-                        <option key={g.key} value={g.key}>{g.key === '__none__' ? 'İsimsiz Grup' : g.key} ({g.count})</option>
+                      {poolBrowserGroups.filter((g) => g.tagged > 0).map((g) => (
+                        <option key={g.key} value={g.key}>{g.key === '__none__' ? 'İsimsiz Grup' : g.key} ({g.tagged})</option>
                       ))}
                     </select>
                     <button onClick={() => { fetchPoolBrowserRows(); fetchPoolBrowserGroups(); }} className="yt-btn yt-btn-primary" style={{ fontSize: '0.8rem', padding: '7px 14px' }}>Yenile</button>
-                    <button onClick={() => { setPoolEditorRow(null); setShowPoolEditor(true); }} style={{ fontSize: '0.8rem', padding: '7px 14px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#2563eb', cursor: 'pointer', fontWeight: 'bold' }}>✏️ Soru Yaz</button>
                     {poolBrowserGroup && (
                       <button
                         onClick={deletePoolGroup}
@@ -5773,7 +5698,9 @@ export default function App() {
                         🗑️ Bu Grubu Tümden Sil
                       </button>
                     )}
-                    <span style={{ fontSize: '0.78rem', color: '#64748b', marginLeft: 'auto' }}>{poolBrowserRows.length} soru gösteriliyor (en fazla 500)</span>
+                    <button onClick={() => { const o = {}; poolBrowserRows.forEach((r) => { o[`d:${r.lesson_category_id}`] = true; o[`t:${r.lesson_category_id}:${r.topic_id}`] = true; o[`o:${r.lesson_category_id}:${r.topic_id}:${r.outcome_id}`] = true; }); setPoolTreeOpen(o); }} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini aç</button>
+                    <button onClick={() => setPoolTreeOpen({})} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini kapat</button>
+                    <span style={{ fontSize: '0.78rem', color: '#64748b', marginLeft: 'auto' }}>{poolBrowserRows.length} soru</span>
                   </div>
 
                   {poolBrowserLoading ? (
@@ -5781,46 +5708,79 @@ export default function App() {
                   ) : poolBrowserRows.length === 0 ? (
                     <p style={{ color: '#64748b' }}>Kriterlere uyan soru bulunamadı.</p>
                   ) : (
-                    <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #f1f5f9', borderRadius: '8px' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem' }}>
-                        <thead>
-                          <tr style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
-                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>ID</th>
-                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>Ders / Konu / Kazanım</th>
-                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>Cevap</th>
-                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>Kullanım</th>
-                            <th style={{ textAlign: 'left', padding: '7px 10px' }}>Grup</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {poolBrowserRows.map((row) => {
-                            const ders = lessonCategories.find((lc) => lc.id === row.lesson_category_id);
-                            const konu = topics.find((t) => t.id === row.topic_id);
-                            const kazanim = learningOutcomes.find((lo) => lo.id === row.outcome_id);
-                            return (
-                              <tr
-                                key={row.id}
-                                onClick={() => openPoolQuestionDetail(row.id)}
-                                style={{ borderTop: '1px solid #f1f5f9', cursor: 'pointer' }}
-                                onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8fafc'}
-                                onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
-                              >
-                                <td style={{ padding: '6px 10px', color: '#64748b' }}>#{row.id}</td>
-                                <td style={{ padding: '6px 10px' }}>
-                                  {kazanim ? (
-                                    <span style={{ color: '#334155' }}>{ders?.name} / {konu?.name} / {kazanim.name}</span>
-                                  ) : (
-                                    <span style={{ color: '#dc2626', fontWeight: 'bold' }}>Etiketsiz</span>
-                                  )}
-                                </td>
-                                <td style={{ padding: '6px 10px', fontFamily: 'monospace' }}>{row.correct_answer || '—'}</td>
-                                <td style={{ padding: '6px 10px' }}>{row.used_count || 0}</td>
-                                <td style={{ padding: '6px 10px', color: '#64748b' }}>{row.upload_batch_id || '—'}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                    <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #f1f5f9', borderRadius: '8px', padding: '6px' }}>
+                      {(() => {
+                        const toggle = (k) => setPoolTreeOpen((prev) => ({ ...prev, [k]: !prev[k] }));
+                        // poolBrowserRows zaten ağaç sırasında; ders > konu > kazanım olarak grupluyoruz
+                        const dersler = [];
+                        poolBrowserRows.forEach((r) => {
+                          let d = dersler[dersler.length - 1];
+                          if (!d || d.id !== r.lesson_category_id) { d = { id: r.lesson_category_id, konular: [], n: 0 }; dersler.push(d); }
+                          d.n += 1;
+                          let t = d.konular[d.konular.length - 1];
+                          if (!t || t.id !== r.topic_id) { t = { id: r.topic_id, kazanimlar: [], n: 0 }; d.konular.push(t); }
+                          t.n += 1;
+                          let o = t.kazanimlar[t.kazanimlar.length - 1];
+                          if (!o || o.id !== r.outcome_id) { o = { id: r.outcome_id, rows: [] }; t.kazanimlar.push(o); }
+                          o.rows.push(r);
+                        });
+                        const head = (open, label, n, level, onClick, color) => (
+                          <div onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px', marginLeft: level * 18, cursor: 'pointer', borderRadius: '6px', backgroundColor: level === 0 ? '#f1f5f9' : 'transparent', fontWeight: level < 2 ? 'bold' : 'normal', color: color || '#0f172a', fontSize: level === 0 ? '0.9rem' : '0.84rem' }}
+                            onMouseEnter={(e) => { if (level > 0) e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                            onMouseLeave={(e) => { if (level > 0) e.currentTarget.style.backgroundColor = 'transparent'; }}>
+                            <span style={{ width: '12px', color: '#64748b', fontSize: '0.7rem' }}>{open ? '▼' : '▶'}</span>
+                            <span style={{ flex: 1 }}>{label}</span>
+                            <span style={{ color: '#64748b', fontWeight: 'normal', fontSize: '0.76rem' }}>{n} soru</span>
+                          </div>
+                        );
+                        return dersler.map((d) => {
+                          const ders = lessonCategories.find((lc) => lc.id === d.id);
+                          const dk = `d:${d.id}`;
+                          return (
+                            <div key={dk} style={{ marginBottom: '4px' }}>
+                              {head(!!poolTreeOpen[dk], ders ? lcKey(ders) : 'Dersi belirsiz', d.n, 0, () => toggle(dk))}
+                              {poolTreeOpen[dk] && d.konular.map((t) => {
+                                const konu = topics.find((x) => x.id === t.id);
+                                const tk = `t:${d.id}:${t.id}`;
+                                return (
+                                  <div key={tk}>
+                                    {head(!!poolTreeOpen[tk], konu ? konu.name : 'Konusuz', t.n, 1, () => toggle(tk))}
+                                    {poolTreeOpen[tk] && t.kazanimlar.map((o) => {
+                                      const kaz = learningOutcomes.find((x) => x.id === o.id);
+                                      const ok = `o:${d.id}:${t.id}:${o.id}`;
+                                      return (
+                                        <div key={ok}>
+                                          {head(!!poolTreeOpen[ok], kaz ? kaz.name : 'Kazanımsız', o.rows.length, 2, () => toggle(ok))}
+                                          {poolTreeOpen[ok] && (
+                                            <table style={{ width: 'calc(100% - 72px)', marginLeft: 72, borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                                              <tbody>
+                                                {o.rows.map((row) => (
+                                                  <tr
+                                                    key={row.id}
+                                                    onClick={() => openPoolQuestionDetail(row.id)}
+                                                    style={{ borderTop: '1px solid #f1f5f9', cursor: 'pointer' }}
+                                                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8fafc'}
+                                                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                                  >
+                                                    <td style={{ padding: '5px 10px', color: '#334155', fontWeight: 'bold' }}>#{row.id}</td>
+                                                    <td style={{ padding: '5px 10px', fontFamily: 'monospace' }}>Cevap: {row.correct_answer || '—'}</td>
+                                                    <td style={{ padding: '5px 10px' }}>Kullanım: {row.used_count || 0}</td>
+                                                    <td style={{ padding: '5px 10px', color: '#64748b' }}>{row.upload_batch_id || '—'}</td>
+                                                  </tr>
+                                                ))}
+                                              </tbody>
+                                            </table>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        });
+                      })()}
                     </div>
                   )}
                 </>
@@ -6190,7 +6150,7 @@ export default function App() {
                 const t = Date.now();
                 setPoolPdfVersions((prev) => ({ ...prev, [`pdf_file:${editedId}`]: t, [`solution_pdf_file:${editedId}`]: t }));
               }
-              fetchPoolBrowserRows(); fetchPoolBrowserGroups();
+              fetchPoolBrowserRows(); fetchPoolBrowserGroups(); if (showPoolImport) fetchPoolBatches();
             }}
           />
         )}
