@@ -529,6 +529,17 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const [kazanimId, setKazanimId] = useState(isEdit && editRow.outcome_id != null ? String(editRow.outcome_id) : '');
   const [setCode, setSetCode] = useState(isEdit && editRow.set_key ? editRow.set_key.split('::').slice(1).join('::') : '');
   const [answer, setAnswer] = useState(isEdit ? (editRow.correct_answer || '') : '');
+  // Ek etiketler: aynı soru başka ders/konu/kazanımda da (ör. KPSS Tarih + MEB-AGS Tarih + TYT) kullanılabilsin.
+  const [extras, setExtras] = useState(() => {
+    if (!isEdit || !Array.isArray(editRow.extra_outcome_ids)) return [];
+    return editRow.extra_outcome_ids.map((oid) => {
+      const lo = learningOutcomes.find((x) => String(x.id) === String(oid));
+      if (!lo) return null;
+      const tp = topics.find((t) => String(t.id) === String(lo.topic_id));
+      return { dersId: String(tp ? tp.lesson_category_id : (lo.lesson_category_id || '')), konuId: String(lo.topic_id), kazanimId: String(lo.id) };
+    }).filter(Boolean);
+  });
+  const updExtra = (i, patch) => setExtras((arr) => arr.map((x, k) => (k === i ? { ...x, ...patch } : x)));
   const [saving, setSaving] = useState(false);
   const [savedCount, setSavedCount] = useState(0);
   const [active, setActive] = useState('q'); // araç çubuğu hangi sayfaya uygulanıyor
@@ -621,6 +632,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     const batch = batchName.trim();
     if (!batch) { alert('Önce sağdaki "Grup Adı" alanını doldurun.'); return; }
     if (!dersId) { alert('Önce sağdan Ders seçin (Konu/Kazanım isteğe bağlı).'); return; }
+    if (extrasIncomplete()) { alert('Ek etiketlerden birinde Kazanım seçilmemiş. Seçin ya da ✕ ile kaldırın.'); return; }
     if (!qEditor || !sEditor) return;
     const from = Math.max(1, bulk.from), to = Math.min(bulk.items.length, bulk.to);
     if (!(to >= from)) { alert('Aralığı kontrol edin.'); return; }
@@ -648,7 +660,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         if (hasSol) sName = await uploadPdf(await pageToPdfBytes(sPageRef.current), 'pool_sol');
         const { error } = await supabase.from('question_pool').insert([{
           pdf_file: qName, solution_pdf_file: sName, correct_answer: it.answer, upload_batch_id: batch,
-          lesson_category_id: dersId || null, topic_id: konuId || null, outcome_id: kazanimId || null, set_key: null,
+          lesson_category_id: dersId || null, topic_id: konuId || null, outcome_id: kazanimId || null, extra_outcome_ids: extraOutcomeIds(), set_key: null,
           source_json: { v: 2, w: pageW, h: pageH, hyph, q: qEditor.getJSON(), s: hasSol ? sEditor.getJSON() : null },
         }]);
         if (error) throw new Error(error.message);
@@ -706,11 +718,22 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     return name;
   };
 
+  const extraOutcomeIds = () => {
+    const out = [];
+    extras.forEach((x) => {
+      const lo = learningOutcomes.find((l) => String(l.id) === String(x.kazanimId));
+      if (lo && String(lo.id) !== String(kazanimId) && !out.some((o) => String(o) === String(lo.id))) out.push(lo.id);
+    });
+    return out;
+  };
+  const extrasIncomplete = () => extras.some((x) => (x.dersId || x.konuId) && !x.kazanimId);
+
   const handleSave = async () => {
     const batch = batchName.trim();
     if (!batch) { alert('Grup adı girin (sağdaki alandan, ör. "Biyoloji Kitabı 1").'); return; }
     if (!qEditor || qEditor.getText().trim().length === 0) { alert('Soru sayfasına soruyu yazın.'); return; }
     if (!['A', 'B', 'C', 'D', 'E'].includes(answer)) { alert('Doğru cevabı seçin (sağ taraf).'); return; }
+    if (extrasIncomplete()) { alert('Ek etiketlerden birinde Kazanım seçilmemiş. Seçin ya da ✕ ile kaldırın.'); return; }
     if (qOverflow || (solHasText && sOverflow)) {
       if (!window.confirm('Metin sayfaya sığmıyor, alt kısım kesilecek. Yine de kaydedilsin mi?')) return;
     }
@@ -735,6 +758,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         lesson_category_id: dersId || null,
         topic_id: konuId || null,
         outcome_id: kazanimId || null,
+        extra_outcome_ids: extraOutcomeIds(),
         set_key: setCode.trim() ? `${batch}::${setCode.trim()}` : null,
         source_json: { v: 2, w: pageW, h: pageH, hyph, q: qEditor.getJSON(), s: sEditor ? sEditor.getJSON() : null },
       };
@@ -1208,6 +1232,36 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
             <option value="">{konuId ? 'Seçin' : 'Önce Konu seçin'}</option>
             {kazanimlar.map((lo) => <option key={lo.id} value={lo.id}>{lo.name}</option>)}
           </select>
+
+          {extras.map((x, i) => {
+            const ks = topics.filter((t) => String(t.lesson_category_id) === String(x.dersId));
+            const zs = learningOutcomes.filter((lo) => String(lo.topic_id) === String(x.konuId));
+            return (
+              <div key={i} style={{ marginTop: '10px', padding: '8px', border: '1px dashed #94a3b8', borderRadius: '8px', backgroundColor: '#f8fafc' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', fontWeight: 'bold', color: '#475569', marginBottom: '4px' }}>
+                  <span>Ek etiket {i + 1}</span>
+                  <button type="button" onClick={() => setExtras((arr) => arr.filter((_, k) => k !== i))} style={{ border: 'none', background: 'none', color: '#dc2626', cursor: 'pointer', fontWeight: 'bold' }}>✕ kaldır</button>
+                </div>
+                <select style={{ ...inp, marginBottom: '5px' }} value={x.dersId} onChange={(e) => updExtra(i, { dersId: e.target.value, konuId: '', kazanimId: '' })}>
+                  <option value="">Ders seçin</option>
+                  {lessonCategories.map((lc) => <option key={lc.id} value={lc.id}>{lc.name}</option>)}
+                </select>
+                <select style={{ ...inp, marginBottom: '5px' }} value={x.konuId} disabled={!x.dersId} onChange={(e) => updExtra(i, { konuId: e.target.value, kazanimId: '' })}>
+                  <option value="">{x.dersId ? 'Konu seçin' : 'Önce Ders seçin'}</option>
+                  {ks.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                <select style={inp} value={x.kazanimId} disabled={!x.konuId} onChange={(e) => updExtra(i, { kazanimId: e.target.value })}>
+                  <option value="">{x.konuId ? 'Kazanım seçin' : 'Önce Konu seçin'}</option>
+                  {zs.map((lo) => <option key={lo.id} value={lo.id}>{lo.name}</option>)}
+                </select>
+              </div>
+            );
+          })}
+          <button type="button" onClick={() => setExtras((arr) => [...arr, { dersId: '', konuId: '', kazanimId: '' }])}
+            title="Aynı soru başka bir ders/konu/kazanımda da test üretiminde kullanılsın (ör. KPSS Tarih + MEB-AGS Tarih + TYT)"
+            style={{ marginTop: '8px', width: '100%', padding: '7px', borderRadius: '6px', border: '1px dashed #2563eb', backgroundColor: '#fff', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer', fontSize: '0.8rem' }}>
+            ＋ Başka ders / kazanımda da kullan
+          </button>
 
           <label style={lbl}>Doğru Cevap</label>
           <select style={inp} value={answer} onChange={(e) => setAnswer(e.target.value)}>

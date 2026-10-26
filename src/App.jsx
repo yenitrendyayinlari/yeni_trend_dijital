@@ -122,6 +122,14 @@ export default function App() {
     return `${lc.name} (${cat ? cat.name : '#' + lc.id})`;
   };
   const lcByKey = (key) => lessonCategories.find((lc) => lcKey(lc) === key);
+  // Ders ADIYLA (Kazanım Haritası, Excel, hızlı atama gibi ad bazlı ekranlar): aynı adlı birden fazla ders türü varsa
+  // verilen konuyu içereni seçer (ilk bulunana değil), böylece "Tarih" iki kategoride olsa da konu/kazanım listeleri boş gelmez.
+  const lcForEntry = (dersName, konuName) => {
+    const c = lessonCategories.filter((lc) => lc.name === dersName);
+    if (c.length <= 1) return c[0];
+    const withKonu = konuName ? c.find((lc) => topics.some((t) => t.lesson_category_id === lc.id && t.name === konuName)) : null;
+    return withKonu || c.find((lc) => topics.some((t) => t.lesson_category_id === lc.id)) || c[0];
+  };
   const [topics, setTopics] = useState([]); // [{id, name, lesson_category_id}]
   const [learningOutcomes, setLearningOutcomes] = useState([]); // [{id, name, lesson_category_id, topic_id}]
   // Kazanım bazlı ders notu (PDF) / video kaynakları. Anahtar: learning_outcome_id.
@@ -276,6 +284,7 @@ export default function App() {
   const [poolGenParentId, setPoolGenParentId] = useState(null);
   const [poolGenMode, setPoolGenMode] = useState('test'); // 'test' (çoklu, aynı kazanım) | 'deneme' (tekli, karma)
   const [poolGenIncludeUsed, setPoolGenIncludeUsed] = useState(false);
+  const [poolGenShared, setPoolGenShared] = useState(true); // aynı ders/konu/kazanım ADLI diğer sınav kategorilerinin soruları da havuza girsin
   const [poolGenNamePrefix, setPoolGenNamePrefix] = useState('');
   const [poolGenDuration, setPoolGenDuration] = useState(60);
   const [poolGenTestDers, setPoolGenTestDers] = useState('');
@@ -2515,7 +2524,7 @@ export default function App() {
     setPoolBrowserLoading(true);
     let query = supabase
       .from('question_pool')
-      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, upload_batch_id, set_key, source_json, used_count, created_at')
+      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, extra_outcome_ids, upload_batch_id, set_key, source_json, used_count, created_at')
       .order('id', { ascending: false })
       .limit(500);
     if (tagFilter === 'tagged') query = query.not('outcome_id', 'is', null);
@@ -2740,7 +2749,7 @@ export default function App() {
           // SİSTEM TARAFINDAN GÖRÜLEMEZ. Bu yüzden eşleşmeyen satırları
           // sessizce kaydetmek yerine, TÜM yüklemeyi durdurup admin'e tam
           // olarak hangi satırda ne yazması gerektiğini gösteriyoruz.
-          const lesson = lessonCategories.find((lc) => lc.name === dersRaw);
+          const lesson = lcForEntry(dersRaw, konuRaw);
           const topic = lesson ? topics.find((t) => t.name === konuRaw && t.lesson_category_id === lesson.id) : null;
           const outcome = topic ? learningOutcomes.find((o) => o.name === kazanimRaw && o.topic_id === topic.id) : null;
 
@@ -2809,10 +2818,12 @@ export default function App() {
   // metin bazlı uyuşmazlıklar öneri motorunu etkilemiyor.
   const resolveEntryIds = (entry) => {
     if (!entry || !entry.kazanim) return { lessonCategoryId: null, topicId: null, outcomeId: null };
-    const ders = lessonCategories.find((lc) => lc.name === entry.ders);
-    const matchingOutcome = learningOutcomes.find((lo) =>
-      lo.name === entry.kazanim && (!ders || lo.lesson_category_id === ders.id)
-    );
+    const dersList = lessonCategories.filter((lc) => lc.name === entry.ders);
+    const ders = lcForEntry(entry.ders, entry.konu);
+    const topicNameOf = (lo) => { const tp = topics.find((t) => t.id === lo.topic_id); return tp ? tp.name : ''; };
+    const inDers = (lo) => dersList.length === 0 || dersList.some((d) => d.id === lo.lesson_category_id);
+    const matchingOutcome = learningOutcomes.find((lo) => lo.name === entry.kazanim && inDers(lo) && (!entry.konu || topicNameOf(lo) === entry.konu))
+      || learningOutcomes.find((lo) => lo.name === entry.kazanim && inDers(lo));
     if (!matchingOutcome) return { lessonCategoryId: ders ? ders.id : null, topicId: null, outcomeId: null };
     return {
       lessonCategoryId: matchingOutcome.lesson_category_id,
@@ -3046,13 +3057,42 @@ export default function App() {
     }
     return out;
   };
-  const fetchPoolCandidatesForOutcome = async (outcomeId, excludeIds, includeUsed) => {
+  // Ortak havuz: ders + konu + kazanım ADI aynı olan, ama başka sınav kategorisinde (KPSS / MEB-AGS / yarın eklenecek ABC...)
+  // tanımlı kazanımların numaraları. Böylece sorular bir kez etiketlenir; yeni bir sınav kategorisi açılınca
+  // (adlar aynıysa) sorulara geri dönüp yeniden etiketlemek gerekmez.
+  const normName = (v) => String(v == null ? '' : v).toLocaleLowerCase('tr').replace(/\s+/g, ' ').trim();
+  const siblingOutcomeIds = (outcomeId) => {
+    const lo = learningOutcomes.find((x) => String(x.id) === String(outcomeId));
+    const tp = lo && topics.find((t) => String(t.id) === String(lo.topic_id));
+    const dr = tp && lessonCategories.find((l) => String(l.id) === String(tp.lesson_category_id));
+    if (!lo || !tp || !dr) return [outcomeId];
+    const ids = learningOutcomes.filter((x) => {
+      if (normName(x.name) !== normName(lo.name)) return false;
+      const t2 = topics.find((t) => String(t.id) === String(x.topic_id));
+      if (!t2 || normName(t2.name) !== normName(tp.name)) return false;
+      const d2 = lessonCategories.find((l) => String(l.id) === String(t2.lesson_category_id));
+      return !!d2 && normName(d2.name) === normName(dr.name);
+    }).map((x) => x.id);
+    if (!ids.some((i) => String(i) === String(outcomeId))) ids.push(outcomeId);
+    return ids;
+  };
+  const fetchPoolCandidatesForOutcome = async (outcomeId, excludeIds, includeUsed, shared = true) => {
     const all = [];
     const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir
     for (let from = 0; ; from += pageSize) {
-      let query = supabase.from('question_pool').select('*').eq('outcome_id', outcomeId).order('id', { ascending: true }).range(from, from + pageSize - 1);
-      if (!includeUsed) query = query.eq('used_count', 0);
-      const { data, error } = await query;
+      // Ana kazanımı bu olan sorular + "ek etiket" olarak bu kazanımı da taşıyan sorular (extra_outcome_ids jsonb dizisi).
+      const build = (withExtra) => {
+        let q = supabase.from('question_pool').select('*').order('id', { ascending: true }).range(from, from + pageSize - 1);
+        const ids = shared ? siblingOutcomeIds(outcomeId) : [outcomeId];
+        const lit = (i) => (typeof i === 'number' ? String(i) : `"${i}"`);
+        q = withExtra
+          ? q.or([`outcome_id.in.(${ids.map(lit).join(',')})`, ...ids.map((i) => `extra_outcome_ids.cs.${JSON.stringify([i])}`)].join(','))
+          : q.in('outcome_id', ids);
+        if (!includeUsed) q = q.eq('used_count', 0);
+        return q;
+      };
+      let { data, error } = await build(true);
+      if (error && /extra_outcome_ids/.test(error.message || '')) ({ data, error } = await build(false)); // SQL henüz çalıştırılmadıysa eski davranış
       if (error) throw new Error(error.message);
       all.push(...(data || []));
       if (!data || data.length < pageSize) break;
@@ -3188,7 +3228,7 @@ export default function App() {
     setPoolGenLoading(true);
     const createdExams = [];
     try {
-      const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, [], poolGenIncludeUsed);
+      const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, [], poolGenIncludeUsed, poolGenShared);
       if (candidates.length < needed) {
         alert(`Yetersiz soru: "${kazanim.name}" kazanımında ${candidates.length} uygun soru var, ama ${testCount} test × ${testSize} soru = ${needed} soru gerekiyor.` + (!poolGenIncludeUsed ? '\n\n"Kullanılmışları da dahil et" seçeneğini işaretlemeyi deneyebilirsiniz.' : ''));
         setPoolGenLoading(false);
@@ -3207,7 +3247,8 @@ export default function App() {
         if (picked.length < testSize) throw new Error(`${i + 1}. test için ${testSize} soruya tamamlanamadı (${picked.length} bulunabildi). Bağlı soru grupları bölünemediği için kalan sorular bu sayıya tam oturmuyor -- soru sayısını değiştirin veya "kullanılmışları da dahil et"i deneyin.`);
         picked.forEach((p) => { const idx = pool.findIndex((x) => x.id === p.id); if (idx !== -1) pool.splice(idx, 1); });
         const examName = `${poolGenNamePrefix.trim() || kazanim.name} ${i + 1}`;
-        const newExam = await assemblePoolExamRow({ picked, examName, parentExam, sortOrder: nextOrder, examType: 'test', duration: 0, batchId });
+        const tagged = picked.map((q) => ({ ...q, lesson_category_id: ders.id, topic_id: konu.id, outcome_id: kazanim.id })); // ek etiketle gelen soru, üretilen testte İSTENEN kazanımla eşlensin
+        const newExam = await assemblePoolExamRow({ picked: tagged, examName, parentExam, sortOrder: nextOrder, examType: 'test', duration: 0, batchId });
         nextOrder++;
         createdExams.push(newExam);
       }
@@ -3241,12 +3282,12 @@ export default function App() {
         const konu = ders && topics.find((t) => t.name === r.konu && t.lesson_category_id === ders.id);
         const kazanim = konu && learningOutcomes.find((lo) => lo.name === r.kazanim && lo.topic_id === konu.id);
         if (!ders || !konu || !kazanim) throw new Error(`Satır ${i + 1}: Ders/Konu/Kazanım eşleşmedi.`);
-        const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, allPicked.map((p) => p.id), poolGenIncludeUsed);
+        const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, allPicked.map((p) => p.id), poolGenIncludeUsed, poolGenShared);
         const need = Number(r.count);
         if (candidates.length < need) throw new Error(`Satır ${i + 1} ("${kazanim.name}"): ${candidates.length} uygun soru var, ${need} gerekiyor.`);
         const rowPicked = pickUnits(candidates, need);
         if (rowPicked.length < need) throw new Error(`Satır ${i + 1} ("${kazanim.name}"): ${need} soruya tam oturan bir seçim yapılamadı (bağlı soru grupları bölünemez). Soru sayısını grup büyüklüğüne uygun girin.`);
-        allPicked.push(...rowPicked);
+        allPicked.push(...rowPicked.map((q) => ({ ...q, lesson_category_id: ders.id, topic_id: konu.id, outcome_id: kazanim.id })));
       }
       const existingChildren = exams.filter((ex) => ex.parentId === parentExam.id);
       const nextOrder = existingChildren.length > 0 ? Math.max(...existingChildren.map((ex) => ex.sortOrder || 0)) + 1 : 0;
@@ -5891,6 +5932,17 @@ export default function App() {
                         </select>
                         )}
 
+                        {Array.isArray(row.extra_outcome_ids) && row.extra_outcome_ids.length > 0 && (
+                          <div style={{ marginBottom: '10px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#eff6ff', border: '1px dashed #93c5fd', fontSize: '0.78rem', color: '#1e3a8a' }}>
+                            <div style={{ fontWeight: 'bold', marginBottom: '3px' }}>Ek etiketler (bu soru buralarda da kullanılır)</div>
+                            {row.extra_outcome_ids.map((oid) => {
+                              const lo = learningOutcomes.find((x) => String(x.id) === String(oid));
+                              const tp = lo && topics.find((t) => String(t.id) === String(lo.topic_id));
+                              const dr = tp && lessonCategories.find((lc) => String(lc.id) === String(tp.lesson_category_id));
+                              return <div key={String(oid)}>• {dr ? lcKey(dr) : '?'} / {tp ? tp.name : '?'} / {lo ? lo.name : '?'}</div>;
+                            })}
+                          </div>
+                        )}
                         <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Doğru Cevap</label>
                         {row.source_json ? (
                           <div style={{ width: '100%', marginBottom: '16px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', fontSize: '0.88rem', fontWeight: 'bold', color: '#334155', boxSizing: 'border-box' }}>{row.correct_answer || '—'}</div>
@@ -6100,6 +6152,12 @@ export default function App() {
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px', fontSize: '0.9rem', cursor: 'pointer' }}>
                   <input type="checkbox" checked={poolGenIncludeUsed} onChange={(e) => setPoolGenIncludeUsed(e.target.checked)} disabled={poolGenLoading} />
                   Daha önce kullanılmış soruları da dahil et
+                </label>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginTop: '10px', fontSize: '0.9rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={poolGenShared} onChange={(e) => setPoolGenShared(e.target.checked)} disabled={poolGenLoading} style={{ marginTop: '3px' }} />
+                  <span>Aynı adlı ders/konu/kazanımın diğer sınav kategorilerindeki (KPSS, MEB-AGS vb.) sorularını da kullan
+                    <span style={{ display: 'block', fontSize: '0.76rem', color: '#64748b' }}>Ders, konu ve kazanım adları aynıysa sorular ortak sayılır; sonradan eklenen yeni sınav kategorileri için sorulara dönüp etiket vermek gerekmez.</span>
+                  </span>
                 </label>
 
                 <div style={{ marginTop: '18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
@@ -6552,7 +6610,7 @@ export default function App() {
                       <option value="">{quickKazanimDers ? 'Konu Seçin' : 'Önce Ders Türü seçin'}</option>
                       {topics
                         .filter((t) => {
-                          const ders = lessonCategories.find((lc) => lc.name === quickKazanimDers);
+                          const ders = lcForEntry(quickKazanimDers, quickKazanimKonu);
                           return ders && t.lesson_category_id === ders.id;
                         })
                         .map((t) => (
@@ -6572,7 +6630,7 @@ export default function App() {
                       <option value="">{quickKazanimKonu ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
                       {learningOutcomes
                         .filter((lo) => {
-                          const ders = lessonCategories.find((lc) => lc.name === quickKazanimDers);
+                          const ders = lcForEntry(quickKazanimDers, quickKazanimKonu);
                           const konu = ders && topics.find((t) => t.name === quickKazanimKonu && t.lesson_category_id === ders.id);
                           return konu && lo.topic_id === konu.id;
                         })
@@ -6628,7 +6686,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          const ders = lessonCategories.find((lc) => lc.name === quickKazanimDers);
+                          const ders = lcForEntry(quickKazanimDers, quickKazanimKonu);
                           if (!ders) { alert('Önce Ders Türü seçin.'); return; }
                           addTopicForLessonCategoryId(ders.id, newTopicName, (created) => {
                             setQuickKazanimKonu(created.name);
@@ -6657,7 +6715,7 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          const ders = lessonCategories.find((lc) => lc.name === quickKazanimDers);
+                          const ders = lcForEntry(quickKazanimDers, quickKazanimKonu);
                           const konu = ders && topics.find((t) => t.name === quickKazanimKonu && t.lesson_category_id === ders.id);
                           if (!konu) { alert('Önce Konu seçin.'); return; }
                           handleAddLearningOutcome(konu.id, newOutcomeName, (created) => setQuickKazanimText(created.name));
@@ -6813,7 +6871,7 @@ export default function App() {
                                       disabled={!entry.ders}
                                       onChange={(e) => {
                                         if (e.target.value === '__new__') {
-                                          const ders = lessonCategories.find((lc) => lc.name === entry.ders);
+                                          const ders = lcForEntry(entry.ders, entry.konu);
                                           if (!ders) { alert('Önce Ders seçin.'); return; }
                                           const name = window.prompt('Yeni Konu adı:');
                                           if (name && name.trim()) {
@@ -6836,7 +6894,7 @@ export default function App() {
                                       <option value="">{entry.ders ? 'Konu Seçin' : 'Önce Ders seçin'}</option>
                                       {topics
                                         .filter((t) => {
-                                          const ders = lessonCategories.find((lc) => lc.name === entry.ders);
+                                          const ders = lcForEntry(entry.ders, entry.konu);
                                           return ders && t.lesson_category_id === ders.id;
                                         })
                                         .map((t) => (
@@ -6851,7 +6909,7 @@ export default function App() {
                                       disabled={!liveKonu}
                                       onChange={(e) => {
                                         if (e.target.value === '__new__') {
-                                          const ders = lessonCategories.find((lc) => lc.name === entry.ders);
+                                          const ders = lcForEntry(entry.ders, entry.konu);
                                           const konu = ders && topics.find((t) => t.name === liveKonu && t.lesson_category_id === ders.id);
                                           if (!konu) { alert('Önce Konu seçin.'); return; }
                                           const name = window.prompt('Yeni Kazanım adı:');
@@ -6875,7 +6933,7 @@ export default function App() {
                                       <option value="">{liveKonu ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
                                       {learningOutcomes
                                         .filter((lo) => {
-                                          const ders = lessonCategories.find((lc) => lc.name === entry.ders);
+                                          const ders = lcForEntry(entry.ders, entry.konu);
                                           const konu = ders && topics.find((t) => t.name === liveKonu && t.lesson_category_id === ders.id);
                                           return konu && lo.topic_id === konu.id;
                                         })
