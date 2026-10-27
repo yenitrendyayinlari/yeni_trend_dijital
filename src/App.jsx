@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
 import PoolQuestionEditor from './PoolQuestionEditor';
+import CategoryPicker from './CategoryPicker';
 import SecurePdfViewer from './SecurePdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
@@ -112,24 +113,13 @@ export default function App() {
   // hiçbir şema değişikliği gerekmiyor), sadece artık bu metin SADECE bu
   // listeden seçilerek geliyor, elle yazılmıyor.
   const [examCategories, setExamCategories] = useState([]); // [{id, name}]
-  const [lessonCategories, setLessonCategories] = useState([]); // [{id, name}] -- dersler ortak liste; sınavla ilişkisi examLessonLinks'te
-  const [examLessonLinks, setExamLessonLinks] = useState([]); // [{exam_category_id, lesson_category_id}]
-  const [examLinksReady, setExamLinksReady] = useState(false); // exam_category_lessons tablosu okunabildi mi
+  const [lessonCategories, setLessonCategories] = useState([]); // [{id, name}] -- dersler ortak liste (sınava bağlı değil)
   const [catTab, setCatTab] = useState('ders'); // Tanımla penceresi sekmesi: 'ders' | 'sinav'
-  const [newDersName, setNewDersName] = useState('');
-  const [newSinavName, setNewSinavName] = useState('');
-  const [newTopicInputs, setNewTopicInputs] = useState({}); // {dersId: text}
-  const [newOutcomeInputs, setNewOutcomeInputs] = useState({}); // {topicId: text}
   // Aynı adlı birden fazla ders türü olabilir (ör. farklı sınav kategorilerinde "Tarih"). Havuz ekranlarında
   // dersler adla eşleştirildiği için ilkine düşüyordu; bu yüzden tekrarlayan adlara sınav kategorisi eklenir.
   // Aynı adlı dersler (ör. KPSS ve MEB-AGS'deki 'Tarih') listelerde TEK ders olarak gösterilir; havuz soruları ad üzerinden ortak kullanılır.
   const lcKey = (lc) => (lc ? lc.name : '');
   const lessonUniq = lessonCategories.filter((lc, i, a) => a.findIndex((x) => x.name === lc.name) === i);
-  // Bir ders, bir sınav türünün ders listesinde mi? (bağlantı tablosu yoksa eski exam_category_id alanına bakar)
-  const lessonLinked = (examCatId, lc) => (examLinksReady
-    ? examLessonLinks.some((l) => l.exam_category_id === examCatId && l.lesson_category_id === lc.id)
-    : lc.exam_category_id === examCatId);
-  const lessonsOfExamCat = (examCatId) => lessonCategories.filter((lc) => lessonLinked(examCatId, lc));
   const lcByKey = (key) => lessonCategories.find((lc) => lcKey(lc) === key);
   // Ders ADIYLA (Kazanım Haritası, Excel, hızlı atama gibi ad bazlı ekranlar): aynı adlı birden fazla ders türü varsa
   // verilen konuyu içereni seçer (ilk bulunana değil), böylece "Tarih" iki kategoride olsa da konu/kazanım listeleri boş gelmez.
@@ -155,8 +145,6 @@ export default function App() {
   const [expandedVideoKazanim, setExpandedVideoKazanim] = useState({});
   const [showNewExamCategoryInput, setShowNewExamCategoryInput] = useState(false);
   const [newExamCategoryName, setNewExamCategoryName] = useState('');
-  const [showNewLessonCategoryInput, setShowNewLessonCategoryInput] = useState(false);
-  const [newLessonCategoryName, setNewLessonCategoryName] = useState('');
   const [showNewOutcomeInput, setShowNewOutcomeInput] = useState(false);
   const [newOutcomeName, setNewOutcomeName] = useState('');
   const [showNewTopicInput, setShowNewTopicInput] = useState(false);
@@ -187,7 +175,6 @@ export default function App() {
   // Kategori Yönetimi artık sekmeler yerine iç içe (Sınav Türü > Ders Türü >
   // Konu > Kazanım) açılır/kapanır bir akordiyon ağacı olarak gösteriliyor.
   // Her seviyenin kendi "hangi kayıtlar açık" haritası var (id -> boolean).
-  const [expandedExamIds, setExpandedExamIds] = useState({});
   const [expandedLessonIds, setExpandedLessonIds] = useState({});
   const [expandedTopicIds, setExpandedTopicIds] = useState({});
   const [newExamForm, setNewExamForm] = useState({
@@ -286,7 +273,6 @@ export default function App() {
   const [poolGenParentId, setPoolGenParentId] = useState(null);
   const [poolGenMode, setPoolGenMode] = useState('test'); // 'test' (çoklu, aynı kazanım) | 'deneme' (tekli, karma)
   const [poolGenIncludeUsed, setPoolGenIncludeUsed] = useState(false);
-  const [poolGenShared, setPoolGenShared] = useState(true); // aynı ders/konu/kazanım ADLI diğer sınav kategorilerinin soruları da havuza girsin
   const [poolGenNamePrefix, setPoolGenNamePrefix] = useState('');
   const [poolGenDuration, setPoolGenDuration] = useState(60);
   const [poolGenTestDers, setPoolGenTestDers] = useState('');
@@ -315,13 +301,7 @@ export default function App() {
   const [poolBatches, setPoolBatches] = useState([]); // [{batch_id, count, created_at}]
   const [selectedPoolBatch, setSelectedPoolBatch] = useState(null);
   const [poolTaggingLoading, setPoolTaggingLoading] = useState(false);
-  const [quickPoolDers, setQuickPoolDers] = useState('');
-  const [quickPoolKonu, setQuickPoolKonu] = useState('');
-  const [quickPoolKazanim, setQuickPoolKazanim] = useState('');
-  const [showNewTopicInputPool, setShowNewTopicInputPool] = useState(false);
-  const [newTopicNamePool, setNewTopicNamePool] = useState('');
-  const [showNewOutcomeInputPool, setShowNewOutcomeInputPool] = useState(false);
-  const [newOutcomeNamePool, setNewOutcomeNamePool] = useState('');
+  const [quickPoolIds, setQuickPoolIds] = useState({ dersId: '', konuId: '', kazanimId: '' }); // Etiketlenmemiş Sorular > Tek Kazanım Uygula seçimi
 
   // --- Havuz Listesi + Detay Paneli ---
   // Ayrı bir ekran: havuzdaki (etiketli/etiketsiz FARK ETMEKSİZİN) TÜM
@@ -335,7 +315,7 @@ export default function App() {
   const [poolBrowserLoading, setPoolBrowserLoading] = useState(false);
   const [poolBrowserRows, setPoolBrowserRows] = useState([]);
   const [poolTreeOpen, setPoolTreeOpen] = useState({}); // Soru Havuzu ağacında açık düğümler
-  const [poolBrowserFilterTag, setPoolBrowserFilterTag] = useState('tagged'); // Soru Havuzu yalnızca etiketli soruları gösterir
+  const [poolBrowserFilterTag] = useState('tagged'); // Soru Havuzu yalnızca etiketli soruları gösterir
   const [poolBrowserGroups, setPoolBrowserGroups] = useState([]); // [{key, count}] -- key: grup adı ya da '__none__' (isimsiz)
   const [poolBrowserGroup, setPoolBrowserGroup] = useState(''); // '' = tüm gruplar
   const [poolPdfVersions, setPoolPdfVersions] = useState({}); // PDF değiştirilince önizleme önbelleğini atlatmak için
@@ -1064,47 +1044,48 @@ export default function App() {
     setLearningOutcomes((prev) => prev.filter((o) => o.lesson_category_id !== id));
     setTopics((prev) => prev.filter((t) => t.lesson_category_id !== id));
     setLessonCategories((prev) => prev.filter((lc) => lc.id !== id));
-    setExamLessonLinks((prev) => prev.filter((l) => l.lesson_category_id !== id));
   };
 
   // Sınav silinince dersler SİLİNMEZ -- sadece bu sınavın ders bağlantıları (cascade) kalkar.
   const deleteExamCategory = async (id) => {
     const { error } = await supabase.from('exam_categories').delete().eq('id', id);
     if (error) { alert('Sınav türü silinemedi: ' + error.message); return; }
-    setExamLessonLinks((prev) => prev.filter((l) => l.exam_category_id !== id));
     setExamCategories((prev) => prev.filter((c) => c.id !== id));
   };
 
-  // --- Ders / Sınav Tanımla: ekleme ve bağlama ---
-  const addExamCategoryDirect = async (name) => {
+  // --- Ders / Konu / Kazanım: ihtiyaç anında ekleme (Soru Yaz ve Etiketlenmemiş Sorular'daki ortak seçici) ---
+  // Birebir aynı ad (büyük/küçük harf farkı olmadan) varsa yeni kayıt açılmaz, uyarı verilir; null döner.
+  const sameNm = (a, b) => (a || '').trim().toLocaleLowerCase('tr') === (b || '').trim().toLocaleLowerCase('tr');
+  const createLessonForPicker = async (name) => {
     const trimmed = (name || '').trim();
-    if (!trimmed) return false;
-    if (examCategories.some((c) => c.name.trim().toLowerCase() === trimmed.toLowerCase())) { alert(`"${trimmed}" sınavı zaten var.`); return false; }
-    const { data, error } = await supabase.from('exam_categories').insert([{ name: trimmed }]).select();
-    if (error) { alert('Sınav eklenemedi: ' + error.message); return false; }
-    setExamCategories((prev) => [...prev, data[0]].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
-    return true;
-  };
-  const addLessonDirect = async (name) => {
-    const trimmed = (name || '').trim();
-    if (!trimmed) return false;
-    if (lessonCategories.some((lc) => lc.name.trim().toLowerCase() === trimmed.toLowerCase())) { alert(`"${trimmed}" dersi zaten var.`); return false; }
+    if (!trimmed) return null;
+    const ex = lessonCategories.find((lc) => sameNm(lc.name, trimmed));
+    if (ex) { alert(`"${ex.name}" dersi zaten var. Listeden seçin.`); return null; }
     const { data, error } = await supabase.from('lesson_categories').insert([{ name: trimmed }]).select();
-    if (error) { alert('Ders eklenemedi: ' + error.message); return false; }
+    if (error) { alert('Ders eklenemedi: ' + error.message); return null; }
     setLessonCategories((prev) => [...prev, data[0]].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
-    return true;
+    return data[0];
   };
-  const toggleExamLesson = async (examCatId, lessonId, on) => {
-    if (!examLinksReady) { alert('Sınav–ders bağlantı tablosu bulunamadı. Önce ders_sinav_duzeni.sql dosyasını Supabase SQL Editor\'de çalıştırın.'); return; }
-    if (on) {
-      const { error } = await supabase.from('exam_category_lessons').insert([{ exam_category_id: examCatId, lesson_category_id: lessonId }]);
-      if (error) { alert('Eklenemedi: ' + error.message); return; }
-      setExamLessonLinks((prev) => [...prev, { exam_category_id: examCatId, lesson_category_id: lessonId }]);
-    } else {
-      const { error } = await supabase.from('exam_category_lessons').delete().eq('exam_category_id', examCatId).eq('lesson_category_id', lessonId);
-      if (error) { alert('Kaldırılamadı: ' + error.message); return; }
-      setExamLessonLinks((prev) => prev.filter((l) => !(l.exam_category_id === examCatId && l.lesson_category_id === lessonId)));
-    }
+  const createTopicForPicker = async (lessonId, name) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed || !lessonId) return null;
+    const ex = topics.find((t) => String(t.lesson_category_id) === String(lessonId) && sameNm(t.name, trimmed));
+    if (ex) { alert(`"${ex.name}" konusu bu derste zaten var. Listeden seçin.`); return null; }
+    const { data, error } = await supabase.from('topics').insert([{ name: trimmed, lesson_category_id: Number(lessonId) }]).select();
+    if (error) { alert('Konu eklenemedi: ' + error.message); return null; }
+    setTopics((prev) => [...prev, data[0]].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    return data[0];
+  };
+  const createOutcomeForPicker = async (topicId, name) => {
+    const trimmed = (name || '').trim();
+    const topic = topics.find((t) => String(t.id) === String(topicId));
+    if (!trimmed || !topic) return null;
+    const ex = learningOutcomes.find((o) => String(o.topic_id) === String(topicId) && sameNm(o.name, trimmed));
+    if (ex) { alert(`"${ex.name}" kazanımı bu konuda zaten var. Listeden seçin.`); return null; }
+    const { data, error } = await supabase.from('learning_outcomes').insert([{ name: trimmed, topic_id: topic.id, lesson_category_id: topic.lesson_category_id }]).select();
+    if (error) { alert('Kazanım eklenemedi: ' + error.message); return null; }
+    setLearningOutcomes((prev) => [...prev, data[0]].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    return data[0];
   };
 
   // --- Kategori Yönetimi: ADI DÜZENLEME ---
@@ -1447,12 +1428,6 @@ export default function App() {
     if (!lessonCatsError && lessonCats) setLessonCategories(lessonCats);
     else if (lessonCatsError) console.error('lesson_categories okunamadı:', lessonCatsError);
 
-    const { data: linkRows, error: linkRowsError } = await supabase
-      .from('exam_category_lessons')
-      .select('exam_category_id, lesson_category_id');
-    if (!linkRowsError && linkRows) { setExamLessonLinks(linkRows); setExamLinksReady(true); }
-    else { setExamLinksReady(false); if (linkRowsError) console.warn('exam_category_lessons okunamadı (ders_sinav_duzeni.sql çalıştırıldı mı?):', linkRowsError.message); }
-
     const { data: topicRows, error: topicRowsError } = await supabase
       .from('topics')
       .select('id, name, lesson_category_id')
@@ -1483,6 +1458,8 @@ export default function App() {
   const handleAddExamCategory = async () => {
     const trimmed = newExamCategoryName.trim();
     if (!trimmed) return;
+    const dupExam = examCategories.find((c) => c.name.trim().toLocaleLowerCase('tr') === trimmed.toLocaleLowerCase('tr'));
+    if (dupExam) { alert(`"${dupExam.name}" sınav türü zaten var. Listeden seçin.`); return; }
     const { data, error } = await supabase
       .from('exam_categories')
       .insert([{ name: trimmed }])
@@ -1496,27 +1473,6 @@ export default function App() {
     setNewExamForm((prev) => ({ ...prev, categoryExamType: created.name }));
     setNewExamCategoryName('');
     setShowNewExamCategoryInput(false);
-  };
-
-  // "+ Yeni Ders Türü Ekle" -- seçili Sınav Türü'ne bağlı yeni bir ders
-  // türü oluşturur.
-  const handleAddLessonCategory = async () => {
-    const trimmed = newLessonCategoryName.trim();
-    const selectedExamCategory = examCategories.find((c) => c.name === newExamForm.categoryExamType);
-    if (!trimmed || !selectedExamCategory) return;
-    const { data, error } = await supabase
-      .from('lesson_categories')
-      .insert([{ name: trimmed, exam_category_id: selectedExamCategory.id }])
-      .select();
-    if (error) {
-      alert('Ders türü eklenemedi: ' + error.message);
-      return;
-    }
-    const created = data[0];
-    setLessonCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
-    setNewExamForm((prev) => ({ ...prev, categoryLesson: created.name }));
-    setNewLessonCategoryName('');
-    setShowNewLessonCategoryInput(false);
   };
 
   const fetchUserPurchases = async (userEmail) => {
@@ -2474,10 +2430,10 @@ export default function App() {
   // havuz sorularına aynı Ders/Konu/Kazanım'ı bir kerede uygular. Ders/
   // Konu/Kazanım isimleri zaten dropdown'dan (master listeden) geldiği
   // için burada bir metin-eşleştirme riski yok.
-  const applyQuickKazanimToPool = async (dersName, konuName, kazanimName) => {
-    const ders = lcByKey(dersName);
-    const konu = ders && topics.find((t) => t.name === konuName && t.lesson_category_id === ders.id);
-    const kazanim = konu && learningOutcomes.find((lo) => lo.name === kazanimName && lo.topic_id === konu.id);
+  const applyQuickKazanimToPool = async ({ dersId, konuId, kazanimId }) => {
+    const ders = lessonCategories.find((lc) => String(lc.id) === String(dersId));
+    const konu = topics.find((t) => String(t.id) === String(konuId));
+    const kazanim = learningOutcomes.find((lo) => String(lo.id) === String(kazanimId));
     if (!ders || !konu || !kazanim) {
       alert('Ders, Konu ve Kazanım alanlarını doldurun.');
       return;
@@ -2497,6 +2453,7 @@ export default function App() {
     }
     alert(`✓ ${ids.length} sorunun tamamına "${ders.name} / ${konu.name} / ${kazanim.name}" uygulandı.`);
     setPoolUntagged([]);
+    setQuickPoolIds({ dersId: '', konuId: '', kazanimId: '' });
     setSelectedPoolBatch(null);
     fetchPoolBatches();
   };
@@ -2504,32 +2461,16 @@ export default function App() {
   // Satır satır etiketleme: her dropdown değişikliği ANINDA o havuz
   // satırına yazılır -- Kazanım seçilince satır artık "etiketlenmemiş"
   // olmaktan çıktığı için listeden kaldırılır.
-  const updatePoolRowDers = async (rowId, dersName) => {
-    const ders = lcByKey(dersName);
-    await supabase.from('question_pool').update({ lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null }).eq('id', rowId);
-    setPoolUntagged((prev) => prev.map((r) => r.id === rowId ? { ...r, lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null } : r));
-  };
-
-  const updatePoolRowKonu = async (rowId, dersId, konuName) => {
-    const konu = topics.find((t) => t.name === konuName && t.lesson_category_id === dersId);
-    await supabase.from('question_pool').update({ topic_id: konu ? konu.id : null, outcome_id: null }).eq('id', rowId);
-    setPoolUntagged((prev) => prev.map((r) => r.id === rowId ? { ...r, topic_id: konu ? konu.id : null, outcome_id: null } : r));
-  };
-
-  const updatePoolRowKazanim = async (rowId, topicId, kazanimName) => {
-    const kazanim = learningOutcomes.find((lo) => lo.name === kazanimName && lo.topic_id === topicId);
-    if (!kazanim) return;
-    await supabase.from('question_pool').update({ outcome_id: kazanim.id }).eq('id', rowId);
-    // Kazanım atandı -- bu satır artık "etiketlenmemiş" değil, listeden çıkar.
+  // Satırdaki ortak Ders/Konu/Kazanım seçicisi bu fonksiyonu çağırır (id tabanlı).
+  const updatePoolRowTags = async (rowId, ids) => {
+    const patch = { lesson_category_id: ids.dersId ? Number(ids.dersId) : null, topic_id: ids.konuId ? Number(ids.konuId) : null, outcome_id: ids.kazanimId ? Number(ids.kazanimId) : null };
+    const { error } = await supabase.from('question_pool').update(patch).eq('id', rowId);
+    if (error) { alert('Kaydedilemedi: ' + error.message); return; }
     setPoolUntagged((prev) => {
-      const updated = prev.filter((r) => r.id !== rowId);
-      // Bu, seçili gruptaki SON soruysa, grup listesini de tazeleyip
-      // grup seçimini sıfırlıyoruz -- artık tamamen etiketlenmiş bir grup
-      // için "0 soru" gösteren eski bir buton kalmasın.
-      if (updated.length === 0) {
-        fetchPoolBatches();
-        setSelectedPoolBatch(null);
-      }
+      // Kazanım atandıysa satır artık "etiketlenmemiş" değil, listeden çıkar.
+      const updated = patch.outcome_id ? prev.filter((r) => r.id !== rowId) : prev.map((r) => (r.id === rowId ? { ...r, ...patch } : r));
+      // Seçili gruptaki SON soruysa grup listesini tazele (0 soruluk eski buton kalmasın).
+      if (updated.length === 0) { fetchPoolBatches(); setSelectedPoolBatch(null); }
       return updated;
     });
   };
@@ -3088,7 +3029,7 @@ export default function App() {
     setPoolGenLoading(true);
     const createdExams = [];
     try {
-      const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, [], poolGenIncludeUsed, poolGenShared);
+      const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, [], poolGenIncludeUsed, true);
       if (candidates.length < needed) {
         alert(`Yetersiz soru: "${kazanim.name}" kazanımında ${candidates.length} uygun soru var, ama ${testCount} test × ${testSize} soru = ${needed} soru gerekiyor.` + (!poolGenIncludeUsed ? '\n\n"Kullanılmışları da dahil et" seçeneğini işaretlemeyi deneyebilirsiniz.' : ''));
         setPoolGenLoading(false);
@@ -3142,7 +3083,7 @@ export default function App() {
         const konu = ders && topics.find((t) => t.name === r.konu && t.lesson_category_id === ders.id);
         const kazanim = konu && learningOutcomes.find((lo) => lo.name === r.kazanim && lo.topic_id === konu.id);
         if (!ders || !konu || !kazanim) throw new Error(`Satır ${i + 1}: Ders/Konu/Kazanım eşleşmedi.`);
-        const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, allPicked.map((p) => p.id), poolGenIncludeUsed, poolGenShared);
+        const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, allPicked.map((p) => p.id), poolGenIncludeUsed, true);
         const need = Number(r.count);
         if (candidates.length < need) throw new Error(`Satır ${i + 1} ("${kazanim.name}"): ${candidates.length} uygun soru var, ${need} gerekiyor.`);
         const rowPicked = pickUnits(candidates, need);
@@ -4832,8 +4773,6 @@ export default function App() {
           const iconBtn = { border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.85rem', padding: '2px 5px' };
           const delBtn = { padding: '4px 8px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.74rem', fontWeight: 'bold' };
           const arrowBtn = { border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.8rem', color: '#64748b', width: '18px', padding: 0 };
-          const addInput = { flex: 1, fontSize: '0.8rem', padding: '6px 8px', border: '1px solid #cbd5e1', borderRadius: '6px', boxSizing: 'border-box' };
-          const addBtn = { padding: '6px 12px', borderRadius: '6px', border: 'none', backgroundColor: '#0f172a', color: '#fff', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold', whiteSpace: 'nowrap' };
           const tabBtn = (id, label) => (
             <button type="button" onClick={() => setCatTab(id)} style={{ padding: '8px 16px', border: 'none', borderBottom: catTab === id ? '3px solid #0f172a' : '3px solid transparent', background: 'none', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.88rem', color: catTab === id ? '#0f172a' : '#64748b' }}>{label}</button>
           );
@@ -4859,32 +4798,20 @@ export default function App() {
                 {catTab === 'ders' ? (
                   <>
                     <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
-                      Dersler tek ortak listedir; havuz, soru ekleme, kazanım kaynakları ve kazanım haritası hep bu listeden çalışır.
-                      Bir derse konu, konuya kazanım ekleyebilir; ✏️ ile adını düzeltebilir, 🗑 ile silebilirsiniz.
-                      Bir soruya (Kazanım Haritası'na) atanmış kayıt silinemez.
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
-                      <input
-                        type="text" value={newDersName} placeholder="Yeni ders adı (örn. Tarih)"
-                        onChange={(e) => setNewDersName(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addLessonDirect(newDersName).then((ok) => { if (ok) setNewDersName(''); }); } }}
-                        style={addInput}
-                      />
-                      <button type="button" style={addBtn} onClick={() => addLessonDirect(newDersName).then((ok) => { if (ok) setNewDersName(''); })}>+ Ders ekle</button>
+                      Ders, konu ve kazanımlar soru yüklerken (Soru Yaz ve Etiketlenmemiş Sorular) eklenir; burada sadece düzenlenir.
+                      ✏️ ile adını düzeltebilir, 🗑 ile silebilirsiniz. Bir soruya (Kazanım Haritası'na) atanmış kayıt silinemez.
                     </div>
                     <div style={{ overflowY: 'auto', flex: 1 }}>
                       {sortedDersler.length === 0 ? (
-                        <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz ders eklenmedi.</p>
+                        <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz ders yok. Soru Yaz ya da Havuza Soru Ekle ekranından ekleyebilirsiniz.</p>
                       ) : sortedDersler.map((lc) => {
                         const isLessonOpen = !!expandedLessonIds[lc.id];
                         const childTopics = topics.filter((t) => t.lesson_category_id === lc.id);
-                        const sinavlar = examCategories.filter((c) => lessonLinked(c.id, lc)).map((c) => c.name);
                         return (
                           <div key={lc.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 4px' }}>
                               <button type="button" onClick={() => setExpandedLessonIds((prev) => ({ ...prev, [lc.id]: !prev[lc.id] }))} style={arrowBtn}>{isLessonOpen ? '▾' : '▸'}</button>
-                              <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#0f172a' }}>{lc.name}</span>
-                              <span style={{ fontSize: '0.72rem', color: '#94a3b8', flex: 1 }}>{sinavlar.length > 0 ? sinavlar.join(' · ') : 'hiçbir sınava bağlı değil'}</span>
+                              <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#0f172a', flex: 1 }}>{lc.name} <span style={{ color: '#94a3b8', fontSize: '0.72rem', fontWeight: 'normal' }}>({childTopics.length} konu)</span></span>
                               <button type="button" onClick={() => renameLessonCategory(lc.id, lc.name)} title="Adını düzenle" style={iconBtn}>✏️</button>
                               <button
                                 type="button"
@@ -4920,6 +4847,7 @@ export default function App() {
                                       </div>
                                       {isTopicOpen && (
                                         <div style={{ paddingLeft: '24px', paddingBottom: '6px' }}>
+                                          {childOutcomes.length === 0 && <p style={{ color: '#cbd5e1', fontSize: '0.74rem', padding: '2px 6px' }}>Bu konuya bağlı kazanım yok.</p>}
                                           {childOutcomes.map((o) => (
                                             <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 4px', borderTop: '1px solid #f8fafc' }}>
                                               <span style={{ width: '18px', flexShrink: 0 }} />
@@ -4935,29 +4863,11 @@ export default function App() {
                                               >🗑</button>
                                             </div>
                                           ))}
-                                          <div style={{ display: 'flex', gap: '6px', padding: '6px 4px' }}>
-                                            <input
-                                              type="text" placeholder="Yeni kazanım…" value={newOutcomeInputs[t.id] || ''}
-                                              onChange={(e) => setNewOutcomeInputs((prev) => ({ ...prev, [t.id]: e.target.value }))}
-                                              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); const v = newOutcomeInputs[t.id]; handleAddLearningOutcome(t.id, v, () => setNewOutcomeInputs((prev) => ({ ...prev, [t.id]: '' }))); } }}
-                                              style={addInput}
-                                            />
-                                            <button type="button" style={addBtn} onClick={() => handleAddLearningOutcome(t.id, newOutcomeInputs[t.id], () => setNewOutcomeInputs((prev) => ({ ...prev, [t.id]: '' })))}>+ Kazanım</button>
-                                          </div>
                                         </div>
                                       )}
                                     </div>
                                   );
                                 })}
-                                <div style={{ display: 'flex', gap: '6px', padding: '6px 4px' }}>
-                                  <input
-                                    type="text" placeholder="Yeni konu…" value={newTopicInputs[lc.id] || ''}
-                                    onChange={(e) => setNewTopicInputs((prev) => ({ ...prev, [lc.id]: e.target.value }))}
-                                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTopicForLessonCategoryId(lc.id, newTopicInputs[lc.id], () => setNewTopicInputs((prev) => ({ ...prev, [lc.id]: '' }))); } }}
-                                    style={addInput}
-                                  />
-                                  <button type="button" style={addBtn} onClick={() => addTopicForLessonCategoryId(lc.id, newTopicInputs[lc.id], () => setNewTopicInputs((prev) => ({ ...prev, [lc.id]: '' })))}>+ Konu</button>
-                                </div>
                               </div>
                             )}
                           </div>
@@ -4968,54 +4878,26 @@ export default function App() {
                 ) : (
                   <>
                     <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
-                      Sınavları buradan ekleyin; her sınavın altında hangi derslerin olduğunu işaretleyin. Yeni paket oluştururken
-                      "Sınav Türü → Ders Türü" seçimi bu işaretlere göre gelir. Bir sınavı silmek dersleri silmez.
-                      {!examLinksReady && <span style={{ color: '#b45309' }}> ⚠ Sınav–ders bağlantı tablosu bulunamadı: ders_sinav_duzeni.sql dosyasını çalıştırın.</span>}
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
-                      <input
-                        type="text" value={newSinavName} placeholder="Yeni sınav adı (örn. KPSS)"
-                        onChange={(e) => setNewSinavName(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addExamCategoryDirect(newSinavName).then((ok) => { if (ok) setNewSinavName(''); }); } }}
-                        style={addInput}
-                      />
-                      <button type="button" style={addBtn} onClick={() => addExamCategoryDirect(newSinavName).then((ok) => { if (ok) setNewSinavName(''); })}>+ Sınav ekle</button>
+                      Sınavlar, "Yeni Sınav / Paket Oluştur" ekranındaki Sınav Türü kutusundan eklenir; burada adı düzeltilir ya da silinir.
+                      Sınav silinince dersler silinmez.
                     </div>
                     <div style={{ overflowY: 'auto', flex: 1 }}>
                       {examCategories.length === 0 ? (
-                        <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz sınav eklenmedi.</p>
-                      ) : examCategories.map((cat) => {
-                        const isOpen = !!expandedExamIds[cat.id];
-                        const linkedCount = lessonsOfExamCat(cat.id).length;
-                        return (
-                          <div key={cat.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 4px' }}>
-                              <button type="button" onClick={() => setExpandedExamIds((prev) => ({ ...prev, [cat.id]: !prev[cat.id] }))} style={arrowBtn}>{isOpen ? '▾' : '▸'}</button>
-                              <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#0f172a', flex: 1 }}>{cat.name} <span style={{ color: '#94a3b8', fontSize: '0.72rem', fontWeight: 'normal' }}>({linkedCount} ders)</span></span>
-                              <button type="button" onClick={() => renameExamCategory(cat.id, cat.name)} title="Adını düzenle" style={iconBtn}>✏️</button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (blockDeleteIfInUse('exam', cat, cat.name)) return;
-                                  if (window.confirm(`"${cat.name}" sınavını silmek istediğinize emin misiniz? (Dersler silinmez, yalnızca bu sınavın ders işaretleri kalkar.)`)) deleteExamCategory(cat.id);
-                                }}
-                                style={delBtn}
-                              >🗑</button>
-                            </div>
-                            {isOpen && (
-                              <div style={{ paddingLeft: '24px', paddingBottom: '8px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '4px 12px' }}>
-                                {sortedDersler.length === 0 && <p style={{ color: '#cbd5e1', fontSize: '0.76rem' }}>Önce "Dersler" sekmesinden ders ekleyin.</p>}
-                                {sortedDersler.map((lc) => (
-                                  <label key={lc.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.84rem', color: '#334155', cursor: 'pointer' }}>
-                                    <input type="checkbox" checked={lessonLinked(cat.id, lc)} onChange={(e) => toggleExamLesson(cat.id, lc.id, e.target.checked)} />
-                                    {lc.name}
-                                  </label>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                        <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz sınav türü yok.</p>
+                      ) : examCategories.map((cat) => (
+                        <div key={cat.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 4px', borderBottom: '1px solid #f1f5f9' }}>
+                          <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#0f172a', flex: 1 }}>{cat.name}</span>
+                          <button type="button" onClick={() => renameExamCategory(cat.id, cat.name)} title="Adını düzenle" style={iconBtn}>✏️</button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (blockDeleteIfInUse('exam', cat, cat.name)) return;
+                              if (window.confirm(`"${cat.name}" sınavını silmek istediğinize emin misiniz? (Dersler silinmez.)`)) deleteExamCategory(cat.id);
+                            }}
+                            style={delBtn}
+                          >🗑</button>
+                        </div>
+                      ))}
                     </div>
                   </>
                 )}
@@ -5296,100 +5178,20 @@ export default function App() {
                     {/* ⚡ Tek Kazanım Uygula -- SEÇİLİ GRUPTAKİ tüm sorular aynı kazanımdansa. */}
                     <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px', marginBottom: '14px' }}>
                       <div style={{ fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '8px' }}>⚡ Tek Kazanım Uygula (bu grubun tüm soruları aynı konuysa)</div>
-                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                        <select
-                          value={quickPoolDers}
-                          onChange={(e) => { setQuickPoolDers(e.target.value); setQuickPoolKonu(''); setQuickPoolKazanim(''); }}
-                          style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
-                        >
-                          <option value="">Ders Türü Seçin</option>
-                          {lessonUniq.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
-                        </select>
-
-                        <select
-                          value={quickPoolKonu}
-                          onChange={(e) => { setQuickPoolKonu(e.target.value); setQuickPoolKazanim(''); }}
-                          disabled={!quickPoolDers}
-                          style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
-                        >
-                          <option value="">{quickPoolDers ? 'Konu Seçin' : 'Önce Ders Türü seçin'}</option>
-                          {quickPoolDers && topics
-                            .filter((t) => {
-                              const ders = lcByKey(quickPoolDers);
-                              return ders && t.lesson_category_id === ders.id;
-                            })
-                            .map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
-                        </select>
-                        {showNewTopicInputPool && (
-                          <>
-                            <input
-                              type="text"
-                              value={newTopicNamePool}
-                              onChange={(e) => setNewTopicNamePool(e.target.value)}
-                              placeholder="Yeni konu adı"
-                              style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const ders = lcByKey(quickPoolDers);
-                                if (!ders || !newTopicNamePool.trim()) return;
-                                addTopicForLessonCategoryId(ders.id, newTopicNamePool.trim(), (created) => {
-                                  setQuickPoolKonu(created.name);
-                                  setShowNewTopicInputPool(false);
-                                  setNewTopicNamePool('');
-                                });
-                              }}
-                              style={{ fontSize: '0.72rem', padding: '5px 8px', borderRadius: '6px', border: '1px solid #16a34a', color: '#16a34a', backgroundColor: '#fff', cursor: 'pointer' }}
-                            >Ekle</button>
-                          </>
-                        )}
-
-                        <select
-                          value={quickPoolKazanim}
-                          onChange={(e) => setQuickPoolKazanim(e.target.value)}
-                          disabled={!quickPoolKonu}
-                          style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
-                        >
-                          <option value="">{quickPoolKonu ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
-                          {quickPoolKonu && learningOutcomes
-                            .filter((lo) => {
-                              const konu = topics.find((t) => t.name === quickPoolKonu);
-                              return konu && lo.topic_id === konu.id;
-                            })
-                            .map((lo) => <option key={lo.id} value={lo.name}>{lo.name}</option>)}
-                        </select>
-                        {showNewOutcomeInputPool && (
-                          <>
-                            <input
-                              type="text"
-                              value={newOutcomeNamePool}
-                              onChange={(e) => setNewOutcomeNamePool(e.target.value)}
-                              placeholder="Yeni kazanım adı"
-                              style={{ padding: '6px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const konu = topics.find((t) => t.name === quickPoolKonu);
-                                if (!konu || !newOutcomeNamePool.trim()) return;
-                                handleAddLearningOutcome(konu.id, newOutcomeNamePool.trim(), (created) => {
-                                  setQuickPoolKazanim(created.name);
-                                  setShowNewOutcomeInputPool(false);
-                                  setNewOutcomeNamePool('');
-                                });
-                              }}
-                              style={{ fontSize: '0.72rem', padding: '5px 8px', borderRadius: '6px', border: '1px solid #16a34a', color: '#16a34a', backgroundColor: '#fff', cursor: 'pointer' }}
-                            >Ekle</button>
-                          </>
-                        )}
-
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                        <CategoryPicker
+                          layout="row"
+                          lessons={lessonCategories} topics={topics} outcomes={learningOutcomes}
+                          dersId={quickPoolIds.dersId} konuId={quickPoolIds.konuId} kazanimId={quickPoolIds.kazanimId}
+                          onChange={(v) => setQuickPoolIds(v)}
+                          onCreateLesson={createLessonForPicker} onCreateTopic={createTopicForPicker} onCreateOutcome={createOutcomeForPicker}
+                        />
                         <button
                           type="button"
-                          onClick={() => applyQuickKazanimToPool(quickPoolDers, quickPoolKonu, quickPoolKazanim)}
-                          disabled={!quickPoolDers || !quickPoolKonu || !quickPoolKazanim}
+                          onClick={() => applyQuickKazanimToPool(quickPoolIds)}
+                          disabled={!quickPoolIds.dersId || !quickPoolIds.konuId || !quickPoolIds.kazanimId}
                           className="yt-btn yt-btn-primary"
-                          style={{ fontSize: '0.78rem', padding: '6px 12px', opacity: (!quickPoolDers || !quickPoolKonu || !quickPoolKazanim) ? 0.5 : 1 }}
+                          style={{ fontSize: '0.78rem', padding: '6px 12px', opacity: (!quickPoolIds.dersId || !quickPoolIds.konuId || !quickPoolIds.kazanimId) ? 0.5 : 1 }}
                         >
                           Tümüne Uygula ({poolUntagged.length})
                         </button>
@@ -5402,49 +5204,23 @@ export default function App() {
                         <thead>
                           <tr style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
                             <th style={{ textAlign: 'left', padding: '6px 8px' }}>Soru</th>
-                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Ders</th>
-                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Konu</th>
-                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Kazanım</th>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Ders / Konu / Kazanım</th>
                           </tr>
                         </thead>
                         <tbody>
                           {poolUntagged.map((row) => {
-                            const rowDers = lessonCategories.find((lc) => lc.id === row.lesson_category_id);
-                            const rowKonu = topics.find((t) => t.id === row.topic_id);
                             return (
                               <tr key={row.id} style={{ borderTop: '1px solid #f1f5f9' }}>
                                 <td style={{ padding: '5px 8px', color: '#334155' }}>#{row.id}{row.source_label ? ` (${row.source_label})` : ''}</td>
                                 <td style={{ padding: '5px 8px' }}>
-                                  <select
-                                    value={rowDers ? lcKey(rowDers) : ''}
-                                    onChange={(e) => updatePoolRowDers(row.id, e.target.value)}
-                                    style={{ padding: '4px 6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.76rem' }}
-                                  >
-                                    <option value="">Ders Seçin</option>
-                                    {lessonUniq.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
-                                  </select>
-                                </td>
-                                <td style={{ padding: '5px 8px' }}>
-                                  <select
-                                    value={rowKonu ? rowKonu.name : ''}
-                                    onChange={(e) => updatePoolRowKonu(row.id, row.lesson_category_id, e.target.value)}
-                                    disabled={!row.lesson_category_id}
-                                    style={{ padding: '4px 6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.76rem' }}
-                                  >
-                                    <option value="">{row.lesson_category_id ? 'Konu Seçin' : 'Önce Ders seçin'}</option>
-                                    {topics.filter((t) => t.lesson_category_id === row.lesson_category_id).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
-                                  </select>
-                                </td>
-                                <td style={{ padding: '5px 8px' }}>
-                                  <select
-                                    value=""
-                                    onChange={(e) => updatePoolRowKazanim(row.id, row.topic_id, e.target.value)}
-                                    disabled={!row.topic_id}
-                                    style={{ padding: '4px 6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.76rem' }}
-                                  >
-                                    <option value="">{row.topic_id ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
-                                    {learningOutcomes.filter((lo) => lo.topic_id === row.topic_id).map((lo) => <option key={lo.id} value={lo.name}>{lo.name}</option>)}
-                                  </select>
+                                  <CategoryPicker
+                                    layout="row"
+                                    lessons={lessonCategories} topics={topics} outcomes={learningOutcomes}
+                                    dersId={row.lesson_category_id} konuId={row.topic_id} kazanimId={row.outcome_id}
+                                    onChange={(v) => updatePoolRowTags(row.id, v)}
+                                    onCreateLesson={createLessonForPicker} onCreateTopic={createTopicForPicker} onCreateOutcome={createOutcomeForPicker}
+                                    selectStyle={{ padding: '4px 6px', fontSize: '0.76rem' }}
+                                  />
                                 </td>
                               </tr>
                             );
@@ -5911,12 +5687,6 @@ export default function App() {
                   <input type="checkbox" checked={poolGenIncludeUsed} onChange={(e) => setPoolGenIncludeUsed(e.target.checked)} disabled={poolGenLoading} />
                   Daha önce kullanılmış soruları da dahil et
                 </label>
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginTop: '10px', fontSize: '0.9rem', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={poolGenShared} onChange={(e) => setPoolGenShared(e.target.checked)} disabled={poolGenLoading} style={{ marginTop: '3px' }} />
-                  <span>Aynı adlı ders/konu/kazanımın diğer sınav kategorilerindeki (KPSS, MEB-AGS vb.) sorularını da kullan
-                    <span style={{ display: 'block', fontSize: '0.76rem', color: '#64748b' }}>Ders, konu ve kazanım adları aynıysa sorular ortak sayılır; sonradan eklenen yeni sınav kategorileri için sorulara dönüp etiket vermek gerekmez.</span>
-                  </span>
-                </label>
 
                 <div style={{ marginTop: '18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
                   <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
@@ -5941,6 +5711,9 @@ export default function App() {
             learningOutcomes={learningOutcomes}
             existingGroups={poolBrowserGroups.filter((g) => g.key !== '__none__').map((g) => g.key)}
             editRow={poolEditorRow}
+            onCreateLesson={createLessonForPicker}
+            onCreateTopic={createTopicForPicker}
+            onCreateOutcome={createOutcomeForPicker}
             onClose={() => { setShowPoolEditor(false); setPoolEditorRow(null); }}
             onSaved={(editedId) => {
               if (editedId) {
@@ -6078,9 +5851,7 @@ export default function App() {
                     setShowNewExamCategoryInput(true);
                     return;
                   }
-                  // Sınav türü değişince, önceki türe ait Ders Türü seçimi
-                  // artık geçersiz olabileceği için temizliyoruz.
-                  setNewExamForm({ ...newExamForm, categoryExamType: e.target.value, categoryLesson: '' });
+                  setNewExamForm({ ...newExamForm, categoryExamType: e.target.value });
                 }}
                 style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', boxSizing: 'border-box' }}
               >
@@ -6088,6 +5859,7 @@ export default function App() {
                 {examCategories.map((cat) => (
                   <option key={cat.id} value={cat.name}>{cat.name}</option>
                 ))}
+                <option value="__new__">＋ Yeni sınav türü ekle…</option>
               </select>
               {showNewExamCategoryInput && (
                 <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
@@ -6109,65 +5881,16 @@ export default function App() {
               <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
               <select
                 value={newExamForm.categoryLesson}
-                disabled={!newExamForm.categoryExamType}
-                onChange={(e) => {
-                  if (e.target.value === '__new__') {
-                    setShowNewLessonCategoryInput(true);
-                    return;
-                  }
-                  setNewExamForm({ ...newExamForm, categoryLesson: e.target.value });
-                }}
-                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: newExamForm.categoryExamType ? '#fff' : '#f1f5f9', boxSizing: 'border-box' }}
+                onChange={(e) => setNewExamForm({ ...newExamForm, categoryLesson: e.target.value })}
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', boxSizing: 'border-box' }}
               >
-                <option value="">{newExamForm.categoryExamType ? 'Ders Türü Seçin' : 'Önce Sınav Türü seçin'}</option>
-                {lessonCategories
-                  .filter((lc) => {
-                    const selectedCat = examCategories.find((c) => c.name === newExamForm.categoryExamType);
-                    return selectedCat && lessonLinked(selectedCat.id, lc);
-                  })
+                <option value="">Ders Türü Seçin</option>
+                {lessonUniq
                   .map((lc) => (
                     <option key={lc.id} value={lc.name}>{lc.name}</option>
                   ))}
               </select>
-              {showNewLessonCategoryInput && (
-                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                  <input
-                    type="text"
-                    autoFocus
-                    placeholder="Örn: Tarih"
-                    value={newLessonCategoryName}
-                    onChange={(e) => setNewLessonCategoryName(e.target.value)}
-                    style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }}
-                  />
-                  <button type="button" onClick={handleAddLessonCategory} className="yt-btn yt-btn-primary" style={{ padding: '8px 14px' }}>Ekle</button>
-                  <button type="button" onClick={() => { setShowNewLessonCategoryInput(false); setNewLessonCategoryName(''); }} className="yt-btn" style={{ padding: '8px 14px' }}>Vazgeç</button>
-                </div>
-              )}
             </div>
-
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>İçerik Formatı:</label>
-              <select 
-                value={newExamForm.examType} 
-                onChange={(e) => setNewExamForm({ ...newExamForm, examType: e.target.value })}
-                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', boxSizing: 'border-box' }}
-              >
-                <option value="deneme">Deneme Sınavı (Süreli Geri Sayım)</option>
-                <option value="test">Test</option>
-              </select>
-            </div>
-
-            {newExamForm.examType === 'deneme' && (
-              <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Süre (Dakika):</label>
-                <input 
-                  type="number" 
-                  value={newExamForm.duration} 
-                  onChange={(e) => setNewExamForm({ ...newExamForm, duration: Number(e.target.value) })} 
-                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
-                />
-              </div>
-            )}
 
             <div style={{ display: 'flex', gap: '10px', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
               <button
@@ -6322,11 +6045,7 @@ export default function App() {
                       style={{ flex: '1 1 160px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: '#fff' }}
                     >
                       <option value="">Ders Türü Seçin</option>
-                      {lessonCategories
-                        .filter((lc) => {
-                          const cat = examCategories.find((c) => c.name === effectiveExamType);
-                          return cat && lessonLinked(cat.id, lc);
-                        })
+                      {lessonUniq
                         .map((lc) => (
                           <option key={lc.id} value={lc.name}>{lc.name}</option>
                         ))}
@@ -6586,12 +6305,8 @@ export default function App() {
                                       style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: '#fff' }}
                                     >
                                       <option value="">Ders Seçin</option>
-                                      {lessonCategories
-                                        .filter((lc) => {
-                                          const cat = examCategories.find((c) => c.name === effectiveExamType);
-                                          return cat && lessonLinked(cat.id, lc);
-                                        })
-                                        .map((lc) => (
+                                      {lessonUniq
+                        .map((lc) => (
                                           <option key={lc.id} value={lc.name}>{lc.name}</option>
                                         ))}
                                     </select>

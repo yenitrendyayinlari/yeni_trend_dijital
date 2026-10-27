@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect } from 'react';
+import CategoryPicker from './CategoryPicker';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { Extension } from '@tiptap/core';
@@ -515,7 +516,7 @@ function NumField({ label, title, value, onCommit, onEnterDone, width = 50, unit
 const rowStyle = { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', padding: '3px 0' };
 const rowTag = { width: '22px', height: '22px', borderRadius: '4px', backgroundColor: '#334155', color: '#fff', fontSize: '0.75rem', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' };
 
-export default function PoolQuestionEditor({ lessonCategories, topics, learningOutcomes, existingGroups, editRow, onClose, onSaved }) {
+export default function PoolQuestionEditor({ lessonCategories, topics, learningOutcomes, existingGroups, editRow, onClose, onSaved, onCreateLesson, onCreateTopic, onCreateOutcome }) {
   const src = (editRow && editRow.source_json) || {};
   const isEdit = !!editRow;
   const isV2 = src.v === 2;
@@ -814,8 +815,6 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
 
   const inp = { width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontFamily: 'inherit' };
   const lbl = { display: 'block', fontSize: '0.8rem', fontWeight: 'bold', margin: '12px 0 4px', color: '#334155' };
-  const konular = topics.filter((t) => String(t.lesson_category_id) === String(dersId));
-  const kazanimlar = learningOutcomes.filter((lo) => String(lo.topic_id) === String(konuId));
 
   // Boyut kutuları: yazarken serbest; kutudan çıkınca (ya da Enter) 5-30 cm arasına çekilip uygulanır.
   // Sayfa boyutu değişmeden önce yüzdeyle (eski) ölçülmüş resimleri mm'ye sabitler.
@@ -1221,21 +1220,13 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
           <input list="pool-editor-groups" style={inp} value={batchName} onChange={(e) => setBatchName(e.target.value)} placeholder='Ör. "Biyoloji Kitabı 1"' />
           <datalist id="pool-editor-groups">{(existingGroups || []).map((g) => <option key={g} value={g} />)}</datalist>
 
-          <label style={lbl}>Ders</label>
-          <select style={inp} value={dersId} onChange={(e) => { setDersId(e.target.value); setKonuId(''); setKazanimId(''); }}>
-            <option value="">Seçin</option>
-            {lessonsUniq.map((lc) => <option key={lc.id} value={lc.id}>{lc.name}</option>)}
-          </select>
-          <label style={lbl}>Konu</label>
-          <select style={inp} value={konuId} disabled={!dersId} onChange={(e) => { setKonuId(e.target.value); setKazanimId(''); }}>
-            <option value="">{dersId ? 'Seçin' : 'Önce Ders seçin'}</option>
-            {konular.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-          <label style={lbl}>Kazanım</label>
-          <select style={inp} value={kazanimId} disabled={!konuId} onChange={(e) => setKazanimId(e.target.value)}>
-            <option value="">{konuId ? 'Seçin' : 'Önce Konu seçin'}</option>
-            {kazanimlar.map((lo) => <option key={lo.id} value={lo.id}>{lo.name}</option>)}
-          </select>
+          <CategoryPicker
+            lessons={lessonCategories} topics={topics} outcomes={learningOutcomes}
+            dersId={dersId} konuId={konuId} kazanimId={kazanimId}
+            onChange={(v) => { setDersId(v.dersId); setKonuId(v.konuId); setKazanimId(v.kazanimId); }}
+            onCreateLesson={onCreateLesson} onCreateTopic={onCreateTopic} onCreateOutcome={onCreateOutcome}
+            labelStyle={lbl} selectStyle={inp}
+          />
 
           {extras.map((x, i) => {
             const ks = topics.filter((t) => String(t.lesson_category_id) === String(x.dersId));
