@@ -87,6 +87,11 @@ const ParaFormat = Extension.create({
           parseHTML: (el) => { try { const v = el.getAttribute('data-tabs'); return v ? JSON.parse(v) : null; } catch (e) { return null; } },
           renderHTML: (attrs) => (attrs.tabs && attrs.tabs.length ? { 'data-tabs': JSON.stringify(attrs.tabs) } : {}),
         },
+        alignLast: {
+          default: null,
+          parseHTML: (el) => el.getAttribute('data-al') || null,
+          renderHTML: (attrs) => (attrs.alignLast ? { 'data-al': attrs.alignLast, style: `text-align-last:${attrs.alignLast}` } : {}),
+        },
         leading: {
           default: null,
           parseHTML: (el) => { const v = el.getAttribute('data-ld'); return v == null ? null : Number(v); },
@@ -94,6 +99,28 @@ const ParaFormat = Extension.create({
         },
       },
     }];
+  },
+});
+// Harf aralığı (tracking): InDesign gibi 1/1000 em birimiyle. Yazı rengi gibi karakter biçimidir (textStyle).
+const LetterSpacing = Extension.create({
+  name: 'letterSpacing',
+  addGlobalAttributes() {
+    return [{
+      types: ['textStyle'],
+      attributes: {
+        letterSpacing: {
+          default: null,
+          parseHTML: (el) => { const v = el.getAttribute('data-ls'); return v == null ? null : Number(v); },
+          renderHTML: (a) => (a.letterSpacing == null ? {} : { 'data-ls': a.letterSpacing, style: `letter-spacing:${(a.letterSpacing / 1000).toFixed(3)}em` }),
+        },
+      },
+    }];
+  },
+  addCommands() {
+    return {
+      setLetterSpacing: (v) => ({ chain }) => chain().setMark('textStyle', { letterSpacing: v }).run(),
+      unsetLetterSpacing: () => ({ chain }) => chain().setMark('textStyle', { letterSpacing: null }).removeEmptyTextStyle().run(),
+    };
   },
 });
 // Sekme (Tab) karakterlerinin genişliği: tarayıcı Tab'ı iki yana yaslı satırlarda esnetiyor (ilk satır
@@ -136,13 +163,13 @@ function measureTabs(view) {
       const x = left - frameLeft;
       const pa = $p.parent.attrs || {};
       // tabs: pozitif = sola hizalı durak (mm), negatif = sağa hizalı durak (mm, işareti eksi)
-      const stops = (Array.isArray(pa.tabs) ? pa.tabs : []).map((m) => ({ x: Math.abs(m) * MM_PX, r: m < 0 }));
+      const stops = (Array.isArray(pa.tabs) ? pa.tabs : []).map((m) => { const o = tabNorm(m); return { x: o.x * MM_PX, r: o.t === 'r', c: o.t === 'c' }; }).filter((o) => Number.isFinite(o.x));
       // asılı girintide sol girinti noktası da (ilk satırdan sonraki) örtük bir sekme durağıdır
       if ((pa.firstLine || 0) < 0 && (pa.indentLeft || 0) > 0) stops.push({ x: pa.indentLeft * MM_PX, r: false });
       stops.sort((a, b) => a.x - b.x);
       const hit = stops.find((sx) => sx.x > x + 1);
       let stop;
-      if (hit && hit.r) {
+      if (hit && (hit.r || hit.c)) {
         // sağa hizalı: sekmeden sonraki metin (bir sonraki sekme/paragraf sonuna kadar) durakta bitsin
         let endPos = $p.end();
         const txt = $p.parent.textContent; const startInPar = tp + 1 - $p.start();
@@ -150,7 +177,7 @@ function measureTabs(view) {
         if (nt >= 0) endPos = $p.start() + nt;
         let tw = 0;
         try { tw = Math.max(0, view.coordsAtPos(endPos).left - view.coordsAtPos(tp + 1).left); } catch (e) { tw = 0; }
-        stop = Math.max(x + 4, hit.x - tw);
+        stop = Math.max(x + 4, hit.x - (hit.c ? tw / 2 : tw));
       } else if (hit) stop = hit.x;
       else { const g = TAB_GRID_MM * MM_PX; stop = (Math.floor((x + 1) / g) + 1) * g; }
       next.set(tp, Math.max(4, stop - x));
@@ -225,7 +252,7 @@ const PqTableRow = TableRow.extend({
 
 const baseExtensions = () => [
   StarterKit.configure({ heading: false, blockquote: false, codeBlock: false, code: false, horizontalRule: false, link: false, trailingNode: false, bulletList: false, orderedList: false, listItem: false, listKeymap: false, strike: false }),
-  TextStyle, FontSize, FontFamily, ParaFormat, TabKey,
+  TextStyle, FontSize, FontFamily, LetterSpacing, ParaFormat, TabKey,
   PqTable.configure({ resizable: true, View: PqTableView }), PqTableRow, TableHeader, TableCell,
   Subscript, Superscript,
   TextAlign.configure({ types: ['paragraph'] }),
@@ -468,27 +495,186 @@ const icmlParasToJson = (paras) => paras.map((p) => {
   return content.length ? { type: 'paragraph', attrs, content } : { type: 'paragraph', attrs };
 });
 
-// Sekme durakları: "20, 33.5, 48" gibi mm değerleri (soldan, metin alanının sol kenarından ölçülür).
-function TabsField({ value, onCommit, onEnterDone }) {
-  const show = (v) => (Array.isArray(v) && v.length ? v.map((n) => (n < 0 ? `${-n}r` : n)).join(', ') : '');
+// ---- InDesign tarzı simgeler ve Sekmeler paneli ----
+const SvgI = ({ children, w = 16 }) => (
+  <svg width={w} height={16} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>{children}</svg>
+);
+// Hizalama: left/center/right = düz; j = iki yana (son satır solda); jc / jr = son satır ortada / sağda; ja = tüm satırlar yaslı
+function AlignIcon({ kind }) {
+  const ys = [3, 6.5, 10, 13];
+  const full = [2, 14];
+  return (
+    <SvgI>
+      {ys.map((y, i) => {
+        const last = i === 3;
+        let a, b;
+        if (kind === 'left') { const w = [12, 8, 12, 8][i]; a = 2; b = 2 + w; }
+        else if (kind === 'center') { const w = [12, 8, 12, 8][i]; a = 8 - w / 2; b = 8 + w / 2; }
+        else if (kind === 'right') { const w = [12, 8, 12, 8][i]; a = 14 - w; b = 14; }
+        else if (!last || kind === 'ja') { a = full[0]; b = full[1]; }
+        else if (kind === 'j') { a = 2; b = 8; }
+        else if (kind === 'jc') { a = 5; b = 11; }
+        else { a = 8; b = 14; }
+        return <line key={i} x1={a} y1={y} x2={b} y2={y} />;
+      })}
+    </SvgI>
+  );
+}
+const ICONS = {
+  size: <SvgI><path d="M1.5 4h7M5 4v9M8 9h6.5M11.2 9v4.5" /></SvgI>,
+  leading: <SvgI><path d="M3 7l2-5 2 5M3.8 5.3h2.4M3 14l2-5 2 5M3.8 12.3h2.4M12 2v12M10.3 3.8L12 2l1.7 1.8M10.3 12.2L12 14l1.7-1.8" /></SvgI>,
+  tracking: <SvgI><path d="M1.5 9l2.3-6 2.3 6M2.4 7.2h2.8M7.5 3l2.2 6 2.2-6M1.5 13h13M3.3 11.4L1.5 13l1.8 1.6M12.7 11.4L14.5 13l-1.8 1.6" /></SvgI>,
+  indL: <SvgI><path d="M7 3h7M7 6.5h7M7 10h7M7 13h7M1.5 8l3.5 0M3.5 6l2 2-2 2" /></SvgI>,
+  indR: <SvgI><path d="M2 3h7M2 6.5h7M2 10h7M2 13h7M14.5 8l-3.5 0M12.5 6l-2 2 2 2" /></SvgI>,
+  first: <SvgI><path d="M8 3h6M2 6.5h12M2 10h12M2 13h8M2.5 3h3M4 1.5l1.7 1.5L4 4.5" /></SvgI>,
+  before: <SvgI><path d="M2 2h12M2 10h12M2 13.5h12M8 4v5M6 7l2 2 2-2" /></SvgI>,
+  after: <SvgI><path d="M2 2.5h12M2 6h12M2 14h12M8 7.5v5M6 10.5l2 2 2-2" /></SvgI>,
+  tab: <SvgI><path d="M2 12h12M3 3v9M3 7h8M9 5l2 2-2 2" /></SvgI>,
+};
+const Mk = ({ t }) => (
+  <svg width="12" height="14" viewBox="0 0 12 14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" style={{ display: 'block' }}>
+    {t === 'l' && <path d="M3 1v10h7" />}
+    {t === 'r' && <path d="M9 1v10H2" />}
+    {t === 'c' && <path d="M6 1v10M1.5 11h9" />}
+  </svg>
+);
+function IconField({ icon, title, value, onCommit, onEnterDone, width = 46 }) {
   const [t, setT] = useState('');
   const [editing, setEditing] = useState(false);
-  useEffect(() => { if (!editing) setT(show(value)); }, [value, editing]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!editing) setT(value == null ? '' : String(value)); }, [value, editing]);
   const commit = () => {
     setEditing(false);
-    const nums = t.split(/[\s,;]+/).filter(Boolean).map((x) => { const r = /[rRsS]$/.test(x); const n = parseFloat(x.replace(',', '.')); return Number.isFinite(n) && n > 0 && n < 400 ? (r ? -n : n) : null; }).filter((n) => n != null);
-    const uniq = [...new Set(nums.map((n) => Math.round(n * 10) / 10))].sort((a, b) => Math.abs(a) - Math.abs(b));
-    onCommit(uniq.length ? uniq : null);
-    setT(uniq.map((n) => (n < 0 ? `${-n}r` : n)).join(', '));
+    const raw = t.trim().replace(',', '.');
+    if (raw === '') { onCommit(null); return; }
+    const n = parseFloat(raw);
+    if (Number.isFinite(n)) onCommit(n); else setT(value == null ? '' : String(value));
   };
   return (
-    <label title="Sekme durakları (mm), virgülle ayırın: 20, 33.5, 48. Sağa hizalı durak için sayının sonuna r yazın: 12r. Tab tuşu sıradaki durağa gider. Boş = varsayılan" style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '0.72rem', color: '#475569' }}>
-      Sekme
-      <input type="text" value={t} placeholder="mm, mm…" onFocus={() => setEditing(true)} onChange={(e) => setT(e.target.value)} onBlur={commit}
+    <label title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#475569', height: '26px' }}>
+      <span style={{ display: 'inline-flex' }}>{icon}</span>
+      <input type="text" inputMode="decimal" value={t} onFocus={() => setEditing(true)} onChange={(e) => setT(e.target.value)} onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); if (onEnterDone) setTimeout(onEnterDone, 0); } }}
-        style={{ width: '120px', height: '28px', borderRadius: '5px', border: '1px solid #cbd5e1', padding: '0 5px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
-      <span style={{ color: '#94a3b8' }}>mm</span>
+        style={{ width: `${width}px`, height: '26px', borderRadius: '4px', border: '1px solid #cbd5e1', padding: '0 4px', boxSizing: 'border-box', fontSize: '0.78rem' }} />
     </label>
+  );
+}
+const iconBtn = (active) => ({
+  width: '28px', height: '26px', padding: 0, borderRadius: '4px', border: active ? '1px solid #2563eb' : '1px solid transparent',
+  backgroundColor: active ? '#dbeafe' : 'transparent', color: active ? '#1d4ed8' : '#334155', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+});
+const tabNorm = (m) => {
+  if (typeof m === 'string') { const n = parseFloat(m.slice(1)); return { x: n, t: m[0] === 'c' ? 'c' : m[0] === 'r' ? 'r' : 'l' }; }
+  return m < 0 ? { x: -m, t: 'r' } : { x: m, t: 'l' };
+};
+const tabEnc = (o) => (o.t === 'r' ? -o.x : o.t === 'c' ? `c${o.x}` : o.x);
+
+// InDesign "Sekmeler" paneli: cetvel üzerinde tıkla = durak ekle, sürükle = taşı, cetvelden uzağa çek = sil.
+function TabsPanel({ value, onCommit, widthMm, onClose }) {
+  const list = (Array.isArray(value) ? value : []).map(tabNorm).filter((o) => Number.isFinite(o.x)).sort((a, b) => a.x - b.x);
+  const [sel, setSel] = useState(null);
+  const [defT, setDefT] = useState('l');
+  const [drag, setDrag] = useState(null); // {i, x, del}
+  const [xt, setXt] = useState('');
+  const [xEdit, setXEdit] = useState(false);
+  const rulerRef = useRef(null);
+  const live = useRef({});
+  const W = 600, PADL = 12;
+  const scale = W / Math.max(10, widthMm);
+  const r1 = (n) => Math.round(n * 10) / 10;
+  useEffect(() => { if (!xEdit) setXt(sel != null && list[sel] ? String(list[sel].x) : ''); }, [sel, value, xEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+  const save = (arr, selX) => {
+    const m = new Map();
+    arr.forEach((o) => { const k = r1(o.x); if (k > 0 && k < widthMm + 20) m.set(k, { x: k, t: o.t }); });
+    const out = [...m.values()].sort((a, b) => a.x - b.x);
+    onCommit(out.length ? out.map(tabEnc) : null);
+    setSel(selX == null ? null : (out.findIndex((o) => o.x === r1(selX)) >= 0 ? out.findIndex((o) => o.x === r1(selX)) : null));
+  };
+  const xFromEvent = (e) => {
+    const rc = rulerRef.current.getBoundingClientRect();
+    return Math.min(widthMm, Math.max(0.5, Math.round(((e.clientX - rc.left - PADL) / scale) * 2) / 2));
+  };
+  const startDrag = (i) => (e) => {
+    e.stopPropagation(); e.preventDefault();
+    setSel(i);
+    const rc = rulerRef.current.getBoundingClientRect();
+    const mid = rc.top + rc.height / 2;
+    live.current = { i, x: list[i].x, del: false };
+    const mv = (ev) => {
+      const x = xFromEvent(ev);
+      live.current = { i, x, del: Math.abs(ev.clientY - mid) > 45 };
+      setDrag({ ...live.current });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up);
+      const { x, del } = live.current;
+      setDrag(null);
+      const arr = list.map((o, k) => (k === i ? { ...o, x } : o)).filter((o, k) => !(del && k === i));
+      save(arr, del ? null : x);
+    };
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
+  };
+  const addAt = (e) => {
+    const x = xFromEvent(e);
+    save([...list, { x, t: defT }], x);
+  };
+  const setType = (t) => {
+    setDefT(t);
+    if (sel != null && list[sel]) save(list.map((o, k) => (k === sel ? { ...o, t } : o)), list[sel].x);
+  };
+  const applyX = () => {
+    setXEdit(false);
+    const n = parseFloat(String(xt).replace(',', '.'));
+    if (!Number.isFinite(n) || n <= 0) { setXt(sel != null && list[sel] ? String(list[sel].x) : ''); return; }
+    if (sel != null && list[sel]) save(list.map((o, k) => (k === sel ? { ...o, x: n } : o)), n);
+    else save([...list, { x: n, t: defT }], n);
+  };
+  const shown = list.map((o, k) => (drag && drag.i === k ? { ...o, x: drag.x, del: drag.del } : o));
+  const ticks = [];
+  for (let mm = 0; mm <= widthMm; mm++) {
+    const len = mm % 10 === 0 ? 9 : mm % 5 === 0 ? 6 : 3;
+    ticks.push(<line key={mm} x1={PADL + mm * scale} y1={22} x2={PADL + mm * scale} y2={22 - len} stroke="#64748b" strokeWidth="1" />);
+    if (mm % 10 === 0) ticks.push(<text key={`t${mm}`} x={PADL + mm * scale + 2} y={10} fontSize="9" fill="#475569">{mm}</text>);
+  }
+  const curT = sel != null && list[sel] ? list[sel].t : defT;
+  const tb = (t, title) => (
+    <button key={t} title={title} onMouseDown={(e) => e.preventDefault()} onClick={() => setType(t)} style={{ ...iconBtn(curT === t), width: '30px', height: '28px', border: curT === t ? '1px solid #2563eb' : '1px solid #cbd5e1', backgroundColor: curT === t ? '#dbeafe' : '#fff' }}><Mk t={t} /></button>
+  );
+  return (
+    <div onMouseDown={(e) => { if (e.target.tagName !== 'INPUT') e.preventDefault(); }}
+      style={{ position: 'relative', marginTop: '6px', backgroundColor: '#f8fafc', border: '1px solid #94a3b8', borderRadius: '8px', padding: '8px 10px 10px', width: `${W + PADL * 2 + 20}px`, maxWidth: '96vw' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+        <b style={{ fontSize: '0.8rem', color: '#334155', marginRight: '6px' }}>Sekmeler</b>
+        {tb('l', 'Sola hizalı sekme')}{tb('c', 'Ortaya hizalı sekme')}{tb('r', 'Sağa hizalı sekme')}
+        <label style={{ fontSize: '0.75rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px', marginLeft: '8px' }} title="Seçili durağın konumu (mm). Durak seçili değilse yazıp Enter'a basınca yeni durak eklenir">
+          X:
+          <input type="text" inputMode="decimal" value={xt} onFocus={() => setXEdit(true)} onChange={(e) => setXt(e.target.value)} onBlur={applyX}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
+            style={{ width: '64px', height: '26px', borderRadius: '4px', border: '1px solid #cbd5e1', padding: '0 5px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+          mm
+        </label>
+        <button title="Seçili durağı sil" onClick={() => { if (sel != null && list[sel]) save(list.filter((_, k) => k !== sel), null); }} disabled={sel == null} style={{ ...tbBtn(false), height: '26px', fontSize: '0.75rem', opacity: sel == null ? 0.5 : 1 }}>Sil</button>
+        <button title="Bu paragrafın tüm özel sekme duraklarını sil (varsayılan 7 mm ızgaraya döner)" onClick={() => { onCommit(null); setSel(null); }} style={{ ...tbBtn(false), height: '26px', fontSize: '0.75rem' }}>Tümünü sil</button>
+        <span style={{ flex: 1 }} />
+        <button title="Kapat" onClick={onClose} style={{ ...tbBtn(false), height: '26px', minWidth: '26px' }}>✕</button>
+      </div>
+      <div ref={rulerRef} onPointerDown={addAt} title="Tıklayın: durak ekler"
+        style={{ position: 'relative', height: '34px', width: `${W + PADL * 2}px`, maxWidth: '100%', backgroundColor: '#fff', border: '1px solid #94a3b8', borderRadius: '3px', cursor: 'crosshair', touchAction: 'none', userSelect: 'none' }}>
+        <svg width={W + PADL * 2} height="34" style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}>
+          <rect x={PADL} y="0" width={W} height="24" fill="#fff" />
+          <line x1={PADL} y1={22.5} x2={PADL + W} y2={22.5} stroke="#64748b" />
+          {ticks}
+        </svg>
+        {shown.map((o, k) => (
+          <div key={k} onPointerDown={startDrag(k)} title={`${o.x} mm — sürükleyin; ruler dışına çekince silinir`}
+            style={{ position: 'absolute', left: `${PADL + o.x * scale - 6}px`, top: '18px', color: o.del ? '#dc2626' : (sel === k ? '#2563eb' : '#0f172a'), cursor: 'ew-resize', opacity: o.del ? 0.4 : 1 }}>
+            <Mk t={o.t} />
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '5px' }}>
+        Cetvele tıklayın: seçili türde durak ekler · Sürükleyin: taşır · Cetvelden yukarı/aşağı çekip bırakın: siler. Cetvelin sonu yazı alanının sağ kenarıdır ({Math.round(widthMm * 10) / 10} mm).
+      </div>
+    </div>
   );
 }
 
@@ -513,6 +699,8 @@ function NumField({ label, title, value, onCommit, onEnterDone, width = 50, unit
     </label>
   );
 }
+const gcol = { display: 'grid', gridTemplateRows: '26px 26px', gap: '2px' };
+const sepV = <span style={{ width: '1px', alignSelf: 'stretch', backgroundColor: '#cbd5e1' }} />;
 const rowStyle = { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', padding: '3px 0' };
 const rowTag = { width: '22px', height: '22px', borderRadius: '4px', backgroundColor: '#334155', color: '#fff', fontSize: '0.75rem', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' };
 
@@ -529,6 +717,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const [hInput, setHInput] = useState(String(src.h || 9));
   const [hyph, setHyph] = useState(src.hyph !== false); // tireleme (kelime bölme)
   const [showTable, setShowTable] = useState(false);
+  const [showTabs, setShowTabs] = useState(false);
   const [bulk, setBulk] = useState(null); // toplu aktarma penceresi: {items, notes, from, to, running, done, log}
   const bulkStop = useRef(false);
   const bulkLogMap = useRef(new Map());
@@ -840,6 +1029,19 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const pa = ed ? ed.getAttributes('paragraph') : {};
   const setPara = (key, v) => { if (ed) ed.chain().updateAttributes('paragraph', { [key]: v }).run(); };
   const refocus = () => { if (ed) ed.commands.focus(); };
+  const curTracking = ed ? ed.getAttributes('textStyle').letterSpacing : null;
+  const alignKind = (() => {
+    if (!ed) return '';
+    const ta = pa.textAlign || 'left';
+    if (ta !== 'justify') return ta;
+    return { center: 'jc', right: 'jr', justify: 'ja' }[pa.alignLast] || 'j';
+  })();
+  const setAlign = (k) => {
+    if (!ed) return;
+    const map = { left: ['left', null], center: ['center', null], right: ['right', null], j: ['justify', null], jc: ['justify', 'center'], jr: ['justify', 'right'], ja: ['justify', 'justify'] };
+    const [ta, al] = map[k];
+    ed.chain().focus().setTextAlign(ta).updateAttributes('paragraph', { alignLast: al }).run();
+  };
   const inTable = !!ed && ed.isActive('table');
   const doTable = (fn) => () => { if (ed) fn(ed.chain().focus()).run(); };
   // Tablo ayarları (mm / pt). Hepsi imlecin bulunduğu tabloya uygulanır.
@@ -1099,47 +1301,73 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         {/* SOL: araç çubuğu + soru sayfası + çözüm sayfası */}
         <div style={{ flex: '1 1 640px', minWidth: 0 }}>
           <div style={{ position: 'sticky', top: '62px', zIndex: 15, backgroundColor: '#f1f3f5', border: '1px solid #cbd5e1', borderRadius: '8px', padding: '4px 10px', marginBottom: '14px' }}>
-            {/* Satır 1: karakter (InDesign kontrol paneli gibi) */}
-            <div style={rowStyle}>
-              <span style={rowTag} title="Karakter">A</span>
-              <select style={{ ...tbSelect, width: '140px' }} value={curFont}
-                onChange={(e) => { if (!ed) return; if (e.target.value) ed.chain().focus().setFontFamily(e.target.value).run(); else ed.chain().focus().unsetFontFamily().run(); }}>
-                <option value="">Yazı tipi</option>
-                {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
-              </select>
-              <NumField label="Punto" title="Yazı boyutu (pt)" width={46} unit="pt" value={curSizePt === '' ? null : Number(curSizePt)}
-                onEnterDone={refocus} onCommit={(v) => { if (!ed) return; if (v == null) ed.chain().unsetFontSize().run(); else ed.chain().setFontSize(`${(v * PX_PER_PT).toFixed(2)}px`).run(); }} />
-              <NumField label="Satır ar." title="Satır aralığı / leading (pt). Boş = otomatik" width={46} unit="pt" value={pa.leading == null ? null : pa.leading} onEnterDone={refocus} onCommit={(v) => setPara('leading', v)} />
-              {sep}
-              <button title="Kalın" onMouseDown={keep} onClick={() => ed && ed.chain().focus().toggleBold().run()} style={{ ...tbBtn(ed && ed.isActive('bold')), fontWeight: 'bold' }}>B</button>
-              <button title="İtalik" onMouseDown={keep} onClick={() => ed && ed.chain().focus().toggleItalic().run()} style={{ ...tbBtn(ed && ed.isActive('italic')), fontStyle: 'italic' }}>I</button>
-              <button title="Altı çizili" onMouseDown={keep} onClick={() => ed && ed.chain().focus().toggleUnderline().run()} style={{ ...tbBtn(ed && ed.isActive('underline')), textDecoration: 'underline' }}>U</button>
-              <button title="Alt simge" onMouseDown={keep} onClick={() => ed && ed.chain().focus().toggleSubscript().run()} style={tbBtn(ed && ed.isActive('subscript'))}>x₂</button>
-              <button title="Üst simge" onMouseDown={keep} onClick={() => ed && ed.chain().focus().toggleSuperscript().run()} style={tbBtn(ed && ed.isActive('superscript'))}>x²</button>
-              {sep}
-              <button title="Geri al" onMouseDown={keep} onClick={() => ed && ed.chain().focus().undo().run()} style={tbBtn(false)}>↶</button>
-              <button title="Yinele" onMouseDown={keep} onClick={() => ed && ed.chain().focus().redo().run()} style={tbBtn(false)}>↷</button>
+            {/* InDesign kontrol paneli gibi: iki sıra, simgeli alanlar (açıklama için üzerine gelin) */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', alignItems: 'flex-start', padding: '2px 0' }}>
+              {/* Yazı tipi + biçim */}
+              <div style={gcol}>
+                <select title="Yazı tipi" style={{ ...tbSelect, width: '150px', height: '26px' }} value={curFont}
+                  onChange={(e) => { if (!ed) return; if (e.target.value) ed.chain().focus().setFontFamily(e.target.value).run(); else ed.chain().focus().unsetFontFamily().run(); }}>
+                  <option value="">Yazı tipi</option>
+                  {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
+                </select>
+                <div style={{ display: 'flex', gap: '1px' }}>
+                  <button title="Kalın" onMouseDown={keep} onClick={() => ed && ed.chain().focus().toggleBold().run()} style={{ ...iconBtn(ed && ed.isActive('bold')), fontWeight: 'bold', fontSize: '0.95rem' }}>B</button>
+                  <button title="İtalik" onMouseDown={keep} onClick={() => ed && ed.chain().focus().toggleItalic().run()} style={{ ...iconBtn(ed && ed.isActive('italic')), fontStyle: 'italic', fontFamily: 'Georgia, serif', fontSize: '0.95rem' }}>I</button>
+                  <button title="Altı çizili" onMouseDown={keep} onClick={() => ed && ed.chain().focus().toggleUnderline().run()} style={{ ...iconBtn(ed && ed.isActive('underline')), textDecoration: 'underline', fontSize: '0.95rem' }}>U</button>
+                  <button title="Üst simge" onMouseDown={keep} onClick={() => ed && ed.chain().focus().toggleSuperscript().run()} style={{ ...iconBtn(ed && ed.isActive('superscript')), fontSize: '0.8rem' }}>T<sup style={{ fontSize: '0.6em' }}>1</sup></button>
+                  <button title="Alt simge (indis)" onMouseDown={keep} onClick={() => ed && ed.chain().focus().toggleSubscript().run()} style={{ ...iconBtn(ed && ed.isActive('subscript')), fontSize: '0.8rem' }}>T<sub style={{ fontSize: '0.6em' }}>1</sub></button>
+                </div>
+              </div>
+              {/* Punto, satır arası, harf arası */}
+              <div style={gcol}>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <IconField icon={ICONS.size} title="Yazı boyutu (pt)" value={curSizePt === '' ? null : Number(curSizePt)} onEnterDone={refocus}
+                    onCommit={(v) => { if (!ed) return; if (v == null) ed.chain().unsetFontSize().run(); else ed.chain().setFontSize(`${(v * PX_PER_PT).toFixed(2)}px`).run(); }} />
+                  <IconField icon={ICONS.leading} title="Satır aralığı / leading (pt). Boş = otomatik" value={pa.leading == null ? null : pa.leading} onEnterDone={refocus} onCommit={(v) => setPara('leading', v)} />
+                </div>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <IconField icon={ICONS.tracking} title="Harf aralığı / tracking (1/1000 em). 0 veya boş = normal; negatif sıkıştırır" value={curTracking == null ? null : curTracking} onEnterDone={refocus}
+                    onCommit={(v) => { if (!ed) return; if (v == null || v === 0) ed.chain().unsetLetterSpacing().run(); else ed.chain().setLetterSpacing(v).run(); }} />
+                  <span style={{ display: 'inline-flex', gap: '1px' }}>
+                    <button title="Geri al" onMouseDown={keep} onClick={() => ed && ed.chain().focus().undo().run()} style={{ ...iconBtn(false), fontSize: '1rem' }}>↶</button>
+                    <button title="Yinele" onMouseDown={keep} onClick={() => ed && ed.chain().focus().redo().run()} style={{ ...iconBtn(false), fontSize: '1rem' }}>↷</button>
+                  </span>
+                </div>
+              </div>
+              {sepV}
+              {/* Hizalama (InDesign gibi 2 x 4) */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 28px)', gridTemplateRows: '26px 26px', gap: '2px' }}>
+                {[['left', 'Sola yasla'], ['center', 'Ortala'], ['right', 'Sağa yasla'], ['j', 'İki yana yasla (son satır solda)'], ['jc', 'İki yana yasla (son satır ortada)'], ['jr', 'İki yana yasla (son satır sağda)'], ['ja', 'Tüm satırları iki yana yasla']].map(([k, tt]) => (
+                  <button key={k} title={tt} onMouseDown={keep} onClick={() => setAlign(k)} style={iconBtn(alignKind === k)}><AlignIcon kind={k} /></button>
+                ))}
+              </div>
+              {sepV}
+              {/* Girintiler */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'auto auto', gridTemplateRows: '26px 26px', gap: '2px 8px' }}>
+                <IconField icon={ICONS.indL} title="Soldan girinti (mm)" value={pa.indentLeft == null ? 0 : pa.indentLeft} onEnterDone={refocus} onCommit={(v) => setPara('indentLeft', v)} />
+                <IconField icon={ICONS.first} title="İlk satır girintisi (mm). Negatif değer = asılı girinti" value={pa.firstLine == null ? 0 : pa.firstLine} onEnterDone={refocus} onCommit={(v) => setPara('firstLine', v)} />
+                <IconField icon={ICONS.indR} title="Sağdan girinti (mm)" value={pa.indentRight == null ? 0 : pa.indentRight} onEnterDone={refocus} onCommit={(v) => setPara('indentRight', v)} />
+                <span />
+              </div>
+              {sepV}
+              {/* Paragraf aralıkları */}
+              <div style={gcol}>
+                <IconField icon={ICONS.before} title="Paragraftan önce boşluk (mm)" value={pa.spaceBefore == null ? 0 : pa.spaceBefore} onEnterDone={refocus} onCommit={(v) => setPara('spaceBefore', v)} />
+                <IconField icon={ICONS.after} title="Paragraftan sonra boşluk (mm)" value={pa.spaceAfter == null ? 1 : pa.spaceAfter} onEnterDone={refocus} onCommit={(v) => setPara('spaceAfter', v)} />
+              </div>
+              {sepV}
+              {/* Sekme, tireleme, şıklar */}
+              <div style={{ ...gcol, position: 'relative' }}>
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <button title="Sekmeler paneli: durak ekle / sağa hizalı sekme (cetvel)" onMouseDown={keep} onClick={() => setShowTabs((v) => !v)} style={{ ...iconBtn(showTabs || (pa.tabs && pa.tabs.length > 0)), width: '34px', border: '1px solid #cbd5e1' }}>{ICONS.tab}</button>
+                  <label title="Kelimeleri satır sonunda hecelerine böl (Türkçe dil kuralıyla, tarayıcı destekliyorsa)" style={{ fontSize: '0.75rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <input type="checkbox" checked={hyph} onChange={(e) => setHyph(e.target.checked)} /> Tireleme
+                  </label>
+                </div>
+                <button title="Seçili şık satırlarını asılı girintiye çevirir (7 mm), A) ile metin arasına sekme koyar" onMouseDown={keep} onClick={hangOptions} style={{ ...tbBtn(false), height: '26px', fontSize: '0.75rem' }}>Şıkları hizala</button>
+              </div>
             </div>
-            {/* Satır 2: paragraf (ölçüler milimetre) */}
-            <div style={rowStyle}>
-              <span style={rowTag} title="Paragraf">¶</span>
-              {[['left', 'Sol', 'Sola yasla'], ['center', 'Orta', 'Ortala'], ['right', 'Sağ', 'Sağa yasla'], ['justify', 'Yaslı', 'İki yana yasla']].map(([k, ic, tt]) => (
-                <button key={k} title={tt} onMouseDown={keep} onClick={() => ed && ed.chain().focus().setTextAlign(k).run()} style={tbBtn(ed && ed.isActive({ textAlign: k }))}>{ic}</button>
-              ))}
-              {sep}
-              <NumField label="Sol girinti" title="Soldan girinti (mm)" unit="mm" value={pa.indentLeft == null ? 0 : pa.indentLeft} onEnterDone={refocus} onCommit={(v) => setPara('indentLeft', v)} />
-              <NumField label="Sağ girinti" title="Sağdan girinti (mm)" unit="mm" value={pa.indentRight == null ? 0 : pa.indentRight} onEnterDone={refocus} onCommit={(v) => setPara('indentRight', v)} />
-              <TabsField value={pa.tabs} onEnterDone={refocus} onCommit={(arr) => setPara('tabs', arr)} />
-              <NumField label="İlk satır" title="Paragraf başı girintisi (mm). Negatif değer = asılı girinti" unit="mm" value={pa.firstLine == null ? 0 : pa.firstLine} onEnterDone={refocus} onCommit={(v) => setPara('firstLine', v)} />
-              {sep}
-              <NumField label="Önce" title="Paragraftan önce boşluk (mm)" unit="mm" value={pa.spaceBefore == null ? 0 : pa.spaceBefore} onEnterDone={refocus} onCommit={(v) => setPara('spaceBefore', v)} />
-              <NumField label="Sonra" title="Paragraftan sonra boşluk (mm)" unit="mm" value={pa.spaceAfter == null ? 1 : pa.spaceAfter} onEnterDone={refocus} onCommit={(v) => setPara('spaceAfter', v)} />
-              {sep}
-              <label title="Kelimeleri satır sonunda hecelerine böl" style={{ fontSize: '0.75rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                <input type="checkbox" checked={hyph} onChange={(e) => setHyph(e.target.checked)} /> Tireleme
-              </label>
-              <button title="Seçili şık satırlarını asılı girintiye çevirir (7 mm), A) ile metin arasına sekme koyar" onMouseDown={keep} onClick={hangOptions} style={tbBtn(false)}>Şıkları hizala</button>
-            </div>
+            {showTabs && <TabsPanel value={pa.tabs} widthMm={availMm} onCommit={(arr) => setPara('tabs', arr)} onClose={() => setShowTabs(false)} />}
             {/* Satır 3: ekle */}
             <div style={rowStyle}>
               <span style={rowTag} title="Ekle">+</span>
