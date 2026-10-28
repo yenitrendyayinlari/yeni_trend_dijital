@@ -269,7 +269,7 @@ export default function App() {
   const [poolGenTestKazanim, setPoolGenTestKazanim] = useState('');
   const [poolGenTestCount, setPoolGenTestCount] = useState(10);
   const [poolGenTestSize, setPoolGenTestSize] = useState(16);
-  const [poolGenDenemeRows, setPoolGenDenemeRows] = useState([{ ders: '', konu: '', kazanim: '', count: 10 }]);
+  const [poolGenDenemeRows, setPoolGenDenemeRows] = useState([{ ders: '', konu: '', kazanim: '', count: 10, bolum: '' }]);
   const [poolGenLoading, setPoolGenLoading] = useState(false);
   const [poolGenProgress, setPoolGenProgress] = useState({ current: 0, total: 0 });
   const [poolPdfFiles, setPoolPdfFiles] = useState(new Map()); // dosya adı (küçük harf) -> File
@@ -1269,26 +1269,6 @@ export default function App() {
   // girip kaydettiyse (pricePerQuestionConfigured true, pricePerQuestion 0),
   // bunu geçerli bir hesaplama olarak uyguluyoruz -- yani "bugün her şeyi
   // ücretsiz yap" isteniyorsa gerçekten 0'a çekiyoruz.
-  const applyNumPagesWithAutoPrice = (examId, numPagesValue) => {
-    const n = Number(numPagesValue) || 0;
-    const exam = exams.find((e) => e.id === examId);
-    if (pricePerQuestionConfigured) {
-      const computedPrice = Math.round(n * pricePerQuestion);
-      updateExamInDb(examId, { numPages: n, price: computedPrice, originalPrice: computedPrice });
-      // Bu bir ALT TEST ise, üst paketin (ana ürün) fiyatını da -- tüm
-      // kardeş testlerin YENİ toplam soru sayısına göre -- hemen
-      // güncelliyoruz. Aksi halde paket fiyatı, siz "Güncel Fiyata Göre
-      // Tüm Testleri Yeniden Hesapla"yı elle çalıştırana kadar eski kalırdı.
-      if (exam && exam.parentId) {
-        const siblings = exams.filter((c) => c.parentId === exam.parentId);
-        const newTotal = siblings.reduce((sum, c) => sum + (c.id === examId ? n : (c.numPages || 0)), 0);
-        const parentPrice = Math.round(newTotal * pricePerQuestion);
-        updateExamInDb(exam.parentId, { price: parentPrice, originalPrice: parentPrice });
-      }
-    } else {
-      updateExamInDb(examId, { numPages: n });
-    }
-  };
 
   // "Soru Başı Fiyat" penceresindeki "Tüm Testleri Yeniden Hesapla" butonu
   // için: mevcut TÜM testlerin/paketlerin Fiyat ve Eski Fiyat'ını, güncel
@@ -2676,7 +2656,7 @@ export default function App() {
   // PDF'leri birleştirir, exams kaydını açar, cevap anahtarını (exam_answer_keys)
   // ve kazanım haritasını (topic_map) sorulardan otomatik doldurur,
   // question_pool_usage kaydı düşürüp used_count'ları artırır.
-  const assemblePoolExamRow = async ({ picked, examName, parentExam, sortOrder, examType, duration, batchId }) => {
+  const assemblePoolExamRow = async ({ picked, examName, parentExam, sortOrder, examType, duration, batchId, sections = [] }) => {
     const questionBytesList = [];
     for (const q of picked) {
       questionBytesList.push(await fetchPoolPdfBytes(q.id, 'pool-question'));
@@ -2720,7 +2700,7 @@ export default function App() {
       category_lesson: '',
       duration: duration,
       price: computedPrice,
-      sections: [],
+      sections,
       num_pages: picked.length,
       sort_order: sortOrder,
       pdf_file: mergedQuestionsName,
@@ -2812,6 +2792,7 @@ export default function App() {
     setPoolGenLoading(true);
     setPoolGenProgress({ current: 0, total: rows.length });
     const allPicked = [];
+    const pickedCounts = [];
     try {
       for (let i = 0; i < rows.length; i++) {
         setPoolGenProgress({ current: i + 1, total: rows.length });
@@ -2825,12 +2806,27 @@ export default function App() {
         if (candidates.length < need) throw new Error(`Satır ${i + 1} ("${kazanim.name}"): ${candidates.length} uygun soru var, ${need} gerekiyor.`);
         const rowPicked = pickUnits(candidates, need);
         if (rowPicked.length < need) throw new Error(`Satır ${i + 1} ("${kazanim.name}"): ${need} soruya tam oturan bir seçim yapılamadı (bağlı soru grupları bölünemez). Soru sayısını grup büyüklüğüne uygun girin.`);
+        pickedCounts.push(rowPicked.length);
         allPicked.push(...rowPicked.map((q) => ({ ...q, lesson_category_id: ders.id, topic_id: konu.id, outcome_id: kazanim.id })));
       }
       const existingChildren = exams.filter((ex) => ex.parentId === parentExam.id);
       const nextOrder = existingChildren.length > 0 ? Math.max(...existingChildren.map((ex) => ex.sortOrder || 0)) + 1 : 0;
       const batchId = crypto.randomUUID();
-      const newExam = await assemblePoolExamRow({ picked: allPicked, examName: poolGenNamePrefix.trim(), parentExam, sortOrder: nextOrder, examType: 'deneme', duration: Number(poolGenDuration) || 0, batchId });
+      // Bölümler: satırlardaki "Bölüm" adından; boş bırakılan satır bir önceki bölüme dahil olur.
+      let sections = [];
+      if (rows.some((r) => (r.bolum || '').trim())) {
+        let pos = 0; let cur = '';
+        rows.forEach((r, i) => {
+          const nm = (r.bolum || '').trim() || cur || `Bölüm ${i + 1}`;
+          cur = nm;
+          const cnt = pickedCounts[i];
+          const last = sections[sections.length - 1];
+          if (last && last.name === nm) last.end = pos + cnt;
+          else sections.push({ name: nm, start: pos + 1, end: pos + cnt });
+          pos += cnt;
+        });
+      }
+      const newExam = await assemblePoolExamRow({ picked: allPicked, examName: poolGenNamePrefix.trim(), parentExam, sortOrder: nextOrder, examType: 'deneme', sections, duration: Number(poolGenDuration) || 0, batchId });
       setExams((prev) => [...prev, newExam]);
       alert(`✓ "${poolGenNamePrefix}" denemesi (${allPicked.length} soru) oluşturuldu ve "${parentExam.name}" paketine eklendi.`);
       setShowPoolGenerate(false);
@@ -2847,7 +2843,7 @@ export default function App() {
     setPoolGenNamePrefix('');
     setPoolGenTestDers(''); setPoolGenTestKonu(''); setPoolGenTestKazanim('');
     setPoolGenTestCount(10); setPoolGenTestSize(16);
-    setPoolGenDenemeRows([{ ders: '', konu: '', kazanim: '', count: 10 }]);
+    setPoolGenDenemeRows([{ ders: '', konu: '', kazanim: '', count: 10, bolum: '' }]);
     setPoolGenIncludeUsed(false);
     setShowPoolGenerate(true);
   };
@@ -5380,7 +5376,7 @@ export default function App() {
                       </div>
                     </div>
                     {poolGenDenemeRows.map((row, idx) => (
-                      <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 80px 32px', gap: '6px', alignItems: 'end' }}>
+                      <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 80px 1fr 32px', gap: '6px', alignItems: 'end' }}>
                         <div>
                           {idx === 0 && <label style={lblStyle}>Ders</label>}
                           <select className="yt-input" style={selStyle} value={row.ders} onChange={(e) => updateRow(idx, { ders: e.target.value, konu: '', kazanim: '' })}>
@@ -5406,12 +5402,16 @@ export default function App() {
                           {idx === 0 && <label style={lblStyle}>Soru</label>}
                           <input type="number" min="1" className="yt-input" style={selStyle} value={row.count} onChange={(e) => updateRow(idx, { count: e.target.value })} />
                         </div>
+                        <div>
+                          {idx === 0 && <label style={lblStyle}>Bölüm (ops.)</label>}
+                          <input className="yt-input" style={selStyle} value={row.bolum || ''} placeholder="Örn: Genel Yetenek" onChange={(e) => updateRow(idx, { bolum: e.target.value })} />
+                        </div>
                         <button onClick={() => setPoolGenDenemeRows((rows) => rows.length > 1 ? rows.filter((_, i) => i !== idx) : rows)}
                           style={{ padding: '8px 0', borderRadius: '6px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', color: '#dc2626', cursor: 'pointer' }}>✕</button>
                       </div>
                     ))}
                     <div>
-                      <button onClick={() => setPoolGenDenemeRows((rows) => [...rows, { ders: '', konu: '', kazanim: '', count: 10 }])}
+                      <button onClick={() => setPoolGenDenemeRows((rows) => [...rows, { ders: '', konu: '', kazanim: '', count: 10, bolum: '' }])}
                         style={{ padding: '6px 12px', borderRadius: '6px', border: '1px dashed #be185d', backgroundColor: '#fff', color: '#be185d', cursor: 'pointer', fontWeight: 'bold' }}>
                         + Satır Ekle
                       </button>
@@ -5970,39 +5970,16 @@ export default function App() {
 
                         <div className="form-group" style={{ marginBottom: '10px' }}>
                           <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>
-                            Soru / Sayfa Sayısı <span style={{ fontWeight: 'normal', color: '#64748b' }}>(PDF yüklenince otomatik dolar{pricePerQuestionConfigured ? `, fiyat soru başı ₺${pricePerQuestion} üzerinden otomatik hesaplanır` : ''})</span>:
+                            Soru / Sayfa Sayısı <span style={{ fontWeight: 'normal', color: '#64748b' }}>(PDF yüklenince otomatik dolar)</span>:
                           </label>
                           <input
                             type="number"
                             value={editingExam.numPages || 0}
-                            onChange={(e) => applyNumPagesWithAutoPrice(editingExam.id, e.target.value)}
+                            onChange={(e) => updateExamInDb(editingExam.id, { numPages: Number(e.target.value) || 0 })}
                             style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
                           />
                         </div>
 
-                        <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
-                          <div className="form-group" style={{ flex: 1 }}>
-                            <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Tekil Fiyat (₺):</label>
-                            <input
-                              type="number"
-                              value={editingExam.price || 0}
-                              onChange={(e) => updateExamInDb(editingExam.id, { price: Number(e.target.value) })}
-                              style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
-                            />
-                          </div>
-                          <div className="form-group" style={{ flex: 1 }}>
-                            <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Eski Fiyat (₺):</label>
-                            <input
-                              type="number"
-                              value={editingExam.originalPrice || 0}
-                              onChange={(e) => updateExamInDb(editingExam.id, { originalPrice: Number(e.target.value) })}
-                              style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
-                            />
-                          </div>
-                        </div>
-                        <p style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '-4px', marginBottom: '10px' }}>
-                          0 bırakılırsa bu test tek başına satılmaz, sadece üst paketi satın alanlar erişebilir.
-                        </p>
 
                         {adminActiveExam.examType === 'deneme' && (
                           <div className="form-group" style={{ marginBottom: '10px' }}>
@@ -6016,72 +5993,6 @@ export default function App() {
                           </div>
                         )}
 
-                        <div className="form-group" style={{ marginBottom: '10px' }}>
-                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>
-                            📑 Bölümler (Opsiyonel — sınav içinde soru numarası tekrar 1&apos;den başlıyorsa kullanın):
-                          </label>
-                          {(editingExam.sections || []).map((sec, secIdx) => (
-                            <div key={secIdx} style={{ display: 'flex', gap: '6px', marginBottom: '6px', alignItems: 'center' }}>
-                              <input
-                                type="text"
-                                placeholder="Bölüm adı (Örn: Genel Yetenek)"
-                                value={sec.name}
-                                onChange={(e) => {
-                                  const updated = [...(editingExam.sections || [])];
-                                  updated[secIdx] = { ...updated[secIdx], name: e.target.value };
-                                  updateExamInDb(editingExam.id, { sections: updated });
-                                }}
-                                style={{ flex: 2, minWidth: 0, padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem', boxSizing: 'border-box' }}
-                              />
-                              <input
-                                type="number"
-                                placeholder="Başl."
-                                value={sec.start}
-                                onChange={(e) => {
-                                  const updated = [...(editingExam.sections || [])];
-                                  updated[secIdx] = { ...updated[secIdx], start: Number(e.target.value) };
-                                  updateExamInDb(editingExam.id, { sections: updated });
-                                }}
-                                style={{ width: '52px', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem', boxSizing: 'border-box' }}
-                              />
-                              <span style={{ fontSize: '0.75rem', color: '#64748b' }}>-</span>
-                              <input
-                                type="number"
-                                placeholder="Bit."
-                                value={sec.end}
-                                onChange={(e) => {
-                                  const updated = [...(editingExam.sections || [])];
-                                  updated[secIdx] = { ...updated[secIdx], end: Number(e.target.value) };
-                                  updateExamInDb(editingExam.id, { sections: updated });
-                                }}
-                                style={{ width: '52px', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem', boxSizing: 'border-box' }}
-                              />
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  const updated = (editingExam.sections || []).filter((_, i) => i !== secIdx);
-                                  updateExamInDb(editingExam.id, { sections: updated });
-                                }}
-                                style={{ padding: '6px 8px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 'bold' }}
-                              >
-                                ✕
-                              </button>
-                            </div>
-                          ))}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const updated = [...(editingExam.sections || []), { name: '', start: 1, end: editingExam.numPages || 1 }];
-                              updateExamInDb(editingExam.id, { sections: updated });
-                            }}
-                            style={{ padding: '6px 10px', borderRadius: '6px', border: '1px dashed #94a3b8', backgroundColor: '#f8fafc', color: '#475569', cursor: 'pointer', fontSize: '0.75rem', fontWeight: 'bold' }}
-                          >
-                            + Bölüm Ekle
-                          </button>
-                          <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '4px' }}>
-                            Örn: &quot;Genel Yetenek&quot; 1-60, &quot;Genel Kültür&quot; 61-120. Hiç bölüm eklenmezse soru numaraları PDF sayfa numarasıyla aynı gösterilir (mevcut davranış).
-                          </div>
-                        </div>
 
                         <div className="form-group">
                           <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Hızlı Cevap Anahtarı</label>
