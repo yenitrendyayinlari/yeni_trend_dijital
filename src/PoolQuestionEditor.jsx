@@ -132,7 +132,7 @@ function buildTabDeco(doc, widths) {
   const decos = [];
   widths.forEach((w, pos) => {
     if (pos >= 0 && pos < doc.content.size && doc.textBetween(pos, pos + 1) === '\t') {
-      decos.push(Decoration.inline(pos, pos + 1, { class: 'pq-tab', style: `display:inline-block;width:${w.toFixed(1)}px;white-space:pre;text-indent:0;overflow:hidden;vertical-align:bottom;` }));
+      decos.push(Decoration.inline(pos, pos + 1, { class: 'pq-tab', style: `display:inline-block;width:${w.toFixed(1)}px;tab-size:${w.toFixed(1)}px;white-space:pre;text-indent:0;overflow:hidden;vertical-align:bottom;` }));
     }
   });
   return DecorationSet.create(doc, decos);
