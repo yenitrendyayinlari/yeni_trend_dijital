@@ -266,9 +266,8 @@ export default function App() {
   // da satır satır) atanıyor -- tıpkı mevcut Kazanım Haritası ekranınızdaki
   // gibi, metne değil ID'ye bağlı.
   const [showPoolImport, setShowPoolImport] = useState(false);
-  const [dupGroup, setDupGroup] = useState('');
   const [dupMin, setDupMin] = useState(85);
-  const [dupState, setDupState] = useState({ running: false, progress: 0, total: 0, pairs: null, noText: 0 });
+  const [dupState, setDupState] = useState({ key: null, pairs: null, noText: 0 }); // key: sonucun ait olduğu kazanım düğümü
   const [poolExcelRows, setPoolExcelRows] = useState([]); // [{soruPdfName, cozumPdfName, cevap}]
   const [poolGroupName, setPoolGroupName] = useState(''); // Kullanıcının verdiği yükleme grubu adı (ör. "Biyoloji Kitabı 1")
 
@@ -2297,6 +2296,7 @@ export default function App() {
     const tagFilter = overrides.tag !== undefined ? overrides.tag : poolBrowserFilterTag;
     const groupFilter = overrides.group !== undefined ? overrides.group : poolBrowserGroup;
     setPoolBrowserLoading(true);
+    setDupState({ key: null, pairs: null, noText: 0 });
     const rows = [];
     let failed = null;
     const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir -- sayfalayarak hepsini alıyoruz
@@ -2360,18 +2360,9 @@ export default function App() {
     setPoolBrowserRows((prev) => prev.map((r) => r.id === selectedPoolQuestionId ? { ...r, ...fields } : r));
   };
 
-  const runDupCheck = async () => {
-    if (!dupGroup) { alert('Önce bir yükleme grubu seçin.'); return; }
-    setDupState({ running: true, progress: 0, total: 0, pairs: null, noText: 0 });
-    const rows = [];
-    for (let from = 0; ; from += 1000) {
-      let q = supabase.from('question_pool').select('id, correct_answer, source_json, pdf_file, solution_pdf_file').order('id', { ascending: true }).range(from, from + 999);
-      q = dupGroup === '__none__' ? q.is('upload_batch_id', null) : q.eq('upload_batch_id', dupGroup);
-      const { data, error } = await q;
-      if (error) { alert('Sorular okunamadı: ' + error.message); setDupState({ running: false, progress: 0, total: 0, pairs: null, noText: 0 }); return; }
-      rows.push(...(data || []));
-      if (!data || data.length < 1000) break;
-    }
+  // Benzer soru kontrolü: Soru Havuzu ağacında bir KAZANIMIN altındaki sorular kendi içinde karşılaştırılır.
+  // Metin zaten poolBrowserRows'ta (source_json) olduğundan Supabase'e ek sorgu gitmez.
+  const runDupCheck = (key, rows) => {
     const items = []; let noText = 0;
     rows.forEach((r) => {
       const raw = r.source_json && r.source_json.q ? pqPlainText(r.source_json.q) : '';
@@ -2390,10 +2381,9 @@ export default function App() {
         const sim = (2 * inter) / (A.grams.size + B.grams.size);
         if (sim * 100 >= dupMin - 10) pairs.push({ a: A, b: B, sim, sameNums: A.nums === B.nums });
       }
-      if (a % 25 === 0) { setDupState((d) => ({ ...d, running: true, progress: a, total: items.length })); await new Promise((r) => setTimeout(r, 0)); }
     }
     pairs.sort((x, y) => y.sim - x.sim);
-    setDupState({ running: false, progress: items.length, total: items.length, pairs, noText });
+    setDupState({ key, pairs, noText });
   };
   const deleteDupRow = async (row) => {
     if (!window.confirm(`#${row.id} numaralı soru (ve çözüm PDF'i) havuzdan KALICI olarak silinecek. Devam edilsin mi?`)) return;
@@ -2402,7 +2392,75 @@ export default function App() {
     if (!count) { alert('Soru silinemedi (yetki sorunu olabilir).'); return; }
     await removePoolStorageFiles([row.pdf, row.sol]);
     setDupState((d) => ({ ...d, pairs: (d.pairs || []).filter((p) => p.a.id !== row.id && p.b.id !== row.id) }));
+    setPoolBrowserRows((prev) => prev.filter((r) => r.id !== row.id)); // ağaç listesinden de hemen kalksın
     fetchPoolBatches(); fetchPoolBrowserGroups();
+  };
+
+  // Sonuç paneli: birbirine bağlı sorular tek GRUP kartında toplanır; her soru grupta bir kez görünür,
+  // hangi soru hangisiyle yüzde kaç benziyor kartın üstünde açıkça listelenir.
+  const renderDupPanel = () => {
+    const shown = (dupState.pairs || []).filter((p) => p.sim * 100 >= dupMin);
+    const parent = new Map();
+    const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+    shown.forEach((p) => { [p.a.id, p.b.id].forEach((id) => { if (!parent.has(id)) parent.set(id, id); }); parent.set(find(p.a.id), find(p.b.id)); });
+    const clusters = new Map();
+    shown.forEach((p) => {
+      const root = find(p.a.id);
+      if (!clusters.has(root)) clusters.set(root, { members: new Map(), pairs: [] });
+      const c = clusters.get(root);
+      c.members.set(p.a.id, p.a); c.members.set(p.b.id, p.b); c.pairs.push(p);
+    });
+    const groups = [...clusters.values()].map((c) => ({
+      members: [...c.members.values()].sort((x, y) => x.id - y.id),
+      pairs: c.pairs.sort((x, y) => y.sim - x.sim),
+      maxSim: Math.max(...c.pairs.map((p) => p.sim)),
+    })).sort((x, y) => y.maxSim - x.maxSim);
+    return (
+      <div style={{ margin: '4px 0 10px 36px', padding: '10px', border: '1px solid #fde68a', borderRadius: '8px', backgroundColor: '#fffdf5' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.82rem', fontWeight: 'bold', marginBottom: '8px' }}>
+          <span style={{ flex: 1 }}>
+            {groups.length === 0 ? `Benzer soru bulunamadı (en az %${dupMin})` : `${groups.length} benzer soru grubu bulundu`}
+            {groups.length > 0 && <span style={{ fontWeight: 'normal', color: '#64748b' }}> ({shown.length} benzer çift)</span>}
+            {dupState.noText > 0 && <span style={{ fontWeight: 'normal', color: '#b45309' }}> · metni kayıtlı olmadığı için taranmayan: {dupState.noText}</span>}
+          </span>
+          <button onClick={() => setDupState({ key: null, pairs: null, noText: 0 })} style={{ fontSize: '0.72rem', padding: '3px 8px', borderRadius: '5px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer', fontWeight: 'normal' }}>Sonuçları kapat</button>
+        </div>
+        <div style={{ maxHeight: '460px', overflowY: 'auto', display: 'grid', gap: '10px', paddingRight: '4px' }}>
+          {groups.map((g) => {
+            const answers = new Set(g.members.map((m) => m.ans));
+            return (
+              <div key={g.members.map((m) => m.id).join('-')} style={{ border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px', backgroundColor: '#fff' }}>
+                <div style={{ fontSize: '0.8rem', marginBottom: '8px' }}>
+                  <b style={{ color: g.maxSim >= 0.97 ? '#dc2626' : '#b45309' }}>{g.members.length} soru birbirine benziyor</b>
+                  <span style={{ color: '#64748b' }}> · en yüksek %{Math.round(g.maxSim * 100)}</span>
+                  {answers.size > 1 && <span style={{ color: '#2563eb', marginLeft: '8px' }}>⚠ doğru cevaplar farklı</span>}
+                </div>
+                <div style={{ backgroundColor: '#fffbeb', border: '1px solid #fde68a', borderRadius: '6px', padding: '6px 8px', marginBottom: '8px', fontSize: '0.75rem', display: 'grid', gap: '3px' }}>
+                  {g.pairs.map((p) => (
+                    <div key={`${p.a.id}-${p.b.id}`}>
+                      <b>#{p.a.id}</b> ↔ <b>#{p.b.id}</b> : <b style={{ color: p.sim >= 0.97 ? '#dc2626' : '#b45309' }}>%{Math.round(p.sim * 100)}</b>
+                      {!p.sameNums && <span style={{ color: '#2563eb', marginLeft: '6px' }}>⚠ sayılar farklı</span>}
+                      {p.a.ans !== p.b.ans && <span style={{ color: '#2563eb', marginLeft: '6px' }}>⚠ cevap {p.a.ans} / {p.b.ans}</span>}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'grid', gap: '6px' }}>
+                  {g.members.map((q) => (
+                    <div key={q.id} style={{ backgroundColor: '#f8fafc', borderRadius: '6px', padding: '8px 10px', fontSize: '0.78rem', color: '#334155' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                        <b>#{q.id} · cevap: {q.ans}</b>
+                        <button onClick={() => deleteDupRow(q)} style={{ fontSize: '0.72rem', padding: '3px 8px', borderRadius: '5px', border: '1px solid #dc2626', backgroundColor: '#fff', color: '#dc2626', cursor: 'pointer' }}>Bunu sil</button>
+                      </div>
+                      <div style={{ maxHeight: '130px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>{q.raw}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
   };
 
   const fetchPoolBrowserGroups = async () => {
@@ -4923,53 +4981,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* --- 1b) BENZER SORU KONTROLÜ (yükleme bittikten sonra) --- */}
-              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '16px', marginBottom: '16px' }}>
-                <h3 style={{ fontSize: '0.95rem', margin: '0 0 6px' }}>🔍 Benzer Soru Kontrolü</h3>
-                <p style={{ fontSize: '0.78rem', color: '#64748b', margin: '0 0 8px' }}>Yükleme bittikten sonra bir grup seçin; grubun içinde birbirine benzeyen / tekrar eden sorular bulunur. Yalnızca &quot;Soru Yaz&quot; / toplu aktarmayla yazılmış (metni kayıtlı) sorular taranır. Hiçbir şey kendiliğinden silinmez.</p>
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                  <select value={dupGroup} onChange={(e) => setDupGroup(e.target.value)} style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.82rem', maxWidth: '280px' }}>
-                    <option value="">Grup seçin…</option>
-                    {poolBrowserGroups.map((g) => <option key={g.key} value={g.key}>{g.key === '__none__' ? 'İsimsiz Grup' : g.key} ({g.count} soru)</option>)}
-                  </select>
-                  <label style={{ fontSize: '0.78rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Bu orandan yüksek benzerlikteki sorular listelenir. Düşürürseniz daha çok (daha az kesin) sonuç gelir.">
-                    En az benzerlik %
-                    <input type="number" min="40" max="100" value={dupMin} onChange={(e) => setDupMin(Number(e.target.value) || 85)} style={{ width: '58px', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
-                  </label>
-                  <button onClick={runDupCheck} disabled={dupState.running || !dupGroup} className="yt-btn yt-btn-primary" style={{ fontSize: '0.8rem', padding: '7px 14px', opacity: (dupState.running || !dupGroup) ? 0.5 : 1 }}>
-                    {dupState.running ? `Taranıyor… ${dupState.progress}/${dupState.total || '?'}` : 'Benzer Soruları Bul'}
-                  </button>
-                </div>
-                {dupState.pairs && (
-                  <div style={{ marginTop: '10px' }}>
-                    <div style={{ fontSize: '0.82rem', fontWeight: 'bold', marginBottom: '6px' }}>
-                      {dupState.pairs.filter((p) => p.sim * 100 >= dupMin).length} benzer çift bulundu
-                      {dupState.noText > 0 && <span style={{ fontWeight: 'normal', color: '#b45309' }}> · metni kayıtlı olmadığı için taranmayan: {dupState.noText}</span>}
-                    </div>
-                    <div style={{ maxHeight: '420px', overflowY: 'auto', display: 'grid', gap: '8px' }}>
-                      {dupState.pairs.filter((p) => p.sim * 100 >= dupMin).map((p) => (
-                        <div key={`${p.a.id}-${p.b.id}`} style={{ border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px', backgroundColor: '#fff' }}>
-                          <div style={{ fontSize: '0.78rem', marginBottom: '6px' }}>
-                            <b style={{ color: p.sim >= 0.97 ? '#dc2626' : '#b45309' }}>%{Math.round(p.sim * 100)} benzer</b>
-                            {!p.sameNums && <span style={{ color: '#2563eb', marginLeft: '8px' }}>⚠ sayılar farklı (aynı kalıp, farklı soru olabilir)</span>}
-                            {p.a.ans !== p.b.ans && <span style={{ color: '#2563eb', marginLeft: '8px' }}>⚠ doğru cevaplar farklı ({p.a.ans} / {p.b.ans})</span>}
-                          </div>
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                            {[p.a, p.b].map((q) => (
-                              <div key={q.id} style={{ backgroundColor: '#f8fafc', borderRadius: '6px', padding: '6px 8px', fontSize: '0.76rem', color: '#334155' }}>
-                                <div style={{ fontWeight: 'bold', marginBottom: '3px' }}>#{q.id} · cevap: {q.ans}</div>
-                                <div style={{ maxHeight: '110px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>{q.raw}</div>
-                                <button onClick={() => deleteDupRow(q)} style={{ marginTop: '6px', fontSize: '0.72rem', padding: '3px 8px', borderRadius: '5px', border: '1px solid #dc2626', backgroundColor: '#fff', color: '#dc2626', cursor: 'pointer' }}>Bunu sil</button>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-
               {/* --- 2) ETİKETLEME BÖLÜMÜ --- */}
               <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '16px' }}>
                 <h3 style={{ fontSize: '0.95rem', margin: '0 0 10px' }}>Etiketlenmemiş Sorular</h3>
@@ -5114,6 +5125,10 @@ export default function App() {
                     )}
                     <button onClick={() => { const o = {}; poolBrowserRows.forEach((r) => { const dn = poolNm(lessonCategories, r.lesson_category_id, 'Dersi belirsiz'), tn = poolNm(topics, r.topic_id, 'Konusuz'), on = poolNm(learningOutcomes, r.outcome_id, 'Kazanımsız'); o[`d:${dn}`] = true; o[`t:${dn}:${tn}`] = true; o[`o:${dn}:${tn}:${on}`] = true; }); setPoolTreeOpen(o); }} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini aç</button>
                     <button onClick={() => setPoolTreeOpen({})} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini kapat</button>
+                    <label style={{ fontSize: '0.78rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Kazanım başlığındaki 🔍 butonuyla yapılan benzer soru kontrolünde bu orandan yüksek benzerlikteki sorular listelenir. Düşürürseniz daha çok (daha az kesin) sonuç gelir.">
+                      Benzerlik en az %
+                      <input type="number" min="40" max="100" value={dupMin} onChange={(e) => setDupMin(Number(e.target.value) || 85)} style={{ width: '58px', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                    </label>
                     <span style={{ fontSize: '0.78rem', color: '#64748b', marginLeft: 'auto' }}>{poolBrowserRows.length} soru</span>
                   </div>
 
@@ -5141,12 +5156,13 @@ export default function App() {
                           if (!o || o.id !== on) { o = { id: on, rows: [] }; t.kazanimlar.push(o); }
                           o.rows.push(r);
                         });
-                        const head = (open, label, n, level, onClick, color) => (
+                        const head = (open, label, n, level, onClick, color, extra) => (
                           <div onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px', marginLeft: level * 18, cursor: 'pointer', borderRadius: '6px', backgroundColor: level === 0 ? '#f1f5f9' : 'transparent', fontWeight: level < 2 ? 'bold' : 'normal', color: color || '#0f172a', fontSize: level === 0 ? '0.9rem' : '0.84rem' }}
                             onMouseEnter={(e) => { if (level > 0) e.currentTarget.style.backgroundColor = '#f8fafc'; }}
                             onMouseLeave={(e) => { if (level > 0) e.currentTarget.style.backgroundColor = 'transparent'; }}>
                             <span style={{ width: '12px', color: '#64748b', fontSize: '0.7rem' }}>{open ? '▼' : '▶'}</span>
                             <span style={{ flex: 1 }}>{label}</span>
+                            {extra}
                             <span style={{ color: '#64748b', fontWeight: 'normal', fontSize: '0.76rem' }}>{n} soru</span>
                           </div>
                         );
@@ -5164,7 +5180,15 @@ export default function App() {
                                       const ok = `o:${d.id}:${t.id}:${o.id}`;
                                       return (
                                         <div key={ok}>
-                                          {head(!!poolTreeOpen[ok], o.id, o.rows.length, 2, () => toggle(ok))}
+                                          {head(!!poolTreeOpen[ok], o.id, o.rows.length, 2, () => toggle(ok), undefined,
+                                            o.rows.length > 1 ? (
+                                              <button
+                                                onClick={(e) => { e.stopPropagation(); setPoolTreeOpen((prev) => ({ ...prev, [ok]: true })); runDupCheck(ok, o.rows); }}
+                                                title="Bu kazanımın altındaki soruları birbiriyle karşılaştırır"
+                                                style={{ fontSize: '0.72rem', padding: '3px 9px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', color: '#0f172a', cursor: 'pointer', fontWeight: 'normal' }}
+                                              >🔍 Benzer soruları bul</button>
+                                            ) : null)}
+                                          {poolTreeOpen[ok] && dupState.key === ok && dupState.pairs && renderDupPanel()}
                                           {poolTreeOpen[ok] && (
                                             <table style={{ width: 'calc(100% - 72px)', marginLeft: 72, borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                                               <tbody>
