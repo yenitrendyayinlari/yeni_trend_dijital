@@ -97,14 +97,9 @@ export default function App() {
   // eşleşmezse) otomatik olarak 1'e döner, ayrı bir useEffect gerekmez.
   const [adminPreviewPage, setAdminPreviewPage] = useState({ examId: null, page: 1 });
   const [newKazanimSoruNo, setNewKazanimSoruNo] = useState('');
-  const [quickKazanimDers, setQuickKazanimDers] = useState('');
-  const [quickKazanimKonu, setQuickKazanimKonu] = useState('');
-  const [quickKazanimText, setQuickKazanimText] = useState('');
-  const [copyKazanimSourceId, setCopyKazanimSourceId] = useState('');
   // Kazanım Haritası panelindeki üç araç kutusu (Excel/Tek Kazanım/Kopyala)
   // varsayılan KAPALI başlar -- böylece soru görüntüleyiciye bakarken kazanım
   // listesi ekrana daha yakın durur, araçlara ihtiyaç oldukça açılır.
-  const [kazanimToolsOpen, setKazanimToolsOpen] = useState({ excel: false, quick: false, copy: false });
   const [isCreatingExam, setIsCreatingExam] = useState(false);
   // Sınav Türü / Ders Türü artık serbest metin değil, sabit bir listeden
   // seçiliyor (bkz. Yeni İçerik Ayarları formu). Bu iki state, o listeleri
@@ -145,12 +140,6 @@ export default function App() {
   const [expandedVideoKazanim, setExpandedVideoKazanim] = useState({});
   const [showNewExamCategoryInput, setShowNewExamCategoryInput] = useState(false);
   const [newExamCategoryName, setNewExamCategoryName] = useState('');
-  const [showNewOutcomeInput, setShowNewOutcomeInput] = useState(false);
-  const [newOutcomeName, setNewOutcomeName] = useState('');
-  const [showNewTopicInput, setShowNewTopicInput] = useState(false);
-  const [newTopicName, setNewTopicName] = useState('');
-  const [showNewDersForKazanimInput, setShowNewDersForKazanimInput] = useState(false);
-  const [newDersForKazanimName, setNewDersForKazanimName] = useState('');
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   // Soru başı fiyat: admin panelinde ayarlanan, "Soru / Sayfa Sayısı"
   // değiştiğinde Fiyat/Eski Fiyat'ı otomatik hesaplamak için kullanılan
@@ -1753,33 +1742,6 @@ export default function App() {
 
   // Kazanım haritası güncellemesini ayrı tutuyoruz ki topic_map kolonu
   // henüz eklenmemişse diğer alanların kaydedilmesini etkilemesin.
-  const updateTopicMapInDb = async (id, newTopicMap) => {
-    // ÖNEMLİ (bug fix): Önceden burada state ÖNCE iyimser (kayıt başarılı
-    // olacakmış gibi) güncelleniyordu, kayıt gerçekten başarısız olsa bile
-    // ekranda geri alınmıyordu -- yani "✓ Kazanım" görünüp veritabanında
-    // aslında eksik/eski veri kalabiliyordu. Şimdi önce eski değeri saklayıp,
-    // kayıt BAŞARISIZ olursa ekranı o eski haline geri döndürüyoruz; başarılı
-    // olursa zaten yeni değerde kalır. Ayrıca çağıran tarafın (ör. "kopyalandı"
-    // mesajı) gerçek sonucu bilebilmesi için başarı/başarısızlık bilgisini
-    // (true/false) geri döndürüyoruz.
-    let previousTopicMap;
-    setExams((prev) => prev.map(ex => {
-      if (ex.id !== id) return ex;
-      previousTopicMap = ex.topicMap;
-      return { ...ex, topicMap: newTopicMap };
-    }));
-    const { error } = await supabase
-      .from('exams')
-      .update({ topic_map: newTopicMap })
-      .eq('id', id);
-    if (error) {
-      console.error("Kazanım haritası kaydedilemedi (topic_map kolonu eksik olabilir):", error);
-      setExams((prev) => prev.map(ex => ex.id === id ? { ...ex, topicMap: previousTopicMap } : ex));
-      alert("Kazanım haritası kaydedilemedi, değişiklik ekrana yansıtılmadı. Veritabanına 'topic_map' kolonu eklenmiş mi kontrol edin ve tekrar deneyin.");
-      return false;
-    }
-    return true;
-  };
 
   // ÖNEMLİ (bug fix): Kazanım tablosundaki tek bir satırı güncellerken
   // ("Ders"/"Kazanım" seç, "+ Yeni Kazanım Ekle" vb.) topicMap'i doğrudan
@@ -2049,77 +2011,7 @@ export default function App() {
     setIsCreatingExam(true);
   };
 
-  const handleExamPdfUploadForExam = (examId, e) => {
-    const file = e.target.files[0];
-    if (!file || !examId) return;
 
-    const uploadPdf = async () => {
-      setAuthLoading(true);
-      const fileExt = file.name.split('.').pop();
-      const fileName = `exam_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
-
-      const { error: storageError } = await supabase.storage
-        .from('exam-files')
-        .upload(fileName, file);
-
-      if (storageError) {
-        alert("Sınav PDF'i yüklenemedi: " + storageError.message);
-        setAuthLoading(false);
-        return;
-      }
-
-      // Soru / Sayfa Sayısı'nı elle girmeye gerek kalmasın diye, PDF'in
-      // kendisinden otomatik okuyoruz (her sayfa = bir soru). Okunamazsa
-      // (bozuk dosya vb.) mevcut değeri değiştirmeden bırakıyoruz.
-      const detectedPages = await readPdfPageCount(file);
-
-      // Storage artık private -- public URL yerine sadece dosya adını
-      // (path) saklıyoruz; görüntülenirken /api/get-pdf-url ile erişim
-      // hakkı doğrulanıp kısa ömürlü imzalı bir URL üretiliyor.
-      setAuthLoading(false);
-      const updates = { pdfFile: fileName };
-      if (detectedPages) {
-        updates.numPages = detectedPages;
-        // Soru sayısı PDF'ten otomatik algılandığında da, manuel girişte
-        // olduğu gibi, soru başı fiyat ayarlıysa Fiyat/Eski Fiyat'ı aynı
-        // formülle yeniden hesaplıyoruz.
-        if (pricePerQuestionConfigured) {
-          const computedPrice = Number((detectedPages * pricePerQuestion).toFixed(2));
-          updates.price = computedPrice;
-          updates.originalPrice = computedPrice;
-        }
-      }
-      await updateExamInDb(examId, updates);
-    };
-    uploadPdf();
-  };
-
-  const handleSolutionUploadForExam = (examId, e) => {
-    const file = e.target.files[0];
-    if (file && examId) {
-      const uploadSolutionFile = async () => {
-        setAuthLoading(true);
-        const fileExt = file.name.split('.').pop();
-        const fileName = `sol_${Math.random().toString(36).substring(2)}_${Date.now()}.${fileExt}`;
-
-        const { error: storageError } = await supabase.storage
-          .from('exam-files')
-          .upload(fileName, file);
-
-        if (storageError) {
-          console.error("Çözüm storage yükleme hatası:", storageError);
-          alert("Çözüm dosyası depolama alanına yüklenemedi: " + storageError.message);
-          setAuthLoading(false);
-          return;
-        }
-
-        // Storage artık private -- sadece dosya adını (path) saklıyoruz.
-        setAuthLoading(false);
-        await updateExamInDb(examId, { solutionPdfFile: fileName });
-      };
-      uploadSolutionFile();
-    }
-  };
 
   const handleFastKeyEntryForExam = (examId, text) => {
     const exam = exams.find(e => e.id === examId);
@@ -2138,94 +2030,23 @@ export default function App() {
   // (soru bankalarında konu konu bölünmüş testler gibi): Excel hazırlamadan,
   // tek bir Ders/Kazanım girip 1'den numPages'e kadar tüm soru numaralarına
   // aynı değeri uygular.
-  const handleApplySingleTopicToAll = (examId, numPages, ders, konu, kazanim) => {
-    const cleanDers = (ders || '').trim();
-    const cleanKonu = (konu || '').trim();
-    const cleanKazanim = (kazanim || '').trim();
-    if (!cleanDers || !cleanKonu || !cleanKazanim) {
-      alert("Ders, Konu ve Kazanım alanlarını doldurun.");
-      return;
-    }
-    const total = Number(numPages) || 0;
-    if (total < 1) {
-      alert("Bu test için önce Soru / Sayfa Sayısı girilmeli.");
-      return;
-    }
-    const newTopicMap = {};
-    for (let i = 1; i <= total; i++) {
-      newTopicMap[i] = { ders: cleanDers, konu: cleanKonu, kazanim: cleanKazanim };
-    }
-    updateTopicMapInDb(examId, newTopicMap).then((ok) => {
-      if (ok) alert(`✓ ${total} sorunun tamamına "${cleanDers} / ${cleanKonu} / ${cleanKazanim}" uygulandı.`);
-    });
-  };
 
   // Aynı ürün altındaki (ör. "KPSS Tarih Son Tekrar" paketindeki 7 deneme
   // gibi) testlerin genelde SORU SIRASI ve KONU DAĞILIMI birebir aynı olur.
   // Bu yüzden bir testin kazanım haritasını, zaten kazanımı girilmiş başka
   // bir testten olduğu gibi kopyalayabilmek için: kaynak testin topicMap'ini
   // (derin kopya alarak) hedef teste yazıyoruz, mevcut haritanın üzerine.
-  const handleCopyKazanimFromExam = (targetExamId, sourceExamId) => {
-    // ÖNEMLİ (bug fix -- aynı sınıf hata Kategori Yönetimi'nde de vardı):
-    // <select>'in e.target.value değeri DOM'da HER ZAMAN string gelir, ama
-    // exams.id veritabanından sayısal olabilir. Katı eşitlik (===) bu yüzden
-    // eşleşmeyip "kazanım haritası yok" hatasına sebep oluyordu -- oysa
-    // dropdown'da (Object.keys(e.topicMap).length) doğru gösteriliyordu,
-    // yani veri zaten oradaydı, sadece id karşılaştırması başarısız oluyordu.
-    const sourceExam = exams.find((e) => String(e.id) === String(sourceExamId));
-    if (!sourceExam || !sourceExam.topicMap || Object.keys(sourceExam.topicMap).length === 0) {
-      alert('Seçilen testte henüz kazanım haritası yok.');
-      return;
-    }
-    const targetExam = exams.find((e) => e.id === targetExamId);
-    const targetCount = targetExam?.numPages || 0;
-    const sourceCount = Object.keys(sourceExam.topicMap).length;
-    const mismatchWarning = targetCount && sourceCount !== targetCount
-      ? `\n\nUyarı: Kaynak testte ${sourceCount} soru için kazanım var, bu testte ise ${targetCount} soru var. Soru sayıları farklı olduğu için sondaki/eksik sorularda kazanım eşleşmesi yanlış olabilir, kopyaladıktan sonra listeyi gözden geçirin.`
-      : '';
-    if (!window.confirm(`"${sourceExam.name || 'İsimsiz Sınav'}" testinin kazanım haritası (${sourceCount} soru) bu teste kopyalanacak ve mevcut kazanım haritasının üzerine yazılacak. Devam edilsin mi?${mismatchWarning}`)) {
-      return;
-    }
-    const copiedTopicMap = JSON.parse(JSON.stringify(sourceExam.topicMap));
-    updateTopicMapInDb(targetExamId, copiedTopicMap).then((ok) => {
-      if (ok) alert(`✓ ${Object.keys(copiedTopicMap).length} sorunun kazanımı kopyalandı.`);
-    });
-  };
 
   // Bir kazanım adının Kategori Yönetimi'ndeki master listeyle birebir
   // eşleşmediği durumlarda, admin'e "bunu mu demek istediniz?" ipucu vermek
   // için büyük/küçük harf ve fazla boşluk farkını göz ardı ederek arar.
   // NOT: Bu sadece bir ÖNERİDİR, otomatik uygulanmaz -- eşleştirme yine katı.
-  const normalizeForSuggestion = (s) => (s || '').trim().toLocaleLowerCase('tr').replace(/\s+/g, ' ');
-  const suggestClosestName = (list, raw) => {
-    const norm = normalizeForSuggestion(raw);
-    const hit = list.find((x) => normalizeForSuggestion(x.name) === norm);
-    return hit ? ` (Bunu mu demek istediniz: "${hit.name}"?)` : '';
-  };
 
   // Kazanım Referans Listesi: Kategori Yönetimi'ndeki tüm Ders/Konu/Kazanım
   // adlarını, Excel yüklemesinde beklenen sütun sırasıyla (Ders, Konu,
   // Kazanım) bir .xlsx dosyasına döker. Admin buradan kopyala-yapıştır
   // yaparak Excel'e yazım hatasız isim girebilir -- yükleme artık BİREBİR
   // eşleşme istediği için bu liste pratikte zorunlu bir yardımcı oldu.
-  const downloadKazanimReferenceList = () => {
-    const rows = [['Ders', 'Konu', 'Kazanım']];
-    learningOutcomes
-      .slice()
-      .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-      .forEach((o) => {
-        const topic = topics.find((t) => t.id === o.topic_id);
-        const lesson = topic
-          ? lessonCategories.find((lc) => lc.id === topic.lesson_category_id)
-          : lessonCategories.find((lc) => lc.id === o.lesson_category_id);
-        if (!topic) return; // konusuz kazanımlar Excel akışında kullanılamıyor, listeye eklemiyoruz
-        rows.push([lesson?.name || '', topic.name, o.name]);
-      });
-    const ws = XLSX.utils.aoa_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Kazanımlar');
-    XLSX.writeFile(wb, 'kazanim-referans-listesi.xlsx');
-  };
 
   // Soru Havuzu Excel Şablonu -- her satır TEK bir soru. Sütun sırası:
   // 1. Soru PDF (dosya adı), 2. Çözüm PDF (dosya adı, opsiyonel),
@@ -2689,90 +2510,6 @@ export default function App() {
   };
 
 
-  const handleTopicMapUpload = (examId, e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const data = new Uint8Array(evt.target.result);
-        const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[firstSheetName];
-        // header: 1 -> her satırı bir dizi olarak alır, başlık satırını (1. satır) atlıyoruz
-        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
-
-        const newTopicMap = {};
-        const problems = [];
-        let count = 0;
-
-        for (let i = 1; i < rows.length; i++) { // 0. satır başlık, 1'den başla
-          const row = rows[i];
-          if (!row || row.length < 4) continue;
-          const soruNo = Number(row[0]);
-          const dersRaw = String(row[1] || '').trim();
-          const konuRaw = String(row[2] || '').trim();
-          const kazanimRaw = String(row[3] || '').trim();
-          if (!soruNo || !dersRaw || !konuRaw || !kazanimRaw) continue;
-
-          // ÖNEMLİ: Kazanım sistemi artık dropdown/master listeye dayanıyor
-          // (bkz. resolveLiveKonuForEntry, Kazanım Referans Listesi). Excel'deki
-          // Ders/Konu/Kazanım metinlerinin Kategori Yönetimi'ndeki kayıtlarla
-          // BİREBİR eşleşmesi gerekir -- aksi halde o soru dropdown'larda
-          // "seçili" görünmez, isim değişikliklerini otomatik yakalayamaz ve
-          // ileride konu/kazanım id'sine dayalı test tavsiyesinde bu soru
-          // SİSTEM TARAFINDAN GÖRÜLEMEZ. Bu yüzden eşleşmeyen satırları
-          // sessizce kaydetmek yerine, TÜM yüklemeyi durdurup admin'e tam
-          // olarak hangi satırda ne yazması gerektiğini gösteriyoruz.
-          const lesson = lcForEntry(dersRaw, konuRaw);
-          const topic = lesson ? topics.find((t) => t.name === konuRaw && t.lesson_category_id === lesson.id) : null;
-          const outcome = topic ? learningOutcomes.find((o) => o.name === kazanimRaw && o.topic_id === topic.id) : null;
-
-          if (!lesson || !topic || !outcome) {
-            let reason;
-            if (!lesson) {
-              reason = `Ders Türü "${dersRaw}" bulunamadı.${suggestClosestName(lessonCategories, dersRaw)}`;
-            } else if (!topic) {
-              reason = `"${lesson.name}" ders türünde "${konuRaw}" adında bir Konu bulunamadı.${suggestClosestName(topics.filter((t) => t.lesson_category_id === lesson.id), konuRaw)}`;
-            } else {
-              reason = `"${topic.name}" konusunda "${kazanimRaw}" adında bir Kazanım bulunamadı.${suggestClosestName(learningOutcomes.filter((o) => o.topic_id === topic.id), kazanimRaw)}`;
-            }
-            problems.push(`Soru ${soruNo}: ${reason}`);
-            continue;
-          }
-
-          // Bulunan master kaydın ADINI (kendi yazdıkları değil) yazıyoruz --
-          // böylece küçük bir boşluk farkı bile olsa kayıtta tam master metin durur.
-          newTopicMap[soruNo] = { ders: lesson.name, konu: topic.name, kazanim: outcome.name };
-          count++;
-        }
-
-        if (problems.length > 0) {
-          alert(
-            `Yükleme durduruldu -- ${problems.length} satırda Ders/Konu/Kazanım adı Kategori Yönetimi'ndeki kayıtlarla birebir eşleşmiyor:\n\n` +
-            problems.slice(0, 15).join('\n') +
-            (problems.length > 15 ? `\n...ve ${problems.length - 15} satır daha` : '') +
-            `\n\nDoğru adları "Kazanım Referans Listesi İndir" ile alıp Excel'e kopyalayıp tekrar yükleyin.`
-          );
-          return;
-        }
-
-        if (count === 0) {
-          alert("Excel dosyasında geçerli satır bulunamadı. Sütun sırasının Soru No / Ders / Konu / Kazanım olduğundan emin olun.");
-          return;
-        }
-
-        updateTopicMapInDb(examId, newTopicMap).then((ok) => {
-          if (ok) alert(`✓ ${count} soru için kazanım haritası yüklendi.`);
-        });
-      } catch (err) {
-        console.error(err);
-        alert("Excel dosyası okunamadı: " + err.message);
-      }
-    };
-    reader.readAsArrayBuffer(file);
-  };
 
   // ÖNEMLİ: Bir sorunun kazanım haritası girişi (topicMap[soruNo]) kaydedildiği
   // an "konu" metnini olduğu gibi kopyalar. Kategori Yönetimi'nden o kazanımın
@@ -5996,259 +5733,6 @@ export default function App() {
               <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px' }}>
                 <h3 style={{ margin: '0 0 12px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>📊 Kazanım Haritası</h3>
 
-                <button
-                  type="button"
-                  onClick={() => setKazanimToolsOpen((prev) => ({ ...prev, excel: !prev.excel }))}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '100%', textAlign: 'left', padding: '8px 10px', marginBottom: kazanimToolsOpen.excel ? '0' : '4px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.82rem', color: '#0f172a' }}
-                >
-                  <span>{kazanimToolsOpen.excel ? '▾' : '▸'}</span> Excel ile Yükle
-                </button>
-                {kazanimToolsOpen.excel && (
-                  <div style={{ padding: '10px', border: '1px solid #e2e8f0', borderTop: 'none', borderBottomLeftRadius: '6px', borderBottomRightRadius: '6px', marginBottom: '8px' }}>
-                    <button
-                      type="button"
-                      onClick={downloadKazanimReferenceList}
-                      style={{ marginBottom: '6px', padding: '5px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', color: '#0f172a', cursor: 'pointer', fontSize: '0.76rem', fontWeight: 'bold' }}
-                    >
-                      📥 Kazanım Referans Listesi İndir
-                    </button>
-                    <input
-                      type="file"
-                      accept=".xlsx,.xls"
-                      onChange={(e) => handleTopicMapUpload(editingExam.id, e)}
-                      style={{ fontSize: '0.8rem', width: '100%' }}
-                    />
-                    <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '4px' }}>
-                      Sütun sırası: 1. Soru No, 2. Ders, 3. Konu, 4. Kazanım (ilk satır başlık kabul edilir). Ders/Konu/Kazanım adları Kategori Yönetimi'ndeki kayıtlarla BİREBİR aynı olmalı -- farklı yazılmış bir satır varsa yükleme durdurulup hangi satırda ne yazmanız gerektiği gösterilir. Önce yukarıdaki referans listesini indirip oradan kopyalamanız önerilir. Yeniden yüklersen mevcut liste tamamen değişir.
-                    </div>
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setKazanimToolsOpen((prev) => ({ ...prev, quick: !prev.quick }))}
-                  style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '100%', textAlign: 'left', padding: '8px 10px', marginBottom: kazanimToolsOpen.quick ? '0' : '4px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.82rem', color: '#0f172a' }}
-                >
-                  <span>{kazanimToolsOpen.quick ? '▾' : '▸'}</span> ⚡ Tek Kazanım Uygula (bu testin tüm soruları aynı konuysa)
-                </button>
-                {kazanimToolsOpen.quick && (
-                <div style={{ padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', borderTop: 'none', marginBottom: '8px' }}>
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                    <select
-                      value={quickKazanimDers}
-                      onChange={(e) => {
-                        if (e.target.value === '__new__') { setShowNewDersForKazanimInput(true); return; }
-                        setQuickKazanimDers(e.target.value);
-                        setQuickKazanimKonu('');
-                        setQuickKazanimText('');
-                      }}
-                      style={{ flex: '1 1 160px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: '#fff' }}
-                    >
-                      <option value="">Ders Türü Seçin</option>
-                      {lessonUniq
-                        .map((lc) => (
-                          <option key={lc.id} value={lc.name}>{lc.name}</option>
-                        ))}
-                    </select>
-                    <select
-                      value={quickKazanimKonu}
-                      disabled={!quickKazanimDers}
-                      onChange={(e) => {
-                        if (e.target.value === '__new__') { setShowNewTopicInput(true); return; }
-                        setQuickKazanimKonu(e.target.value);
-                        setQuickKazanimText('');
-                      }}
-                      style={{ flex: '1 1 160px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: quickKazanimDers ? '#fff' : '#f1f5f9' }}
-                    >
-                      <option value="">{quickKazanimDers ? 'Konu Seçin' : 'Önce Ders Türü seçin'}</option>
-                      {topics
-                        .filter((t) => {
-                          const ders = lcForEntry(quickKazanimDers, quickKazanimKonu);
-                          return ders && t.lesson_category_id === ders.id;
-                        })
-                        .map((t) => (
-                          <option key={t.id} value={t.name}>{t.name}</option>
-                        ))}
-                    </select>
-                    <select
-                      value={quickKazanimText}
-                      disabled={!quickKazanimKonu}
-                      onChange={(e) => {
-                        if (e.target.value === '__new__') { setShowNewOutcomeInput(true); return; }
-                        setQuickKazanimText(e.target.value);
-                      }}
-                      style={{ flex: '1 1 160px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: quickKazanimKonu ? '#fff' : '#f1f5f9' }}
-                    >
-                      <option value="">{quickKazanimKonu ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
-                      {learningOutcomes
-                        .filter((lo) => {
-                          const ders = lcForEntry(quickKazanimDers, quickKazanimKonu);
-                          const konu = ders && topics.find((t) => t.name === quickKazanimKonu && t.lesson_category_id === ders.id);
-                          return konu && lo.topic_id === konu.id;
-                        })
-                        .map((lo) => (
-                          <option key={lo.id} value={lo.name}>{lo.name}</option>
-                        ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => handleApplySingleTopicToAll(editingExam.id, editingExam.numPages, quickKazanimDers, quickKazanimKonu, quickKazanimText)}
-                      className="yt-btn"
-                      style={{ fontSize: '0.8rem', padding: '6px 14px', whiteSpace: 'nowrap' }}
-                    >
-                      Tüm Sorulara Uygula ({editingExam.numPages || 0} soru)
-                    </button>
-                  </div>
-
-                  {showNewDersForKazanimInput && (
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                      <input
-                        type="text"
-                        autoFocus
-                        placeholder="Örn: Anayasa Hukuku"
-                        value={newDersForKazanimName}
-                        onChange={(e) => setNewDersForKazanimName(e.target.value)}
-                        style={{ flex: 1, fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box' }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => addLessonCategoryForExamType(effectiveExamType, newDersForKazanimName, (created) => {
-                          setQuickKazanimDers(created.name);
-                          setQuickKazanimKonu('');
-                          setQuickKazanimText('');
-                        }).then(() => { setNewDersForKazanimName(''); setShowNewDersForKazanimInput(false); })}
-                        className="yt-btn yt-btn-primary"
-                        style={{ padding: '6px 14px', fontSize: '0.8rem' }}
-                      >Ekle</button>
-                      <button type="button" onClick={() => { setShowNewDersForKazanimInput(false); setNewDersForKazanimName(''); }} className="yt-btn" style={{ padding: '6px 14px', fontSize: '0.8rem' }}>Vazgeç</button>
-                    </div>
-                  )}
-
-                  {showNewTopicInput && (
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                      <input
-                        type="text"
-                        autoFocus
-                        placeholder="Örn: Temel Hak ve Ödevler"
-                        value={newTopicName}
-                        onChange={(e) => setNewTopicName(e.target.value)}
-                        style={{ flex: 1, fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box' }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const ders = lcForEntry(quickKazanimDers, quickKazanimKonu);
-                          if (!ders) { alert('Önce Ders Türü seçin.'); return; }
-                          addTopicForLessonCategoryId(ders.id, newTopicName, (created) => {
-                            setQuickKazanimKonu(created.name);
-                            setQuickKazanimText('');
-                          });
-                          setNewTopicName('');
-                          setShowNewTopicInput(false);
-                        }}
-                        className="yt-btn yt-btn-primary"
-                        style={{ padding: '6px 14px', fontSize: '0.8rem' }}
-                      >Ekle</button>
-                      <button type="button" onClick={() => { setShowNewTopicInput(false); setNewTopicName(''); }} className="yt-btn" style={{ padding: '6px 14px', fontSize: '0.8rem' }}>Vazgeç</button>
-                    </div>
-                  )}
-
-                  {showNewOutcomeInput && (
-                    <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
-                      <input
-                        type="text"
-                        autoFocus
-                        placeholder="Örn: Yürütme"
-                        value={newOutcomeName}
-                        onChange={(e) => setNewOutcomeName(e.target.value)}
-                        style={{ flex: 1, fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box' }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const ders = lcForEntry(quickKazanimDers, quickKazanimKonu);
-                          const konu = ders && topics.find((t) => t.name === quickKazanimKonu && t.lesson_category_id === ders.id);
-                          if (!konu) { alert('Önce Konu seçin.'); return; }
-                          handleAddLearningOutcome(konu.id, newOutcomeName, (created) => setQuickKazanimText(created.name));
-                          setNewOutcomeName('');
-                          setShowNewOutcomeInput(false);
-                        }}
-                        className="yt-btn yt-btn-primary"
-                        style={{ padding: '6px 14px', fontSize: '0.8rem' }}
-                      >Ekle</button>
-                      <button type="button" onClick={() => { setShowNewOutcomeInput(false); setNewOutcomeName(''); }} className="yt-btn" style={{ padding: '6px 14px', fontSize: '0.8rem' }}>Vazgeç</button>
-                    </div>
-                  )}
-
-                  <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '6px' }}>
-                    1'den {editingExam.numPages || 0}'e kadar tüm sorulara aynı Ders/Kazanım atanır ve mevcut kazanım haritasının üzerine yazılır.
-                  </div>
-                </div>
-                )}
-
-                {(() => {
-                  // Kopyalama kaynağı olarak önce AYNI ürün altındaki kardeş
-                  // testleri (parentId aynı), sonra kazanımı dolu diğer tüm
-                  // testleri listeliyoruz -- en olası kullanım "aynı paketteki
-                  // 7 deneme" senaryosu olduğu için kardeşler üstte çıkıyor.
-                  const copyCandidates = exams
-                    .filter((e) => e.id !== editingExam.id && e.topicMap && Object.keys(e.topicMap).length > 0)
-                    .sort((a, b) => {
-                      const aSibling = a.parentId && a.parentId === editingExam.parentId;
-                      const bSibling = b.parentId && b.parentId === editingExam.parentId;
-                      if (aSibling !== bSibling) return aSibling ? -1 : 1;
-                      return (a.name || '').localeCompare(b.name || '', 'tr');
-                    });
-                  return (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => setKazanimToolsOpen((prev) => ({ ...prev, copy: !prev.copy }))}
-                        style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '100%', textAlign: 'left', padding: '8px 10px', marginBottom: kazanimToolsOpen.copy ? '0' : '4px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.82rem', color: '#0f172a' }}
-                      >
-                        <span>{kazanimToolsOpen.copy ? '▾' : '▸'}</span> 📋 Başka Testten Kazanım Kopyala (soru sayısı/sırası aynıysa)
-                      </button>
-                      {kazanimToolsOpen.copy && (
-                    <div style={{ padding: '12px', backgroundColor: '#f8fafc', borderRadius: '8px', border: '1px solid #e2e8f0', borderTop: 'none', marginBottom: '8px' }}>
-                      {copyCandidates.length === 0 ? (
-                        <div style={{ fontSize: '0.78rem', color: '#94a3b8' }}>Kazanım haritası dolu başka bir test bulunamadı.</div>
-                      ) : (
-                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                          <select
-                            value={copyKazanimSourceId}
-                            onChange={(e) => setCopyKazanimSourceId(e.target.value)}
-                            style={{ flex: '1 1 260px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: '#fff' }}
-                          >
-                            <option value="">Kaynak Test Seçin</option>
-                            {copyCandidates.map((e) => {
-                              const isSibling = e.parentId && e.parentId === editingExam.parentId;
-                              const parentName = !isSibling && e.parentId ? exams.find((p) => p.id === e.parentId)?.name : null;
-                              const label = `${parentName ? parentName + ' · ' : ''}${e.name || 'İsimsiz Test'} (${Object.keys(e.topicMap).length} soru)`;
-                              return <option key={e.id} value={e.id}>{label}</option>;
-                            })}
-                          </select>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!copyKazanimSourceId) { alert('Önce kaynak test seçin.'); return; }
-                              handleCopyKazanimFromExam(editingExam.id, copyKazanimSourceId);
-                            }}
-                            className="yt-btn"
-                            style={{ fontSize: '0.8rem', padding: '6px 14px', whiteSpace: 'nowrap' }}
-                          >
-                            Kopyala
-                          </button>
-                        </div>
-                      )}
-                      <div style={{ fontSize: '0.7rem', color: '#64748b', marginTop: '6px' }}>
-                        Seçilen testin kazanım haritası olduğu gibi bu teste kopyalanır ve mevcut kazanım haritasının üzerine yazılır.
-                      </div>
-                    </div>
-                      )}
-                    </>
-                  );
-                })()}
-
                 {editingExam.topicMap && Object.keys(editingExam.topicMap).length > 0 && (
                   <div style={{ marginTop: '14px' }}>
                     <div style={{ marginBottom: '8px' }}>
@@ -6597,36 +6081,6 @@ export default function App() {
                           <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginTop: '4px' }}>
                             Örn: &quot;Genel Yetenek&quot; 1-60, &quot;Genel Kültür&quot; 61-120. Hiç bölüm eklenmezse soru numaraları PDF sayfa numarasıyla aynı gösterilir (mevcut davranış).
                           </div>
-                        </div>
-
-                        <div className="form-group" style={{ marginBottom: '10px' }}>
-                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Sınav PDF&apos;i:</label>
-                          <input
-                            type="file"
-                            accept="application/pdf"
-                            onChange={(e) => handleExamPdfUploadForExam(editingExam.id, e)}
-                            style={{ fontSize: '0.8rem', width: '100%' }}
-                          />
-                          {editingExam.pdfFile && (
-                            <div style={{ fontSize: '0.75rem', color: '#16a34a', marginTop: '4px', fontWeight: 'bold' }}>
-                              ✓ Sınav PDF&apos;i eklendi.
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="form-group" style={{ marginBottom: '10px' }}>
-                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>💡 Açıklamalı Çözüm PDF&apos;i:</label>
-                          <input
-                            type="file"
-                            accept="application/pdf"
-                            onChange={(e) => handleSolutionUploadForExam(editingExam.id, e)}
-                            style={{ fontSize: '0.8rem', width: '100%' }}
-                          />
-                          {editingExam.solutionPdfFile && (
-                            <div style={{ fontSize: '0.75rem', color: '#16a34a', marginTop: '4px', fontWeight: 'bold' }}>
-                              ✓ Çözüm PDF eklendi.
-                            </div>
-                          )}
                         </div>
 
                         <div className="form-group">
