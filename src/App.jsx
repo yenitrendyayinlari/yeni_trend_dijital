@@ -2378,10 +2378,10 @@ export default function App() {
       for (let b = a + 1; b < items.length; b++) {
         const B = items[b];
         const sm = A.grams.size < B.grams.size ? A.grams : B.grams, lg = sm === A.grams ? B.grams : A.grams;
-        if (Math.min(A.grams.size, B.grams.size) / Math.max(A.grams.size, B.grams.size) < dupMin / 100 - 0.2) continue;
+        if (Math.min(A.grams.size, B.grams.size) / Math.max(A.grams.size, B.grams.size) < 0.2) continue;
         let inter = 0; sm.forEach((g) => { if (lg.has(g)) inter++; });
         const sim = (2 * inter) / (A.grams.size + B.grams.size);
-        if (sim * 100 >= dupMin - 10) pairs.push({ a: A, b: B, sim, sameNums: A.nums === B.nums });
+        if (sim * 100 >= 40) pairs.push({ a: A, b: B, sim, sameNums: A.nums === B.nums });
       }
     }
     pairs.sort((x, y) => y.sim - x.sim);
@@ -2437,6 +2437,7 @@ export default function App() {
               </>
             ) : <span style={{ fontSize: '0.88rem', color: '#16a34a', fontWeight: 'bold' }}>{shown.length === 0 ? `Benzer soru bulunamadı (en az %${dupMin})` : 'Tüm gruplar tamamlandı ✓'}</span>}
             {dupState.noText > 0 && <span style={{ color: '#b45309', fontSize: '0.78rem' }}>metni kayıtlı olmadığı için taranmayan: {dupState.noText}</span>}
+            <label style={{ fontSize: '0.8rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Eşiği değiştirince liste anında güncellenir">Benzerlik en az %<input type="number" min="40" max="100" value={dupMin} onChange={(e) => { setDupMin(Number(e.target.value) || 85); setDupIdx(0); }} style={{ width: '58px', padding: '5px', borderRadius: '6px', border: '1px solid #cbd5e1' }} /></label>
             <span style={{ flex: 1 }} />
             {g && <button disabled={idx === 0} onClick={() => setDupIdx(idx - 1)} style={btn(idx === 0)}>◀ Önceki</button>}
             {g && <button onClick={() => setDupSkip((prev) => new Set([...prev, g.key]))} title="Bu grubu benzer değil say; listeden çıkar" style={btn(false)}>Benzer değil, geç</button>}
