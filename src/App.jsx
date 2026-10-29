@@ -2453,25 +2453,31 @@ export default function App() {
       const prov = dupAi.provider;
       const todo = groups.filter((x) => !aiRes(x, prov)).slice(0, 50);
       if (todo.length === 0) { setDupAi((d) => ({ ...d, error: 'Bu model için tüm gruplar zaten doğrulandı.' })); return; }
+      const CHUNK = 10; // tek istekte 10 grup: ücretsiz Gemini'nin günlük 20 / dakikalık 5 istek sınırına takılmamak için
       setDupAi((d) => ({ ...d, running: true, done: 0, total: todo.length, error: '' }));
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData?.session?.access_token;
-      for (let i = 0; i < todo.length; i++) {
-        const grp = todo[i];
+      let finished = 0;
+      for (let c = 0; c < todo.length; c += CHUNK) {
+        const chunk = todo.slice(c, c + CHUNK);
         try {
-          const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), 65000);
+          if (c > 0 && prov === 'gemini') await new Promise((r) => setTimeout(r, 13000)); // dakikada 5 istek sınırı
+          const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), 70000);
           const resp = await fetch('/api/ai-analyze', {
             signal: ctrl.signal,
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-            body: JSON.stringify({ provider: prov, items: grp.members.slice(0, 8).map((m) => ({ id: m.id, text: m.raw, answer: m.ans })) }),
+            body: JSON.stringify({ provider: prov, groups: chunk.map((grp) => ({ key: grp.key, items: grp.members.slice(0, 8).map((m) => ({ id: m.id, text: m.raw, answer: m.ans })) })) }),
           });
           clearTimeout(tm);
           const out = await resp.json().catch(() => ({}));
           if (!resp.ok) throw new Error(out.error || `Sunucu hatası ${resp.status} (Vercel > Logs'a bakın)`);
-          setDupAi((d) => ({ ...d, done: i + 1, results: { ...d.results, [aiKey(grp, prov)]: out } }));
+          const add = {};
+          chunk.forEach((grp) => { if (out.results && out.results[grp.key]) add[aiKey(grp, prov)] = { clusters: out.results[grp.key] }; });
+          finished += chunk.length;
+          setDupAi((d) => ({ ...d, done: finished, results: { ...d.results, ...add } }));
         } catch (err) {
-          setDupAi((d) => ({ ...d, running: false, error: `${i} grup doğrulandı, sonra durdu: ${err.name === 'AbortError' ? 'cevap 65 sn içinde gelmedi (zaman aşımı)' : err.message}` }));
+          setDupAi((d) => ({ ...d, running: false, error: `${finished} grup doğrulandı, sonra durdu: ${err.name === 'AbortError' ? 'cevap 70 sn içinde gelmedi (zaman aşımı)' : err.message}` }));
           return;
         }
       }
