@@ -90,6 +90,17 @@ const pqPlainText = (node) => {
 };
 const pqNorm = (t) => t.toLocaleLowerCase('tr').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const pqGrams = (t) => { const s2 = ` ${t} `; const g = new Set(); for (let i = 0; i + 4 <= s2.length; i++) g.add(s2.slice(i, i + 4)); return g; };
+// Konu kelimelerine göre benzerlik (TF-IDF kosinüs): her soruda geçen kalıp sözler ("hangisidir", "yukarıdakilerden", "Yalnız I"...)
+// havuzda çok geçtiği için düşük ağırlık alır; soruyu ayıran kelimeler (Şaman, Kağan, toygun...) öne çıkar.
+const PQ_STOP = new Set('ile ve veya ama fakat için gibi göre daha çok bir bu şu bazı her hiç ise değil değildir olan olarak olarak ancak yalnız yalniz hangisi hangileri hangisidir hangileridir hangisinde hangisine hangisini aşağıdakilerden aşağıdakilerin aşağıdakiler yukarıdakilerden yukarıdakiler yukarıdaki yukarıda aşağıdaki aşağıda verilenlerden verilen kadar sonra önce arasında içinde biri hangi nedir nelerdir hangileri'.split(' '));
+const PQ_ROMAN = new Set(['i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x']);
+const pqTokens = (raw) => {
+  const cut = raw.search(/(^|\s)A\)\s/);
+  const stem = cut >= 0 ? raw.slice(0, cut) : raw;
+  const opts = cut >= 0 ? raw.slice(cut) : '';
+  const tk = (t, w) => pqNorm(t).split(' ').filter((x) => x && !PQ_ROMAN.has(x) && !PQ_STOP.has(x) && (x.length >= 3 || /^\d+$/.test(x)) && !/^[a-e]$/.test(x)).map((x) => [/^\d+$/.test(x) ? x : x.slice(0, 5), w]);
+  return [...tk(stem, 1), ...tk(opts, 0.4)];
+};
 const pqNums = (t) => (t.match(/\d+(?:[.,]\d+)?/g) || []).join('|');
 
 export default function App() {
@@ -268,6 +279,7 @@ export default function App() {
   const [showPoolImport, setShowPoolImport] = useState(false);
   const [dupMin, setDupMin] = useState(85);
   const [dupIdx, setDupIdx] = useState(0);
+  const [dupAi, setDupAi] = useState({ provider: 'gemini', running: false, done: 0, total: 0, error: '', results: {}, hideDifferent: false }); // results: { 'gemini:3100-3172': {clusters} }
   const [dupSkip, setDupSkip] = useState(() => new Set());
   const [dupState, setDupState] = useState({ key: null, pairs: null, noText: 0 }); // key: sonucun ait olduğu kazanım düğümü
   const [poolExcelRows, setPoolExcelRows] = useState([]); // [{soruPdfName, cozumPdfName, cevap}]
@@ -2365,22 +2377,33 @@ export default function App() {
   // Benzer soru kontrolü: Soru Havuzu ağacında bir KAZANIMIN altındaki sorular kendi içinde karşılaştırılır.
   // Metin zaten poolBrowserRows'ta (source_json) olduğundan Supabase'e ek sorgu gitmez.
   const runDupCheck = (key, rows) => {
+    const textOf = (r) => (r.source_json && r.source_json.q ? pqPlainText(r.source_json.q).replace(/\n+/g, ' ').trim() : '');
+    // Belge sıklığı (df): tüm havuzdan -- sık geçen kelimeler az ağırlık alır
+    const df = new Map(); let N = 0;
+    (poolBrowserRows.length ? poolBrowserRows : rows).forEach((r) => {
+      const raw = textOf(r); if (pqNorm(raw).length < 15) return; N++;
+      new Set(pqTokens(raw).map((t) => t[0])).forEach((w) => df.set(w, (df.get(w) || 0) + 1));
+    });
     const items = []; let noText = 0;
     rows.forEach((r) => {
-      const raw = r.source_json && r.source_json.q ? pqPlainText(r.source_json.q) : '';
+      const raw = textOf(r);
       const norm = pqNorm(raw);
       if (norm.length < 15) { noText++; return; }
-      items.push({ id: r.id, ans: r.correct_answer, raw: raw.replace(/\n+/g, ' ').trim(), grams: pqGrams(norm), nums: pqNums(norm), pdf: r.pdf_file, sol: r.solution_pdf_file });
+      const tf = new Map();
+      pqTokens(raw).forEach(([w, wt]) => tf.set(w, (tf.get(w) || 0) + wt));
+      const vec = new Map(); let sq = 0;
+      tf.forEach((c, w) => { const v = (1 + Math.log(1 + c)) * (Math.log((N + 1) / ((df.get(w) || 0) + 1)) + 1); vec.set(w, v); sq += v * v; });
+      const len = Math.sqrt(sq) || 1;
+      items.push({ id: r.id, ans: r.correct_answer, raw, vec, len, nums: pqNums(norm), pdf: r.pdf_file, sol: r.solution_pdf_file });
     });
     const pairs = [];
     for (let a = 0; a < items.length; a++) {
       const A = items[a];
       for (let b = a + 1; b < items.length; b++) {
         const B = items[b];
-        const sm = A.grams.size < B.grams.size ? A.grams : B.grams, lg = sm === A.grams ? B.grams : A.grams;
-        if (Math.min(A.grams.size, B.grams.size) / Math.max(A.grams.size, B.grams.size) < 0.2) continue;
-        let inter = 0; sm.forEach((g) => { if (lg.has(g)) inter++; });
-        const sim = (2 * inter) / (A.grams.size + B.grams.size);
+        const sm = A.vec.size < B.vec.size ? A.vec : B.vec, lg = sm === A.vec ? B.vec : A.vec;
+        let dot = 0; sm.forEach((v, w) => { const u = lg.get(w); if (u) dot += v * u; });
+        const sim = dot / (A.len * B.len);
         if (sim * 100 >= 40) pairs.push({ a: A, b: B, sim, sameNums: A.nums === B.nums });
       }
     }
@@ -2417,12 +2440,41 @@ export default function App() {
       const members = [...c.members.values()].sort((x, y) => x.id - y.id);
       return { key: members.map((m) => m.id).join('-'), members, pairs: c.pairs.sort((x, y) => y.sim - x.sim), maxSim: Math.max(...c.pairs.map((p) => p.sim)) };
     }).sort((x, y) => y.maxSim - x.maxSim);
-    const groups = allGroups.filter((g) => !dupSkip.has(g.key));
+    const isAllDifferent = (r) => r && r.clusters.every((c) => c.ids.length < 2 || c.verdict === 'farkli');
+    const groups = allGroups.filter((g) => !dupSkip.has(g.key) && !(dupAi.hideDifferent && isAllDifferent(dupAi.results[`${dupAi.provider}:${g.key}`])));
     const idx = Math.min(dupIdx, Math.max(0, groups.length - 1));
     const g = groups[idx];
     const close = () => { setDupState({ key: null, pairs: null, noText: 0 }); setDupIdx(0); };
     const btn = (disabled) => ({ padding: '7px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: disabled ? 'not-allowed' : 'pointer', fontSize: '0.85rem', opacity: disabled ? 0.45 : 1 });
     const n = g ? g.members.length : 0;
+    const aiKey = (grp, prov) => `${prov}:${grp.key}`;
+    const aiRes = (grp, prov) => dupAi.results[aiKey(grp, prov)];
+    const runAiVerify = async () => {
+      const prov = dupAi.provider;
+      const todo = groups.filter((x) => !aiRes(x, prov)).slice(0, 50);
+      if (todo.length === 0) { setDupAi((d) => ({ ...d, error: 'Bu model için tüm gruplar zaten doğrulandı.' })); return; }
+      setDupAi((d) => ({ ...d, running: true, done: 0, total: todo.length, error: '' }));
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      for (let i = 0; i < todo.length; i++) {
+        const grp = todo[i];
+        try {
+          const resp = await fetch('/api/ai-analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ provider: prov, items: grp.members.slice(0, 8).map((m) => ({ id: m.id, text: m.raw, answer: m.ans })) }),
+          });
+          const out = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(out.error || `Hata ${resp.status}`);
+          setDupAi((d) => ({ ...d, done: i + 1, results: { ...d.results, [aiKey(grp, prov)]: out } }));
+        } catch (err) {
+          setDupAi((d) => ({ ...d, running: false, error: `${i} grup doğrulandı, sonra durdu: ${err.message}` }));
+          return;
+        }
+      }
+      setDupAi((d) => ({ ...d, running: false }));
+    };
+    const verdictTxt = { ayni: ['AYNI SORU', '#dc2626'], benzer: ['BENZER (aynı bilgi)', '#b45309'], farkli: ['FARKLI', '#16a34a'] };
     const cols = n <= 4 ? `repeat(${n || 1}, minmax(0, 1fr))` : `repeat(${n}, minmax(340px, 1fr))`;
     return (
       <div style={{ position: 'fixed', inset: 0, zIndex: 1200, backgroundColor: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'stretch', justifyContent: 'center', padding: '10px' }}>
@@ -2437,6 +2489,18 @@ export default function App() {
               </>
             ) : <span style={{ fontSize: '0.88rem', color: '#16a34a', fontWeight: 'bold' }}>{shown.length === 0 ? `Benzer soru bulunamadı (en az %${dupMin})` : 'Tüm gruplar tamamlandı ✓'}</span>}
             {dupState.noText > 0 && <span style={{ color: '#b45309', fontSize: '0.78rem' }}>metni kayıtlı olmadığı için taranmayan: {dupState.noText}</span>}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '3px 8px', border: '1px solid #c7d2fe', borderRadius: '8px', backgroundColor: '#eef2ff' }}>
+              <select value={dupAi.provider} disabled={dupAi.running} onChange={(e) => setDupAi((d) => ({ ...d, provider: e.target.value, error: '' }))} style={{ padding: '4px 6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}>
+                <option value="gemini">Gemini</option>
+                <option value="claude">Claude</option>
+              </select>
+              <button onClick={runAiVerify} disabled={dupAi.running || groups.length === 0} title="Gruplardaki soruları yapay zekâya gönderip gerçekten tekrar mı diye sordurur (en fazla 50 grup)" style={{ ...btn(dupAi.running || groups.length === 0), backgroundColor: '#4f46e5', color: '#fff', border: 'none', padding: '6px 12px' }}>
+                {dupAi.running ? `⏳ ${dupAi.done} / ${dupAi.total}` : '🤖 Yapay zekâyla doğrula'}
+              </button>
+              <label style={{ fontSize: '0.76rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '3px' }} title="Seçili modelin FARKLI dediği grupları listeden çıkarır">
+                <input type="checkbox" checked={dupAi.hideDifferent} onChange={(e) => { setDupAi((d) => ({ ...d, hideDifferent: e.target.checked })); setDupIdx(0); }} /> Farklı çıkanları gizle
+              </label>
+            </span>
             <label style={{ fontSize: '0.8rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Eşiği değiştirince liste anında güncellenir">Benzerlik en az %<input type="number" min="40" max="100" value={dupMin} onChange={(e) => { setDupMin(Number(e.target.value) || 85); setDupIdx(0); }} style={{ width: '58px', padding: '5px', borderRadius: '6px', border: '1px solid #cbd5e1' }} /></label>
             <span style={{ flex: 1 }} />
             {g && <button disabled={idx === 0} onClick={() => setDupIdx(idx - 1)} style={btn(idx === 0)}>◀ Önceki</button>}
@@ -2451,6 +2515,24 @@ export default function App() {
               ))}
             </div>
           )}
+          {dupAi.error && <div style={{ padding: '6px 16px', backgroundColor: '#fef2f2', color: '#b91c1c', fontSize: '0.8rem', borderBottom: '1px solid #fecaca' }}>⚠ {dupAi.error}</div>}
+          {g && ['gemini', 'claude'].map((prov) => {
+            const r = aiRes(g, prov);
+            if (!r) return null;
+            return (
+              <div key={prov} style={{ padding: '6px 16px', backgroundColor: '#eef2ff', borderBottom: '1px solid #c7d2fe', fontSize: '0.8rem' }}>
+                <b>🤖 {prov === 'claude' ? 'Claude' : 'Gemini'}:</b>
+                {r.clusters.map((c, i) => (
+                  <span key={i} style={{ marginLeft: '14px' }}>
+                    {c.ids.map((id) => `#${id}`).join(', ')}{c.ids.length > 1 ? ' → ' : ' → tek başına: '}
+                    <b style={{ color: (verdictTxt[c.verdict] || verdictTxt.farkli)[1] }}>{(verdictTxt[c.verdict] || verdictTxt.farkli)[0]}</b>
+                    {c.reason && <span style={{ color: '#475569' }}> — {c.reason}</span>}
+                    {c.keep && c.ids.length > 1 && c.verdict !== 'farkli' && <b style={{ color: '#4f46e5' }}> · Tutulması önerilen: #{c.keep}</b>}
+                  </span>
+                ))}
+              </div>
+            );
+          })}
           <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px', backgroundColor: '#f1f5f9' }}>
             {g && (
               <div style={{ display: 'grid', gridTemplateColumns: cols, gap: '12px', alignItems: 'start' }}>
