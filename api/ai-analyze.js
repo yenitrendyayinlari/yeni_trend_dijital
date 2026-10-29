@@ -33,6 +33,7 @@ async function callClaude(prompt) {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+    signal: AbortSignal.timeout(50000),
     body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5', max_tokens: 1000, messages: [{ role: 'user', content: prompt }] }),
   });
   const j = await r.json().catch(() => ({}));
@@ -44,15 +45,27 @@ async function callGemini(prompt) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY Vercel ortam değişkenlerinde tanımlı değil.');
   const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0, responseMimeType: 'application/json' } }),
-  });
-  const j = await r.json().catch(() => ({}));
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const post = async (thinkingLow) => {
+    const generationConfig = { temperature: 0, responseMimeType: 'application/json' };
+    if (thinkingLow) generationConfig.thinkingConfig = { thinkingLevel: 'low' }; // kısa düşünsün: bu iş için derin akıl yürütme gerekmiyor, süre kısalır
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+      signal: AbortSignal.timeout(45000),
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig }),
+    });
+    const j = await r.json().catch(() => ({}));
+    return { r, j };
+  };
+  let { r, j } = await post(true);
+  if (r.status === 400) ({ r, j } = await post(false)); // model "thinkingLevel" ayarını kabul etmiyorsa ayarsız dene
   if (!r.ok) throw new Error(`Gemini: ${j.error?.message || r.status}`);
   return (j.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
 }
+
+// Vercel'de fonksiyonun en fazla 60 sn çalışmasına izin ver (yapay zekâ cevabı bazen yavaş gelir)
+export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -84,6 +97,7 @@ export default async function handler(req, res) {
     })).filter((c) => c.ids.length > 0);
     return res.status(200).json({ clusters });
   } catch (err) {
-    return res.status(502).json({ error: err.message || 'Yapay zekâ isteği başarısız.' });
+    const msg = err && err.name === 'TimeoutError' ? 'Model 50 saniyede cevap vermedi (zaman aşımı).' : (err.message || 'Yapay zekâ isteği başarısız.');
+    return res.status(502).json({ error: msg });
   }
 }
