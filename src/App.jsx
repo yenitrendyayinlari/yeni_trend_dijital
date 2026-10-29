@@ -2459,16 +2459,19 @@ export default function App() {
       for (let i = 0; i < todo.length; i++) {
         const grp = todo[i];
         try {
+          const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), 65000);
           const resp = await fetch('/api/ai-analyze', {
+            signal: ctrl.signal,
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
             body: JSON.stringify({ provider: prov, items: grp.members.slice(0, 8).map((m) => ({ id: m.id, text: m.raw, answer: m.ans })) }),
           });
+          clearTimeout(tm);
           const out = await resp.json().catch(() => ({}));
-          if (!resp.ok) throw new Error(out.error || `Hata ${resp.status}`);
+          if (!resp.ok) throw new Error(out.error || `Sunucu hatası ${resp.status} (Vercel > Logs'a bakın)`);
           setDupAi((d) => ({ ...d, done: i + 1, results: { ...d.results, [aiKey(grp, prov)]: out } }));
         } catch (err) {
-          setDupAi((d) => ({ ...d, running: false, error: `${i} grup doğrulandı, sonra durdu: ${err.message}` }));
+          setDupAi((d) => ({ ...d, running: false, error: `${i} grup doğrulandı, sonra durdu: ${err.name === 'AbortError' ? 'cevap 65 sn içinde gelmedi (zaman aşımı)' : err.message}` }));
           return;
         }
       }
