@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 // SADECE admin çağırabilir. API anahtarları Vercel > Settings > Environment Variables içinde durur,
 // tarayıcıya hiç gitmez:
 //   ANTHROPIC_API_KEY   (Claude)         -- isteğe bağlı model: ANTHROPIC_MODEL (varsayılan claude-sonnet-5-5)
-//   GEMINI_API_KEY      (Google Gemini)  -- isteğe bağlı model: GEMINI_MODEL    (varsayılan gemini-2.5-flash)
+//   GEMINI_API_KEY      (Google Gemini)  -- isteğe bağlı model: GEMINI_MODEL    (varsayılan gemini-3.8-flash)
 // Not: Bir istek tek bir benzer-soru grubunu analiz eder (Vercel'in süre sınırına takılmamak için).
 const supabaseAdmin = createClient(
   'https://gzkqylheloxcgpcrftci.supabase.co',
@@ -43,7 +43,7 @@ async function callClaude(prompt) {
 async function callGemini(prompt) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY Vercel ortam değişkenlerinde tanımlı değil.');
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
