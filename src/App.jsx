@@ -267,6 +267,8 @@ export default function App() {
   // gibi, metne değil ID'ye bağlı.
   const [showPoolImport, setShowPoolImport] = useState(false);
   const [dupMin, setDupMin] = useState(85);
+  const [dupIdx, setDupIdx] = useState(0);
+  const [dupSkip, setDupSkip] = useState(() => new Set());
   const [dupState, setDupState] = useState({ key: null, pairs: null, noText: 0 }); // key: sonucun ait olduğu kazanım düğümü
   const [poolExcelRows, setPoolExcelRows] = useState([]); // [{soruPdfName, cozumPdfName, cevap}]
   const [poolGroupName, setPoolGroupName] = useState(''); // Kullanıcının verdiği yükleme grubu adı (ör. "Biyoloji Kitabı 1")
@@ -2383,6 +2385,7 @@ export default function App() {
       }
     }
     pairs.sort((x, y) => y.sim - x.sim);
+    setDupIdx(0); setDupSkip(new Set());
     setDupState({ key, pairs, noText });
   };
   const deleteDupRow = async (row) => {
@@ -2396,8 +2399,8 @@ export default function App() {
     fetchPoolBatches(); fetchPoolBrowserGroups();
   };
 
-  // Sonuç paneli: birbirine bağlı sorular tek GRUP kartında toplanır; her soru grupta bir kez görünür,
-  // hangi soru hangisiyle yüzde kaç benziyor kartın üstünde açıkça listelenir.
+  // Sonuç penceresi: birbirine bağlı sorular TEK GRUP olarak yan yana, gerçek PDF önizlemesiyle (soru + çözüm) gösterilir.
+  // Grup sayısı kadar sütun açılır (2'li, 3'lü...); gruplar arasında ◀ ▶ ile gezilir. Silinen soru gruptan düşer.
   const renderDupPanel = () => {
     const shown = (dupState.pairs || []).filter((p) => p.sim * 100 >= dupMin);
     const parent = new Map();
@@ -2410,54 +2413,64 @@ export default function App() {
       const c = clusters.get(root);
       c.members.set(p.a.id, p.a); c.members.set(p.b.id, p.b); c.pairs.push(p);
     });
-    const groups = [...clusters.values()].map((c) => ({
-      members: [...c.members.values()].sort((x, y) => x.id - y.id),
-      pairs: c.pairs.sort((x, y) => y.sim - x.sim),
-      maxSim: Math.max(...c.pairs.map((p) => p.sim)),
-    })).sort((x, y) => y.maxSim - x.maxSim);
+    const allGroups = [...clusters.values()].map((c) => {
+      const members = [...c.members.values()].sort((x, y) => x.id - y.id);
+      return { key: members.map((m) => m.id).join('-'), members, pairs: c.pairs.sort((x, y) => y.sim - x.sim), maxSim: Math.max(...c.pairs.map((p) => p.sim)) };
+    }).sort((x, y) => y.maxSim - x.maxSim);
+    const groups = allGroups.filter((g) => !dupSkip.has(g.key));
+    const idx = Math.min(dupIdx, Math.max(0, groups.length - 1));
+    const g = groups[idx];
+    const close = () => { setDupState({ key: null, pairs: null, noText: 0 }); setDupIdx(0); };
+    const btn = (disabled) => ({ padding: '7px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: disabled ? 'not-allowed' : 'pointer', fontSize: '0.85rem', opacity: disabled ? 0.45 : 1 });
+    const n = g ? g.members.length : 0;
+    const cols = n <= 4 ? `repeat(${n || 1}, minmax(0, 1fr))` : `repeat(${n}, minmax(340px, 1fr))`;
     return (
-      <div style={{ margin: '4px 0 10px 36px', padding: '10px', border: '1px solid #fde68a', borderRadius: '8px', backgroundColor: '#fffdf5' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.82rem', fontWeight: 'bold', marginBottom: '8px' }}>
-          <span style={{ flex: 1 }}>
-            {groups.length === 0 ? `Benzer soru bulunamadı (en az %${dupMin})` : `${groups.length} benzer soru grubu bulundu`}
-            {groups.length > 0 && <span style={{ fontWeight: 'normal', color: '#64748b' }}> ({shown.length} benzer çift)</span>}
-            {dupState.noText > 0 && <span style={{ fontWeight: 'normal', color: '#b45309' }}> · metni kayıtlı olmadığı için taranmayan: {dupState.noText}</span>}
-          </span>
-          <button onClick={() => setDupState({ key: null, pairs: null, noText: 0 })} style={{ fontSize: '0.72rem', padding: '3px 8px', borderRadius: '5px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer', fontWeight: 'normal' }}>Sonuçları kapat</button>
-        </div>
-        <div style={{ maxHeight: '460px', overflowY: 'auto', display: 'grid', gap: '10px', paddingRight: '4px' }}>
-          {groups.map((g) => {
-            const answers = new Set(g.members.map((m) => m.ans));
-            return (
-              <div key={g.members.map((m) => m.id).join('-')} style={{ border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px', backgroundColor: '#fff' }}>
-                <div style={{ fontSize: '0.8rem', marginBottom: '8px' }}>
-                  <b style={{ color: g.maxSim >= 0.97 ? '#dc2626' : '#b45309' }}>{g.members.length} soru birbirine benziyor</b>
-                  <span style={{ color: '#64748b' }}> · en yüksek %{Math.round(g.maxSim * 100)}</span>
-                  {answers.size > 1 && <span style={{ color: '#2563eb', marginLeft: '8px' }}>⚠ doğru cevaplar farklı</span>}
-                </div>
-                <div style={{ backgroundColor: '#fffbeb', border: '1px solid #fde68a', borderRadius: '6px', padding: '6px 8px', marginBottom: '8px', fontSize: '0.75rem', display: 'grid', gap: '3px' }}>
-                  {g.pairs.map((p) => (
-                    <div key={`${p.a.id}-${p.b.id}`}>
-                      <b>#{p.a.id}</b> ↔ <b>#{p.b.id}</b> : <b style={{ color: p.sim >= 0.97 ? '#dc2626' : '#b45309' }}>%{Math.round(p.sim * 100)}</b>
-                      {!p.sameNums && <span style={{ color: '#2563eb', marginLeft: '6px' }}>⚠ sayılar farklı</span>}
-                      {p.a.ans !== p.b.ans && <span style={{ color: '#2563eb', marginLeft: '6px' }}>⚠ cevap {p.a.ans} / {p.b.ans}</span>}
+      <div style={{ position: 'fixed', inset: 0, zIndex: 1200, backgroundColor: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'stretch', justifyContent: 'center', padding: '10px' }}>
+        <div style={{ backgroundColor: '#fff', borderRadius: '12px', width: '100%', maxWidth: '1900px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 16px', borderBottom: '1px solid #e2e8f0', flexWrap: 'wrap' }}>
+            <b style={{ fontSize: '1rem' }}>🔍 Benzer Sorular</b>
+            {g ? (
+              <>
+                <span style={{ fontSize: '0.88rem' }}>Grup <b>{idx + 1} / {groups.length}</b> · <b style={{ color: g.maxSim >= 0.97 ? '#dc2626' : '#b45309' }}>{n} soru</b> birbirine benziyor (en yüksek %{Math.round(g.maxSim * 100)})</span>
+                {new Set(g.members.map((m) => m.ans)).size > 1 && <span style={{ color: '#2563eb', fontSize: '0.82rem' }}>⚠ doğru cevaplar farklı</span>}
+                {g.pairs.some((p) => !p.sameNums) && <span style={{ color: '#2563eb', fontSize: '0.82rem' }}>⚠ sayılar farklı olabilir</span>}
+              </>
+            ) : <span style={{ fontSize: '0.88rem', color: '#16a34a', fontWeight: 'bold' }}>{shown.length === 0 ? `Benzer soru bulunamadı (en az %${dupMin})` : 'Tüm gruplar tamamlandı ✓'}</span>}
+            {dupState.noText > 0 && <span style={{ color: '#b45309', fontSize: '0.78rem' }}>metni kayıtlı olmadığı için taranmayan: {dupState.noText}</span>}
+            <span style={{ flex: 1 }} />
+            {g && <button disabled={idx === 0} onClick={() => setDupIdx(idx - 1)} style={btn(idx === 0)}>◀ Önceki</button>}
+            {g && <button onClick={() => setDupSkip((prev) => new Set([...prev, g.key]))} title="Bu grubu benzer değil say; listeden çıkar" style={btn(false)}>Benzer değil, geç</button>}
+            {g && <button disabled={idx >= groups.length - 1} onClick={() => setDupIdx(idx + 1)} style={btn(idx >= groups.length - 1)}>Sonraki ▶</button>}
+            <button onClick={close} style={{ ...btn(false), backgroundColor: '#f1f5f9' }}>Kapat ✕</button>
+          </div>
+          {g && (
+            <div style={{ padding: '6px 16px', backgroundColor: '#fffbeb', borderBottom: '1px solid #fde68a', fontSize: '0.78rem', display: 'flex', flexWrap: 'wrap', gap: '4px 16px' }}>
+              {g.pairs.map((p) => (
+                <span key={`${p.a.id}-${p.b.id}`}><b>#{p.a.id}</b> ↔ <b>#{p.b.id}</b> : <b style={{ color: p.sim >= 0.97 ? '#dc2626' : '#b45309' }}>%{Math.round(p.sim * 100)}</b></span>
+              ))}
+            </div>
+          )}
+          <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px', backgroundColor: '#f1f5f9' }}>
+            {g && (
+              <div style={{ display: 'grid', gridTemplateColumns: cols, gap: '12px', alignItems: 'start' }}>
+                {g.members.map((q) => (
+                  <div key={q.id} style={{ backgroundColor: '#fff', borderRadius: '10px', padding: '10px', border: '1px solid #e2e8f0', minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                      <b style={{ fontSize: '0.9rem' }}>#{q.id} · doğru cevap: {q.ans}</b>
+                      <button onClick={() => deleteDupRow(q)} style={{ fontSize: '0.78rem', padding: '5px 12px', borderRadius: '6px', border: '1px solid #dc2626', backgroundColor: '#fff', color: '#dc2626', cursor: 'pointer', fontWeight: 'bold' }}>🗑 Bunu sil</button>
                     </div>
-                  ))}
-                </div>
-                <div style={{ display: 'grid', gap: '6px' }}>
-                  {g.members.map((q) => (
-                    <div key={q.id} style={{ backgroundColor: '#f8fafc', borderRadius: '6px', padding: '8px 10px', fontSize: '0.78rem', color: '#334155' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                        <b>#{q.id} · cevap: {q.ans}</b>
-                        <button onClick={() => deleteDupRow(q)} style={{ fontSize: '0.72rem', padding: '3px 8px', borderRadius: '5px', border: '1px solid #dc2626', backgroundColor: '#fff', color: '#dc2626', cursor: 'pointer' }}>Bunu sil</button>
+                    <SecurePdfViewer poolId={q.id} type="pool-question" pageNumber={1} version={poolPdfVersions[`pdf_file:${q.id}`]} />
+                    {q.sol && (
+                      <div style={{ marginTop: '10px' }}>
+                        <div style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#475569', marginBottom: '4px' }}>Çözüm</div>
+                        <SecurePdfViewer poolId={q.id} type="pool-solution" pageNumber={1} version={poolPdfVersions[`solution_pdf_file:${q.id}`]} />
                       </div>
-                      <div style={{ maxHeight: '130px', overflowY: 'auto', whiteSpace: 'pre-wrap' }}>{q.raw}</div>
-                    </div>
-                  ))}
-                </div>
+                    )}
+                  </div>
+                ))}
               </div>
-            );
-          })}
+            )}
+          </div>
         </div>
       </div>
     );
