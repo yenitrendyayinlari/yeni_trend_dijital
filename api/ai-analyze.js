@@ -40,11 +40,10 @@ async function callClaude(prompt) {
   return (j.content || []).map((c) => c.text || '').join('');
 }
 
-async function callGemini(prompt) {
+async function callGemini(prompt, retries = 2, delay = 3000) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY Vercel ortam değişkenlerinde tanımlı değil.');
   
-  // Güncel ve kararlı Flash modeli varsayılan olarak ayarlandı
   const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
@@ -53,19 +52,33 @@ async function callGemini(prompt) {
     responseMimeType: 'application/json' 
   };
 
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
-    signal: AbortSignal.timeout(55000),
-    body: JSON.stringify({ 
-      contents: [{ parts: [{ text: prompt }] }], 
-      generationConfig 
-    }),
-  });
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+        signal: AbortSignal.timeout(55000),
+        body: JSON.stringify({ 
+          contents: [{ parts: [{ text: prompt }] }], 
+          generationConfig 
+        }),
+      });
 
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`Gemini: ${j.error?.message || r.status}`);
-  return (j.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+      const j = await r.json().catch(() => ({}));
+
+      // Yoğunluk (429 veya 503) hatası alınırsa ve deneme hakkı kaldıysa bekleyip tekrar dene
+      if ((r.status === 429 || r.status === 503) && attempt < retries) {
+        await new Promise((res) => setTimeout(res, delay * (attempt + 1)));
+        continue;
+      }
+
+      if (!r.ok) throw new Error(`Gemini: ${j.error?.message || r.status}`);
+      return (j.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+    } catch (err) {
+      if (attempt === retries) throw err;
+      await new Promise((res) => setTimeout(res, delay));
+    }
+  }
 }
 
 // Vercel'de fonksiyonun en fazla 60 sn çalışmasına izin ver
