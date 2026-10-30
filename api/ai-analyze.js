@@ -1,49 +1,30 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Soru Havuzu "Benzer Sorular" penceresindeki "Yapay zekayla doğrula" düğmesinin sunucu tarafı.
-// SADECE admin çağırabilir. API anahtarları Vercel > Settings > Environment Variables içinde durur,
-// tarayıcıya hiç gitmez:
-//   ANTHROPIC_API_KEY   (Claude)         -- isteğe bağlı model: ANTHROPIC_MODEL (varsayılan claude-sonnet-5-5)
-//   GEMINI_API_KEY      (Google Gemini)  -- isteğe bağlı model: GEMINI_MODEL    (varsayılan gemini-2.5-flash)
-// Not: Bir istek tek bir benzer-soru grubunu analiz eder (Vercel'in süre sınırına takılmamak için).
+// SADECE admin çağırabilir. API anahtarları Vercel > Settings > Environment Variables içinde durur.
 const supabaseAdmin = createClient(
   'https://gzkqylheloxcgpcrftci.supabase.co',
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-const PROMPT = (groups) => `Sen bir KPSS/AGS soru bankası editörüsün. Aşağıda bir soru havuzunda birbirine benzer görünen soru GRUPLARI var (${groups.length} grup).
-Her grup için görevin: gruptaki soruların hangilerinin GERÇEKTEN tekrar (aynı soru ya da aynı bilgiyi ölçen soru) olduğunu belirlemek. Gruplar birbirinden bağımsızdır.
+const PROMPT = (groups) => `Sen bir KPSS/AGS soru bankası editörüsün. Aşağıda birbirine benzer ${groups.length} grup soru var.
+Görevin: Her gruptaki soruların hangilerinin GERÇEKTEN tekrar (aynı bilgi) olduğunu bulmak. Gruplar birbirinden bağımsızdır.
 
 Kurallar:
-- "ayni": Aynı bilgiyi aynı şekilde soran sorular. Kelimelerin, şık sırasının ya da küçük yazım farklarının önemi yok.
-- "benzer": Aynı bilgiyi/kazanımı ölçüyor ama soru kalıbı belirgin farklı (ör. biri "hangisidir", diğeri "hangisi değildir" ama aynı bilgiye dayanıyor). Havuzda ikisini birden tutmak gereksiz tekrar sayılır.
-- "farkli": Farklı bilgiyi ölçüyor. Ortak kelimeler (ör. "Yukarıdakilerden hangileri", "Yalnız I", "I ve III", dönem adı) benzerlik sayılmaz.
-Matematik/sayısal sorularda sayılar farklıysa genelde "farkli" dir.
-Bir gruptaki tüm sorular bir kümeye atanmalı; tekrar olmayan soru tek başına bir küme olur. Her çok üyeli küme için hangisinin tutulacağını (daha net, daha doğru, daha iyi yazılmış olan) öner. Gerekçe kısa olsun.
+- "ayni": Aynı bilgiyi aynı şekilde soran sorular.
+- "benzer": Aynı bilgiyi ölçüyor ama soru kalıbı farklı (ikisini tutmak gereksiz).
+- "farkli": Farklı bilgiyi ölçüyor. Ortak kelimeler benzerlik sayılmaz.
 
-${groups.map((g) => `=== GRUP ${g.key} ===\n` + g.items.map((q) => `[#${q.id}] (doğru cevap: ${q.answer || '?'})\n${String(q.text || '').slice(0, 1800)}`).join('\n\n')).join('\n\n')}
+${groups.map((g) => `=== GRUP ${g.key} ===\n` + g.items.map((q) => `[#${q.id}] (cevap: ${q.answer || '?'})\n${String(q.text || '').slice(0, 1200)}`).join('\n\n')).join('\n\n')}
 
-SADECE şu JSON'u döndür (başka metin yok). Her grup için bir kayıt:
-{"groups":[{"key":"<grup anahtarı>","clusters":[{"ids":[<soru numaraları>],"verdict":"ayni|benzer|farkli","reason":"<tek cümle Türkçe gerekçe>","keep":<tutulacak soru numarası ya da null>}]}]}`;
+SADECE şu JSON'u döndür (başka metin yok):
+{"groups":[{"key":"<grup anahtarı>","clusters":[{"ids":[<soru numaraları>],"verdict":"ayni|benzer|farkli","reason":"<kısa gerekçe>","keep":<tutulacak soruno ya da null>}]}]}`;
 
-async function callClaude(prompt) {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) throw new Error('ANTHROPIC_API_KEY Vercel ortam değişkenlerinde tanımlı değil.');
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    signal: AbortSignal.timeout(55000),
-    body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5', max_tokens: 4000, messages: [{ role: 'user', content: prompt }] }),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`Claude: ${j.error?.message || r.status}`);
-  return (j.content || []).map((c) => c.text || '').join('');
-}
-
-async function callGemini(prompt, retries = 2, delay = 3000) {
+async function callGemini(prompt, retries = 2, delay = 2500) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY Vercel ortam değişkenlerinde tanımlı değil.');
   
+  // Güncel ve hızlı Gemini 2.5 Flash modeli
   const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
@@ -57,7 +38,8 @@ async function callGemini(prompt, retries = 2, delay = 3000) {
       const r = await fetch(url, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
-        signal: AbortSignal.timeout(55000),
+        // Vercel 60sn limitine takılmadan hata fırlatabilmesi için 45sn timeout
+        signal: AbortSignal.timeout(45000),
         body: JSON.stringify({ 
           contents: [{ parts: [{ text: prompt }] }], 
           generationConfig 
@@ -66,7 +48,7 @@ async function callGemini(prompt, retries = 2, delay = 3000) {
 
       const j = await r.json().catch(() => ({}));
 
-      // Yoğunluk (429 veya 503) hatası alınırsa ve deneme hakkı kaldıysa bekleyip tekrar dene
+      // Sunucu yoğunluğu (429 / 503) varsa bekleyip tekrar dene
       if ((r.status === 429 || r.status === 503) && attempt < retries) {
         await new Promise((res) => setTimeout(res, delay * (attempt + 1)));
         continue;
@@ -81,7 +63,7 @@ async function callGemini(prompt, retries = 2, delay = 3000) {
   }
 }
 
-// Vercel'de fonksiyonun en fazla 60 sn çalışmasına izin ver
+// Vercel serverless fonksiyon süre sınırı
 export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
@@ -90,23 +72,30 @@ export default async function handler(req, res) {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'Giriş yapmalısınız.' });
+  
   const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
   if (userError || !userData?.user?.email || userData.user.email !== 'admin@yayinevi.com') {
     return res.status(403).json({ error: 'Yetkiniz yok.' });
   }
 
   const { provider, groups } = req.body || {};
-  if (!['claude', 'gemini'].includes(provider)) return res.status(400).json({ error: 'Geçersiz model.' });
-  if (!Array.isArray(groups) || groups.length < 1 || groups.length > 12) return res.status(400).json({ error: 'Bir istekte 1-12 grup olmalı.' });
-  if (groups.some((g) => !g || !g.key || !Array.isArray(g.items) || g.items.length < 2 || g.items.length > 8)) return res.status(400).json({ error: 'Her grupta 2-8 soru olmalı.' });
+  if (provider !== 'gemini' && provider !== 'claude') return res.status(400).json({ error: 'Geçersiz model.' });
+  
+  // 504 Zaman Aşımlarını önlemek için tek istekte maksimum 3-4 grup olmalı
+  if (!Array.isArray(groups) || groups.length < 1 || groups.length > 5) {
+    return res.status(400).json({ error: 'Zaman aşımını önlemek için bir istekte en fazla 5 grup gönderilebilir.' });
+  }
 
   try {
     const prompt = PROMPT(groups);
-    const text = provider === 'claude' ? await callClaude(prompt) : await callGemini(prompt);
+    const text = await callGemini(prompt);
+    
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) throw new Error('Modelden anlaşılır bir cevap gelmedi.');
+    
     const parsed = JSON.parse(m[0]);
     const out = {};
+    
     groups.forEach((g) => {
       const known = new Set(g.items.map((q) => Number(q.id)));
       const hit = (parsed.groups || []).find((x) => String(x.key) === String(g.key));
@@ -118,9 +107,12 @@ export default async function handler(req, res) {
         keep: c.keep != null && known.has(Number(c.keep)) ? Number(c.keep) : null,
       })).filter((c) => c.ids.length > 0);
     });
+
     return res.status(200).json({ results: out });
   } catch (err) {
-    const msg = err && err.name === 'TimeoutError' ? 'Model 55 saniyede cevap vermedi (zaman aşımı).' : (err.message || 'Yapay zekâ isteği başarısız.');
+    const msg = err && err.name === 'TimeoutError' 
+      ? 'Model zamanında cevap veremedi. Lütfen grup sayısını azaltıp tekrar deneyin.' 
+      : (err.message || 'Yapay zekâ isteği başarısız.');
     return res.status(502).json({ error: msg });
   }
 }
