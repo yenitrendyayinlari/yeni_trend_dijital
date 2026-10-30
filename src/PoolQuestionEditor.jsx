@@ -6,7 +6,7 @@ import { Extension } from '@tiptap/core';
 import { TextStyle, FontSize, FontFamily } from '@tiptap/extension-text-style';
 import { Table, TableRow, TableHeader, TableCell, TableView } from '@tiptap/extension-table';
 import { selectedRect } from '@tiptap/pm/tables';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import Subscript from '@tiptap/extension-subscript';
 import Superscript from '@tiptap/extension-superscript';
@@ -143,6 +143,7 @@ function measureTabs(view) {
   const doc = view.state.doc;
   const next = new Map();
   const rootRect = view.dom.getBoundingClientRect();
+  const sc = (view.dom.offsetWidth ? rootRect.width / view.dom.offsetWidth : 1) || 1; // yakınlaştırma (transform: scale) oranı
   doc.descendants((node, pos, parent) => {
     if (!node.isText || !node.text || node.text.indexOf('\t') < 0) return;
     for (let i = 0; i < node.text.length; i++) {
@@ -156,11 +157,11 @@ function measureTabs(view) {
         const nm = $p.node(d).type.name;
         if (nm === 'tableCell' || nm === 'tableHeader') {
           const el = view.nodeDOM($p.before(d));
-          if (el && el.getBoundingClientRect) { const cs = getComputedStyle(el); frameLeft = el.getBoundingClientRect().left + (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.borderLeftWidth) || 0); }
+          if (el && el.getBoundingClientRect) { const cs = getComputedStyle(el); frameLeft = el.getBoundingClientRect().left + ((parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.borderLeftWidth) || 0)) * sc; }
           break;
         }
       }
-      const x = left - frameLeft;
+      const x = (left - frameLeft) / sc;
       const pa = $p.parent.attrs || {};
       // tabs: pozitif = sola hizalı durak (mm), negatif = sağa hizalı durak (mm, işareti eksi)
       const stops = (Array.isArray(pa.tabs) ? pa.tabs : []).map((m) => { const o = tabNorm(m); return { x: o.x * MM_PX, r: o.t === 'r', c: o.t === 'c' }; }).filter((o) => Number.isFinite(o.x));
@@ -176,7 +177,7 @@ function measureTabs(view) {
         const nt = txt.indexOf('\t', startInPar);
         if (nt >= 0) endPos = $p.start() + nt;
         let tw = 0;
-        try { tw = Math.max(0, view.coordsAtPos(endPos).left - view.coordsAtPos(tp + 1).left); } catch (e) { tw = 0; }
+        try { tw = Math.max(0, (view.coordsAtPos(endPos).left - view.coordsAtPos(tp + 1).left) / sc); } catch (e) { tw = 0; }
         stop = Math.max(x + 4, hit.x - (hit.c ? tw / 2 : tw));
       } else if (hit) stop = hit.x;
       else { const g = TAB_GRID_MM * MM_PX; stop = (Math.floor((x + 1) / g) + 1) * g; }
@@ -250,9 +251,100 @@ const PqTableRow = TableRow.extend({
   },
 });
 
+// Alt çizgi ayarı (InDesign "Underline Options"): kalınlık ve ofset (pt). Ofset = taban çizgisinden çizginin üstüne uzaklık.
+// Tarayıcının kendi altı çizgisi (kalınlık/ofset ayarlanamıyor, PDF'e de yansımıyor) yerine metnin altına ince kenarlık çizilir.
+const UL_DEFAULT_W = 0.5, UL_DEFAULT_O = 2.5;
+const UnderlineStyle = Extension.create({
+  name: 'underlineStyle',
+  addGlobalAttributes() {
+    return [{
+      types: ['underline'],
+      attributes: {
+        ulWeight: {
+          default: null,
+          parseHTML: (el) => { const v = el.getAttribute('data-uw'); return v == null ? null : Number(v); },
+          renderHTML: (a) => {
+            const w = (a.ulWeight != null ? a.ulWeight : UL_DEFAULT_W) * PX_PER_PT;
+            const o = (a.ulOffset != null ? a.ulOffset : UL_DEFAULT_O) * PX_PER_PT;
+            return { ...(a.ulWeight != null ? { 'data-uw': a.ulWeight } : {}), style: `text-decoration:none;border-bottom:${w.toFixed(2)}px solid currentColor;padding-bottom:max(0px, calc(${o.toFixed(2)}px - 0.21em))` };
+          },
+        },
+        ulOffset: {
+          default: null,
+          parseHTML: (el) => { const v = el.getAttribute('data-uo'); return v == null ? null : Number(v); },
+          renderHTML: (a) => (a.ulOffset != null ? { 'data-uo': a.ulOffset } : {}),
+        },
+      },
+    }];
+  },
+});
+// Yapıştırma: metin, imlecin bulunduğu yerin biçimini (punto, kalın, yazı tipi, paragraf girintisi/aralığı...) alır.
+// Kopyalanan metnin kendi biçimi taşınmaz; satır sonları yeni paragraf olur ve imlecin paragraf özelliklerini devralır.
+const PlainPaste = Extension.create({
+  name: 'plainPaste',
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      key: new PluginKey('pqPlainPaste'),
+      props: {
+        handlePaste(view, event) {
+          const cd = event.clipboardData;
+          if (!cd) return false;
+          if (cd.files && cd.files.length) return false; // resim yapıştırma: varsayılan davranış
+          const text = cd.getData('text/plain');
+          if (!text) return false;
+          const { state } = view;
+          let sel = state.selection;
+          if (sel.$from.depth === 0) sel = TextSelection.between(Selection.atStart(state.doc).$from, Selection.atEnd(state.doc).$to); // Ctrl+A (tümünü seç)
+          const { from, to, $from } = sel;
+          if (!$from.parent.inlineContent) return false;
+          const marks = state.storedMarks || $from.marks();
+          const lines = text.replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n');
+          const tr = state.tr;
+          if (from !== to) tr.delete(from, to);
+          let pos = from;
+          lines.forEach((ln, i) => {
+            if (i > 0) { tr.split(pos); pos += 2; }
+            if (ln) { tr.insert(pos, state.schema.text(ln, marks)); pos += ln.length; }
+          });
+          tr.setSelection(TextSelection.create(tr.doc, pos)).scrollIntoView();
+          view.dispatch(tr);
+          return true;
+        },
+      },
+    })];
+  },
+});
+// Araç çubuğundaki bir kutuya (punto vb.) geçince yazı alanı odağı kaybolsa da seçili metin açık renkle işaretli kalır.
+const selKeepKey = new PluginKey('pqSelKeep');
+const SelKeep = Extension.create({
+  name: 'selKeep',
+  addProseMirrorPlugins() {
+    return [new Plugin({
+      key: selKeepKey,
+      state: {
+        init: () => ({ focused: true }),
+        apply(tr, val) { const m = tr.getMeta(selKeepKey); return m !== undefined ? m : val; },
+      },
+      props: {
+        handleDOMEvents: {
+          blur(view) { view.dispatch(view.state.tr.setMeta(selKeepKey, { focused: false }).setMeta('addToHistory', false)); return false; },
+          focus(view) { view.dispatch(view.state.tr.setMeta(selKeepKey, { focused: true }).setMeta('addToHistory', false)); return false; },
+        },
+        decorations(state) {
+          const st = selKeepKey.getState(state);
+          if (!st || st.focused) return null;
+          const { from, to } = state.selection;
+          if (from === to) return null;
+          return DecorationSet.create(state.doc, [Decoration.inline(from, to, { class: 'pq-sel-keep' })]);
+        },
+      },
+    })];
+  },
+});
+
 const baseExtensions = () => [
   StarterKit.configure({ heading: false, blockquote: false, codeBlock: false, code: false, horizontalRule: false, link: false, trailingNode: false, bulletList: false, orderedList: false, listItem: false, listKeymap: false, strike: false }),
-  TextStyle, FontSize, FontFamily, LetterSpacing, ParaFormat, TabKey,
+  TextStyle, FontSize, FontFamily, LetterSpacing, ParaFormat, TabKey, PlainPaste, SelKeep, UnderlineStyle,
   PqTable.configure({ resizable: true, View: PqTableView }), PqTableRow, TableHeader, TableCell,
   Subscript, Superscript,
   TextAlign.configure({ types: ['paragraph'] }),
@@ -417,7 +509,7 @@ function parseIcml(xmlText) {
         const pos = ca('Position') || '';
         const fam = props && kids(props, 'AppliedFont')[0] ? kids(props, 'AppliedFont')[0].textContent.trim() : null;
         const marks = {
-          bold: /Bold|Black|Heavy/i.test(fs), italic: /Italic|Oblique/i.test(fs), underline: ca('Underline') === 'true',
+          bold: /Bold|Black|Heavy/i.test(fs), italic: /Italic|Oblique/i.test(fs), underline: ca('Underline') === 'true', ulW: num(ca('UnderlineWeight')), ulO: num(ca('UnderlineOffset')),
           sup: /Superscript/i.test(pos), sub: /Subscript/i.test(pos), size: num(ca('PointSize')), fam,
         };
         Array.from(csr.children).forEach((ch) => {
@@ -483,7 +575,7 @@ const icmlParasToJson = (paras) => paras.map((p) => {
     const m = g.marks; const marks = [];
     if (m.bold) marks.push({ type: 'bold' });
     if (m.italic) marks.push({ type: 'italic' });
-    if (m.underline) marks.push({ type: 'underline' });
+    if (m.underline) marks.push({ type: 'underline', attrs: { ulWeight: m.ulW != null ? m.ulW : null, ulOffset: m.ulO != null ? m.ulO : null } });
     if (m.sup) marks.push({ type: 'superscript' });
     if (m.sub) marks.push({ type: 'subscript' });
     const ts = {};
@@ -529,6 +621,8 @@ const ICONS = {
   first: <SvgI><path d="M8 3h6M2 6.5h12M2 10h12M2 13h8M2.5 3h3M4 1.5l1.7 1.5L4 4.5" /></SvgI>,
   before: <SvgI><path d="M2 2h12M2 10h12M2 13.5h12M8 4v5M6 7l2 2 2-2" /></SvgI>,
   after: <SvgI><path d="M2 2.5h12M2 6h12M2 14h12M8 7.5v5M6 10.5l2 2 2-2" /></SvgI>,
+  ulW: <SvgI><path d="M4 2v5a4 4 0 008 0V2" /><path d="M2.5 13.5h11" strokeWidth="2.2" /></SvgI>,
+  ulO: <SvgI><path d="M4 2v4a4 4 0 008 0V2" /><path d="M2.5 14h11M8 11v2M6.5 12l1.5 1.5L9.5 12" /></SvgI>,
   tab: <SvgI><path d="M2 12h12M3 3v9M3 7h8M9 5l2 2-2 2" /></SvgI>,
 };
 const Mk = ({ t }) => (
@@ -538,7 +632,7 @@ const Mk = ({ t }) => (
     {t === 'c' && <path d="M6 1v10M1.5 11h9" />}
   </svg>
 );
-function IconField({ icon, title, value, onCommit, onEnterDone, width = 46 }) {
+function IconField({ icon, title, value, onCommit, onEnterDone, width = 46, step = 1 }) {
   const [t, setT] = useState('');
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editing) setT(value == null ? '' : String(value)); }, [value, editing]);
@@ -549,12 +643,21 @@ function IconField({ icon, title, value, onCommit, onEnterDone, width = 46 }) {
     const n = parseFloat(raw);
     if (Number.isFinite(n)) onCommit(n); else setT(value == null ? '' : String(value));
   };
+  const stepBy = (dir) => {
+    const cur = parseFloat(String(t).replace(',', '.'));
+    const base = Number.isFinite(cur) ? cur : (value == null ? 0 : Number(value) || 0);
+    const nv = Math.round((base + dir * step) * 100) / 100;
+    setT(String(nv)); onCommit(nv);
+  };
   return (
     <label title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', color: '#475569', height: '26px' }}>
       <span style={{ display: 'inline-flex' }}>{icon}</span>
-      <input type="text" inputMode="decimal" value={t} onFocus={() => setEditing(true)} onChange={(e) => setT(e.target.value)} onBlur={commit}
-        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); if (onEnterDone) setTimeout(onEnterDone, 0); } }}
-        style={{ width: `${width}px`, height: '26px', borderRadius: '4px', border: '1px solid #cbd5e1', padding: '0 4px', boxSizing: 'border-box', fontSize: '0.78rem' }} />
+      <span style={{ display: 'inline-flex' }}>
+        <input type="text" inputMode="decimal" value={t} onFocus={() => setEditing(true)} onChange={(e) => setT(e.target.value)} onBlur={commit}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); if (onEnterDone) setTimeout(onEnterDone, 0); } else if (e.key === 'ArrowUp') { e.preventDefault(); stepBy(1); } else if (e.key === 'ArrowDown') { e.preventDefault(); stepBy(-1); } }}
+          style={{ width: `${width}px`, height: '26px', borderRadius: '4px 0 0 4px', border: '1px solid #cbd5e1', padding: '0 4px', boxSizing: 'border-box', fontSize: '0.78rem' }} />
+        <Stepper onStep={stepBy} />
+      </span>
     </label>
   );
 }
@@ -678,7 +781,17 @@ function TabsPanel({ value, onCommit, widthMm, onClose }) {
   );
 }
 
-function NumField({ label, title, value, onCommit, onEnterDone, width = 50, unit }) {
+// Yukarı/aşağı oklu küçük ayar: her tıklama 1 (ya da step) artırır/azaltır; yazı alanı odağı ve seçimi bozulmaz.
+function Stepper({ onStep }) {
+  const b = { display: 'block', width: '14px', height: '13px', padding: 0, border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', color: '#475569', cursor: 'pointer', fontSize: '7px', lineHeight: '11px', textAlign: 'center' };
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', marginLeft: '-1px' }}>
+      <button type="button" tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => onStep(1)} style={{ ...b, borderRadius: '0 4px 0 0' }}>▲</button>
+      <button type="button" tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => onStep(-1)} style={{ ...b, borderRadius: '0 0 4px 0', borderTop: 'none' }}>▼</button>
+    </span>
+  );
+}
+function NumField({ label, title, value, onCommit, onEnterDone, width = 50, unit, step = 1 }) {
   const [t, setT] = useState('');
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editing) setT(value == null ? '' : String(value)); }, [value, editing]);
@@ -689,12 +802,21 @@ function NumField({ label, title, value, onCommit, onEnterDone, width = 50, unit
     const n = parseFloat(raw);
     if (Number.isFinite(n)) onCommit(n); else setT(value == null ? '' : String(value));
   };
+  const stepBy = (dir) => {
+    const cur = parseFloat(String(t).replace(',', '.'));
+    const base = Number.isFinite(cur) ? cur : (value == null ? 0 : Number(value) || 0);
+    const nv = Math.round((base + dir * step) * 100) / 100;
+    setT(String(nv)); onCommit(nv);
+  };
   return (
     <label title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '0.72rem', color: '#475569' }}>
       {label}
-      <input type="text" inputMode="decimal" value={t} onFocus={() => setEditing(true)} onChange={(e) => setT(e.target.value)} onBlur={commit}
-        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); if (onEnterDone) setTimeout(onEnterDone, 0); } }}
-        style={{ width: `${width}px`, height: '28px', borderRadius: '5px', border: '1px solid #cbd5e1', padding: '0 5px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+      <span style={{ display: 'inline-flex' }}>
+        <input type="text" inputMode="decimal" value={t} onFocus={() => setEditing(true)} onChange={(e) => setT(e.target.value)} onBlur={commit}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); if (onEnterDone) setTimeout(onEnterDone, 0); } else if (e.key === 'ArrowUp') { e.preventDefault(); stepBy(1); } else if (e.key === 'ArrowDown') { e.preventDefault(); stepBy(-1); } }}
+          style={{ width: `${width}px`, height: '28px', borderRadius: '5px 0 0 5px', border: '1px solid #cbd5e1', padding: '0 5px', boxSizing: 'border-box', fontSize: '0.8rem' }} />
+        <Stepper onStep={stepBy} />
+      </span>
       {unit && <span style={{ color: '#94a3b8' }}>{unit}</span>}
     </label>
   );
@@ -718,6 +840,11 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const [hyph, setHyph] = useState(src.hyph !== false); // tireleme (kelime bölme)
   const [showTable, setShowTable] = useState(false);
   const [showTabs, setShowTabs] = useState(false);
+  const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } };
+  const [zoom, setZoomState] = useState(() => Math.min(250, Math.max(50, Number(lsGet('pqZoom', 125)) || 125))); // sayfa görünümü yakınlaştırma (%)
+  const [sideBySide, setSideBySideState] = useState(() => lsGet('pqSide', '0') === '1');
+  const setZoom = (z) => { const v = Math.min(250, Math.max(50, Math.round(z))); setZoomState(v); try { localStorage.setItem('pqZoom', String(v)); } catch (e) { /* önemsiz */ } };
+  const setSideBySide = (b) => { setSideBySideState(b); try { localStorage.setItem('pqSide', b ? '1' : '0'); } catch (e) { /* önemsiz */ } };
   const [bulk, setBulk] = useState(null); // toplu aktarma penceresi: {items, notes, from, to, running, done, log}
   const bulkStop = useRef(false);
   const bulkLogMap = useRef(new Map());
@@ -1030,6 +1157,13 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const setPara = (key, v) => { if (ed) ed.chain().updateAttributes('paragraph', { [key]: v }).run(); };
   const refocus = () => { if (ed) ed.commands.focus(); };
   const curTracking = ed ? ed.getAttributes('textStyle').letterSpacing : null;
+  const ulOn = !!ed && ed.isActive('underline');
+  const ulAttrs = ulOn ? ed.getAttributes('underline') : {};
+  const setUl = (key, v) => {
+    if (!ed) return;
+    const cur = ed.isActive('underline') ? ed.getAttributes('underline') : {};
+    ed.chain().setMark('underline', { ulWeight: cur.ulWeight != null ? cur.ulWeight : null, ulOffset: cur.ulOffset != null ? cur.ulOffset : null, [key]: v }).run();
+  };
   const alignKind = (() => {
     if (!ed) return '';
     const ta = pa.textAlign || 'left';
@@ -1193,6 +1327,12 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     );
   }
 
+  // Sayfayı ekranda yakınlaştırır (CSS transform): düzen/ölçüler ve kaydedilen PDF değişmez, sadece görünüm büyür.
+  const zoomBox = (children) => (
+    <div style={{ width: `${contentPxW * zoom / 100}px`, height: `${contentPxH * zoom / 100}px` }}>
+      <div style={{ width: `${contentPxW}px`, height: `${contentPxH}px`, transform: `scale(${zoom / 100})`, transformOrigin: '0 0' }}>{children}</div>
+    </div>
+  );
   const pageStyle = (overflow) => ({
     position: 'relative', width: `${contentPxW}px`, height: `${contentPxH}px`, backgroundColor: '#fff',
     boxSizing: 'border-box', padding: `${PAD_Y}px ${PAD_X}px`, fontFamily: 'Arial, Helvetica, sans-serif',
@@ -1206,6 +1346,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       <style ref={cssRef}>{`
         .pq-page .ProseMirror { outline: none; min-height: ${contentPxH - PAD_Y * 2}px; hyphens: ${hyph ? 'auto' : 'manual'}; -webkit-hyphens: ${hyph ? 'auto' : 'manual'}; tab-size: ${7 * MM_PX}px; }
         .pq-page .ProseMirror p { margin: 0 0 ${MM_PX}px; }
+        .pq-page .ProseMirror .pq-sel-keep { background: #b4d5fe; }
         .pq-page .ProseMirror table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 4px 0; }
         .pq-page .ProseMirror table.pq-fit { table-layout: auto; width: auto; }
         .pq-page .ProseMirror table.pq-noborder td, .pq-page .ProseMirror table.pq-noborder th { border-color: transparent; }
@@ -1326,13 +1467,19 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                   <IconField icon={ICONS.leading} title="Satır aralığı / leading (pt). Boş = otomatik" value={pa.leading == null ? null : pa.leading} onEnterDone={refocus} onCommit={(v) => setPara('leading', v)} />
                 </div>
                 <div style={{ display: 'flex', gap: '6px' }}>
-                  <IconField icon={ICONS.tracking} title="Harf aralığı / tracking (1/1000 em). 0 veya boş = normal; negatif sıkıştırır" value={curTracking == null ? null : curTracking} onEnterDone={refocus}
+                  <IconField icon={ICONS.tracking} step={10} title="Harf aralığı / tracking (1/1000 em). 0 veya boş = normal; negatif sıkıştırır" value={curTracking == null ? null : curTracking} onEnterDone={refocus}
                     onCommit={(v) => { if (!ed) return; if (v == null || v === 0) ed.chain().unsetLetterSpacing().run(); else ed.chain().setLetterSpacing(v).run(); }} />
                   <span style={{ display: 'inline-flex', gap: '1px' }}>
                     <button title="Geri al" onMouseDown={keep} onClick={() => ed && ed.chain().focus().undo().run()} style={{ ...iconBtn(false), fontSize: '1rem' }}>↶</button>
                     <button title="Yinele" onMouseDown={keep} onClick={() => ed && ed.chain().focus().redo().run()} style={{ ...iconBtn(false), fontSize: '1rem' }}>↷</button>
                   </span>
                 </div>
+              </div>
+              {sepV}
+              {/* Alt çizgi ayarı */}
+              <div style={gcol}>
+                <IconField icon={ICONS.ulW} step={0.25} title="Alt çizgi kalınlığı (pt). Altı çizili metnin üstündeyken değiştirin; boş = 0,5 pt" value={ulOn ? (ulAttrs.ulWeight != null ? ulAttrs.ulWeight : UL_DEFAULT_W) : null} onEnterDone={refocus} onCommit={(v) => setUl('ulWeight', v)} />
+                <IconField icon={ICONS.ulO} step={0.5} title="Alt çizgi ofseti (pt): metinden ne kadar aşağıda dursun. Boş = 2,5 pt" value={ulOn ? (ulAttrs.ulOffset != null ? ulAttrs.ulOffset : UL_DEFAULT_O) : null} onEnterDone={refocus} onCommit={(v) => setUl('ulOffset', v)} />
               </div>
               {sepV}
               {/* Hizalama (InDesign gibi 2 x 4) */}
@@ -1416,21 +1563,30 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
             )}
           </div>
 
-          <div style={{ backgroundColor: '#eef2f7', borderRadius: '12px', padding: '16px', overflowX: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '8px', fontSize: '0.8rem', color: '#475569' }}>
+            <span title="Sayfa görünümünü büyüt/küçült (kaydedilen PDF'i etkilemez)">🔍 Görünüm</span>
+            <button type="button" onClick={() => setZoom(zoom - 25)} style={tbBtn(false)} title="Küçült">−</button>
+            <b style={{ minWidth: '44px', textAlign: 'center' }}>%{zoom}</b>
+            <button type="button" onClick={() => setZoom(zoom + 25)} style={tbBtn(false)} title="Büyüt">+</button>
+            <button type="button" onClick={() => setZoom(100)} style={{ ...tbBtn(false), fontSize: '0.75rem' }} title="Gerçek boyut (yaklaşık, ekranda 1 cm = 40 px)">%100</button>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', marginLeft: '8px' }}><input type="checkbox" checked={sideBySide} onChange={(e) => setSideBySide(e.target.checked)} /> Çözümü soru sayfasının yanına al</label>
+          </div>
+          <div style={{ display: 'flex', flexDirection: sideBySide ? 'row' : 'column', flexWrap: 'wrap', gap: '14px', alignItems: 'flex-start' }}>
+          <div style={{ backgroundColor: '#eef2f7', borderRadius: '12px', padding: '16px', overflowX: 'auto', maxWidth: '100%', flex: '0 0 auto' }}>
             <div style={{ fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '8px', color: active === 'q' ? '#2563eb' : '#475569' }}>
               Soru {qOverflow && <span style={{ color: '#dc2626' }}>⚠ sığmıyor</span>}
             </div>
-            <div ref={qPageRef} className="pq-page" lang="tr" style={pageStyle(qOverflow)}
+            {zoomBox(<div ref={qPageRef} className="pq-page" lang="tr" style={pageStyle(qOverflow)}
               onMouseDown={clickBlank(qEditor, 'q')}>
               <EditorContent editor={qEditor} />
-            </div>
+            </div>)}
           </div>
 
-          <div style={{ backgroundColor: '#eef2f7', borderRadius: '12px', padding: '16px', overflowX: 'auto', marginTop: '14px' }}>
+          <div style={{ backgroundColor: '#eef2f7', borderRadius: '12px', padding: '16px', overflowX: 'auto', maxWidth: '100%', flex: '0 0 auto' }}>
             <div style={{ fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '8px', color: active === 's' ? '#2563eb' : '#475569' }}>
               💡 Çözüm <span style={{ fontWeight: 'normal', color: '#64748b' }}>(boş bırakırsanız çözüm sayfası oluşturulmaz)</span> {solHasText && sOverflow && <span style={{ color: '#dc2626' }}>⚠ sığmıyor</span>}
             </div>
-            <div ref={sPageRef} className="pq-page" lang="tr" style={pageStyle(solHasText && sOverflow)}
+            {zoomBox(<div ref={sPageRef} className="pq-page" lang="tr" style={pageStyle(solHasText && sOverflow)}
               onMouseDown={clickBlank(sEditor, 's')}>
               <EditorContent editor={sEditor} />
               {solHasText && answer && (
@@ -1438,7 +1594,8 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                   {['A', 'B', 'C', 'D', 'E'].map((L) => (<span key={L}>|<span style={{ fontWeight: L === answer ? 'bold' : 'normal' }}>{L}</span></span>))}|
                 </div>
               )}
-            </div>
+            </div>)}
+          </div>
           </div>
         </div>
 
