@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 // SADECE admin çağırabilir. API anahtarları Vercel > Settings > Environment Variables içinde durur,
 // tarayıcıya hiç gitmez:
 //   ANTHROPIC_API_KEY   (Claude)         -- isteğe bağlı model: ANTHROPIC_MODEL (varsayılan claude-sonnet-5-5)
-//   GEMINI_API_KEY      (Google Gemini)  -- isteğe bağlı model: GEMINI_MODEL    (varsayılan gemini-3.8-flash)
+//   GEMINI_API_KEY      (Google Gemini)  -- isteğe bağlı model: GEMINI_MODEL    (varsayılan gemini-2.5-flash)
 // Not: Bir istek tek bir benzer-soru grubunu analiz eder (Vercel'in süre sınırına takılmamak için).
 const supabaseAdmin = createClient(
   'https://gzkqylheloxcgpcrftci.supabase.co',
@@ -43,27 +43,32 @@ async function callClaude(prompt) {
 async function callGemini(prompt) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY Vercel ortam değişkenlerinde tanımlı değil.');
-  const model = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+  
+  // Güncel ve kararlı Flash modeli varsayılan olarak ayarlandı
+  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-  const post = async (thinkingLow) => {
-    const generationConfig = { temperature: 0, responseMimeType: 'application/json' };
-    if (thinkingLow) generationConfig.thinkingConfig = { thinkingLevel: 'low' }; // kısa düşünsün: bu iş için derin akıl yürütme gerekmiyor, süre kısalır
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
-      signal: AbortSignal.timeout(55000),
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig }),
-    });
-    const j = await r.json().catch(() => ({}));
-    return { r, j };
+
+  const generationConfig = { 
+    temperature: 0, 
+    responseMimeType: 'application/json' 
   };
-  let { r, j } = await post(true);
-  if (r.status === 400) ({ r, j } = await post(false)); // model "thinkingLevel" ayarını kabul etmiyorsa ayarsız dene
+
+  const r = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+    signal: AbortSignal.timeout(55000),
+    body: JSON.stringify({ 
+      contents: [{ parts: [{ text: prompt }] }], 
+      generationConfig 
+    }),
+  });
+
+  const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`Gemini: ${j.error?.message || r.status}`);
   return (j.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
 }
 
-// Vercel'de fonksiyonun en fazla 60 sn çalışmasına izin ver (yapay zekâ cevabı bazen yavaş gelir)
+// Vercel'de fonksiyonun en fazla 60 sn çalışmasına izin ver
 export const config = { maxDuration: 60 };
 
 export default async function handler(req, res) {
