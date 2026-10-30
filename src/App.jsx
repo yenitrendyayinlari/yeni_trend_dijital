@@ -103,6 +103,41 @@ const pqTokens = (raw) => {
 };
 const pqNums = (t) => (t.match(/\d+(?:[.,]\d+)?/g) || []).join('|');
 
+// ---- Soru İnceleme (Gemini/Claude web sayfasıyla kopyala-yapıştır köprüsü) ----
+const pqReviewPrompt = (items) => `Sen deneyimli bir KPSS/AGS soru editörüsün. Aşağıdaki ${items.length} soruyu TEK TEK incele.
+Her soru için şunları kontrol et:
+1) Bilgi doğruluğu (tarih, isim, kavram, olay-tarih eşleşmesi).
+2) Verilen doğru cevap harfi gerçekten doğru mu? Birden fazla doğru şık ya da hiç doğru şık var mı?
+3) Kök ile şıkların uyumu ve dil/format tutarlılığı (ör. kökte "savaşlardan" denip şıklarda savaş olmayan seçenek bulunması, "yanlıştır" kökünde çeldirici düzeni, şık biçimi tutarsızlığı).
+4) Yazım ve noktalama hataları.
+Gerekçelerin kısa ve Türkçe olsun. Sorun yoksa "tamam" de, gereksiz eleştiri yazma.
+
+CEVABINI SADECE aşağıdaki biçimde, tek bir JSON dizisi olarak ve bir kod bloğu içinde ver:
+[{"id":<soru numarası>,"durum":"tamam" | "duzeltme" | "hatali","cevap_dogru":true | false | null,"onerilen_cevap":"<harf ya da boş>","sorunlar":["..."],"onerilen_metin":"<düzeltilmiş soru metni (şıklarıyla) ya da boş>"}]
+durum: "tamam" = sorun yok; "duzeltme" = küçük dil/format/yazım düzeltmesi gerekiyor; "hatali" = bilgi/cevap hatası var.
+
+SORULAR:
+${items.map((q) => `[#${q.id}] (verilen doğru cevap: ${q.ans || '?'})\n${q.text}`).join('\n\n')}`;
+const pqParseReview = (txt) => {
+  let t = String(txt || '').replace(/```(?:json)?/gi, '');
+  const a = t.indexOf('['), b = t.lastIndexOf(']');
+  if (a < 0 || b <= a) throw new Error('Cevapta JSON listesi bulunamadı. Gemini\'nin ürettiği kod bloğunun tamamını yapıştırdığınızdan emin olun.');
+  let arr;
+  try { arr = JSON.parse(t.slice(a, b + 1)); } catch (e) { throw new Error('JSON okunamadı (' + e.message + '). Cevap yarım kalmış olabilir; Gemini\'ye "devam et" deyip tamamını yapıştırın.'); }
+  const out = {};
+  (Array.isArray(arr) ? arr : []).forEach((x) => {
+    const id = Number(x && x.id); if (!id) return;
+    out[id] = {
+      durum: ['tamam', 'duzeltme', 'hatali'].includes(x.durum) ? x.durum : ((x.sorunlar || []).length ? 'duzeltme' : 'tamam'),
+      cevapDogru: x.cevap_dogru === true ? true : x.cevap_dogru === false ? false : null,
+      onerilenCevap: String(x.onerilen_cevap || '').trim().toUpperCase().slice(0, 1),
+      sorunlar: (Array.isArray(x.sorunlar) ? x.sorunlar : []).map(String).filter(Boolean),
+      onerilenMetin: String(x.onerilen_metin || '').trim(),
+    };
+  });
+  return out;
+};
+
 export default function App() {
   const [appMode, setAppMode] = useState('student'); 
   const [authMode, setAuthMode] = useState('login'); 
@@ -279,6 +314,7 @@ export default function App() {
   const [showPoolImport, setShowPoolImport] = useState(false);
   const [dupMin, setDupMin] = useState(85);
   const [dupIdx, setDupIdx] = useState(0);
+  const [rev, setRev] = useState(null); // Soru İnceleme: {name, ids, part, size, paste, parsed:{id:{...}}, idx, onlyIssues, showSol, error}
   const [dupAi, setDupAi] = useState({ provider: 'gemini', running: false, done: 0, total: 0, error: '', results: {}, hideDifferent: false }); // results: { 'gemini:3100-3172': {clusters} }
   const [dupSkip, setDupSkip] = useState(() => new Set());
   const [dupState, setDupState] = useState({ key: null, pairs: null, noText: 0 }); // key: sonucun ait olduğu kazanım düğümü
@@ -2420,6 +2456,146 @@ export default function App() {
     setDupState((d) => ({ ...d, pairs: (d.pairs || []).filter((p) => p.a.id !== row.id && p.b.id !== row.id) }));
     setPoolBrowserRows((prev) => prev.filter((r) => r.id !== row.id)); // ağaç listesinden de hemen kalksın
     fetchPoolBatches(); fetchPoolBrowserGroups();
+  };
+
+  // Soru İnceleme: kazanımdaki soruların metni "komut" olarak kopyalanır, Gemini/Claude sitesinden gelen cevap yapıştırılır;
+  // her soru solda önizleme, sağda eleştiri olarak tek tek incelenir (düzenle / sil / cevabı düzelt).
+  const revTextOf = (r) => (r && r.source_json && r.source_json.q ? pqPlainText(r.source_json.q).replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim() : '');
+  const copyText = async (text) => {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) {
+      const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+      let ok = false; try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+      document.body.removeChild(ta); return ok;
+    }
+  };
+  const renderReviewModal = () => {
+    const byId = new Map(poolBrowserRows.map((r) => [r.id, r]));
+    const allRows = rev.ids.map((id) => byId.get(id)).filter(Boolean);
+    const parts = Math.max(1, Math.ceil(allRows.length / rev.size));
+    const partRows = allRows.slice(rev.part * rev.size, (rev.part + 1) * rev.size);
+    const reviewed = partRows.filter((r) => rev.parsed[r.id]);
+    const list = rev.onlyIssues ? reviewed.filter((r) => rev.parsed[r.id].durum !== 'tamam') : reviewed;
+    const idx = Math.min(rev.idx, Math.max(0, list.length - 1));
+    const row = list[idx];
+    const res = row ? rev.parsed[row.id] : null;
+    const upd = (patch) => setRev((r) => ({ ...r, ...patch }));
+    const doCopy = async () => {
+      const items = partRows.map((r) => ({ id: r.id, ans: r.correct_answer, text: revTextOf(r) })).filter((q) => q.text.length > 10);
+      if (items.length === 0) { upd({ error: 'Bu kısımdaki soruların metni kayıtlı değil (Excel/PDF ile yüklenmiş olabilir).' }); return; }
+      const ok = await copyText(pqReviewPrompt(items));
+      upd({ error: ok ? '' : 'Panoya kopyalanamadı.', copied: ok ? items.length : 0 });
+    };
+    const doParse = () => {
+      try {
+        const out = pqParseReview(rev.paste);
+        const n = Object.keys(out).length;
+        if (n === 0) throw new Error('Cevapta soru numarası (id) olan kayıt bulunamadı.');
+        upd({ parsed: { ...rev.parsed, ...out }, paste: '', error: '', idx: 0, copied: 0 });
+      } catch (e) { upd({ error: e.message }); }
+    };
+    const setAnswer = async (r, letter) => {
+      if (!window.confirm(`#${r.id} sorusunun doğru cevabı ${r.correct_answer} yerine ${letter} yapılsın mı?`)) return;
+      const { error } = await supabase.from('question_pool').update({ correct_answer: letter }).eq('id', r.id);
+      if (error) { alert('Güncellenemedi: ' + error.message); return; }
+      setPoolBrowserRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, correct_answer: letter } : x)));
+    };
+    const badge = { tamam: ['✓ Sorun yok', '#16a34a', '#f0fdf4'], duzeltme: ['✎ Düzeltme gerekli', '#b45309', '#fffbeb'], hatali: ['⚠ Hatalı', '#dc2626', '#fef2f2'] };
+    const btn = (disabled) => ({ padding: '7px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: disabled ? 'not-allowed' : 'pointer', fontSize: '0.85rem', opacity: disabled ? 0.45 : 1 });
+    const counts = { tamam: 0, duzeltme: 0, hatali: 0 }; reviewed.forEach((r) => { counts[rev.parsed[r.id].durum]++; });
+    const showReview = reviewed.length > 0 && !rev.pasteMode;
+    return (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 1050, backgroundColor: 'rgba(15,23,42,0.6)', display: 'flex', justifyContent: 'center', padding: '10px' }}>
+        <div style={{ backgroundColor: '#fff', borderRadius: '12px', width: '100%', maxWidth: '1700px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 16px', borderBottom: '1px solid #e2e8f0', flexWrap: 'wrap' }}>
+            <b style={{ fontSize: '1rem' }}>🧐 Soru İnceleme</b>
+            <span style={{ fontSize: '0.82rem', color: '#475569' }}>{rev.name} · {allRows.length} soru{parts > 1 ? ` · Parça ${rev.part + 1} / ${parts}` : ''}</span>
+            {reviewed.length > 0 && <span style={{ fontSize: '0.8rem' }}><b style={{ color: '#16a34a' }}>{counts.tamam} tamam</b> · <b style={{ color: '#b45309' }}>{counts.duzeltme} düzeltme</b> · <b style={{ color: '#dc2626' }}>{counts.hatali} hatalı</b></span>}
+            <span style={{ flex: 1 }} />
+            {reviewed.length > 0 && <button onClick={() => upd({ pasteMode: !rev.pasteMode })} style={btn(false)}>{rev.pasteMode ? '◀ İncelemeye dön' : '📋 Komut / yeni cevap yapıştır'}</button>}
+            <button onClick={() => setRev(null)} style={{ ...btn(false), backgroundColor: '#f1f5f9' }}>Kapat ✕</button>
+          </div>
+
+          {!showReview ? (
+            <div style={{ padding: '16px 20px', overflow: 'auto', flex: 1, maxWidth: '900px' }}>
+              <ol style={{ margin: '0 0 12px 18px', padding: 0, fontSize: '0.88rem', lineHeight: 1.7 }}>
+                <li>Aşağıdaki düğmeyle bu {parts > 1 ? 'parçadaki' : 'kazanımdaki'} soruların metnini <b>hazır komutla birlikte</b> kopyalayın.</li>
+                <li>Gemini (ya da Claude) sitesinde yeni bir sohbete yapıştırıp gönderin. Cevap bir <b>kod bloğu (JSON)</b> olarak gelecek.</li>
+                <li>Cevabı (kod bloğunun tamamını) aşağıdaki kutuya yapıştırıp &quot;İncele&quot;ye basın.</li>
+              </ol>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
+                <label style={{ fontSize: '0.82rem' }}>Bir seferde
+                  <select value={rev.size} onChange={(e) => upd({ size: Number(e.target.value), part: 0, copied: 0 })} style={{ margin: '0 6px', padding: '5px' }}>
+                    {[10, 20, 30, 50].map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>soru
+                </label>
+                {parts > 1 && <label style={{ fontSize: '0.82rem' }}>Parça
+                  <select value={rev.part} onChange={(e) => upd({ part: Number(e.target.value), copied: 0 })} style={{ margin: '0 6px', padding: '5px' }}>
+                    {Array.from({ length: parts }, (_, i) => <option key={i} value={i}>{i + 1} / {parts}{allRows.slice(i * rev.size, (i + 1) * rev.size).every((r) => rev.parsed[r.id]) ? ' ✓' : ''}</option>)}
+                  </select></label>}
+                <button onClick={doCopy} style={{ ...btn(false), backgroundColor: '#4f46e5', color: '#fff', border: 'none' }}>📋 Komutu kopyala ({partRows.length} soru)</button>
+                {rev.copied > 0 && <span style={{ color: '#16a34a', fontSize: '0.82rem', fontWeight: 'bold' }}>✓ {rev.copied} soru kopyalandı</span>}
+              </div>
+              <textarea value={rev.paste} onChange={(e) => upd({ paste: e.target.value })} placeholder="Gemini'nin cevabını buraya yapıştırın…" style={{ width: '100%', height: '200px', boxSizing: 'border-box', padding: '8px', borderRadius: '8px', border: '1px solid #cbd5e1', fontFamily: 'monospace', fontSize: '0.78rem' }} />
+              <div style={{ marginTop: '8px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <button onClick={doParse} disabled={!rev.paste.trim()} style={{ ...btn(!rev.paste.trim()), backgroundColor: '#16a34a', color: '#fff', border: 'none' }}>İncele</button>
+                {rev.error && <span style={{ color: '#b91c1c', fontSize: '0.82rem' }}>⚠ {rev.error}</span>}
+              </div>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 16px', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc', flexWrap: 'wrap' }}>
+                {row ? <span style={{ fontSize: '0.88rem' }}>Soru <b>{idx + 1} / {list.length}</b> · <b>#{row.id}</b></span> : <span style={{ fontSize: '0.88rem', color: '#16a34a', fontWeight: 'bold' }}>{rev.onlyIssues ? 'Sorunlu soru kalmadı ✓' : 'Soru yok'}</span>}
+                <label style={{ fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}><input type="checkbox" checked={rev.onlyIssues} onChange={(e) => upd({ onlyIssues: e.target.checked, idx: 0 })} /> Sadece sorunlu olanları göster</label>
+                <span style={{ flex: 1 }} />
+                <button disabled={idx === 0} onClick={() => upd({ idx: idx - 1 })} style={btn(idx === 0)}>◀ Önceki</button>
+                <button disabled={idx >= list.length - 1} onClick={() => upd({ idx: idx + 1 })} style={btn(idx >= list.length - 1)}>Sonraki ▶</button>
+              </div>
+              <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px', backgroundColor: '#f1f5f9' }}>
+                {row && res && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '12px', alignItems: 'start' }}>
+                    <div style={{ backgroundColor: '#fff', borderRadius: '10px', padding: '10px', border: '1px solid #e2e8f0', minWidth: 0 }}>
+                      <div style={{ fontWeight: 'bold', fontSize: '0.9rem', marginBottom: '8px' }}>#{row.id} · doğru cevap: {row.correct_answer}</div>
+                      <SecurePdfViewer poolId={row.id} type="pool-question" pageNumber={1} version={poolPdfVersions[`pdf_file:${row.id}`]} />
+                      {row.solution_pdf_file && (
+                        <div style={{ marginTop: '8px' }}>
+                          <button onClick={() => upd({ showSol: !rev.showSol })} style={{ ...btn(false), fontSize: '0.78rem', padding: '4px 10px' }}>{rev.showSol ? 'Çözümü gizle' : 'Çözümü göster'}</button>
+                          {rev.showSol && <div style={{ marginTop: '6px' }}><SecurePdfViewer poolId={row.id} type="pool-solution" pageNumber={1} version={poolPdfVersions[`solution_pdf_file:${row.id}`]} /></div>}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ backgroundColor: '#fff', borderRadius: '10px', padding: '12px', border: '1px solid #e2e8f0', minWidth: 0 }}>
+                      <div style={{ display: 'inline-block', padding: '4px 10px', borderRadius: '999px', fontSize: '0.82rem', fontWeight: 'bold', color: badge[res.durum][1], backgroundColor: badge[res.durum][2], border: `1px solid ${badge[res.durum][1]}`, marginBottom: '10px' }}>{badge[res.durum][0]}</div>
+                      {res.onerilenCevap && res.onerilenCevap !== row.correct_answer && (
+                        <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '8px 10px', marginBottom: '10px', fontSize: '0.85rem' }}>
+                          ⚠ Cevap anahtarı şüpheli: sistemde <b>{row.correct_answer}</b>, öneri <b>{res.onerilenCevap}</b>.
+                          <button onClick={() => setAnswer(row, res.onerilenCevap)} style={{ ...btn(false), marginLeft: '8px', fontSize: '0.76rem', padding: '3px 8px' }}>Cevabı {res.onerilenCevap} yap</button>
+                        </div>
+                      )}
+                      {res.sorunlar.length > 0 ? (
+                        <ul style={{ margin: '0 0 10px 18px', padding: 0, fontSize: '0.88rem', lineHeight: 1.6 }}>{res.sorunlar.map((x, i) => <li key={i}>{x}</li>)}</ul>
+                      ) : <div style={{ fontSize: '0.86rem', color: '#64748b', marginBottom: '10px' }}>Eleştiri yok.</div>}
+                      {res.onerilenMetin && (
+                        <div style={{ marginBottom: '10px' }}>
+                          <div style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#475569', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>Önerilen metin
+                            <button onClick={() => copyText(res.onerilenMetin)} style={{ ...btn(false), fontSize: '0.72rem', padding: '2px 8px' }}>📋 Kopyala</button>
+                          </div>
+                          <div style={{ whiteSpace: 'pre-wrap', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px 10px', fontSize: '0.84rem', maxHeight: '260px', overflow: 'auto' }}>{res.onerilenMetin}</div>
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
+                        <button onClick={() => { setPoolEditorRow(row); setShowPoolEditor(true); }} style={{ ...btn(false), backgroundColor: '#eef2ff', borderColor: '#c7d2fe' }}>✏️ Düzenle</button>
+                        <button onClick={() => deleteDupRow({ id: row.id, pdf: row.pdf_file, sol: row.solution_pdf_file })} style={{ ...btn(false), color: '#dc2626', borderColor: '#dc2626' }}>🗑 Sil</button>
+                        <button onClick={() => upd({ idx: Math.min(idx + 1, list.length - 1) })} style={{ ...btn(false), backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }}>✓ Tamam, sonraki</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
   };
 
   // Sonuç penceresi: birbirine bağlı sorular TEK GRUP olarak yan yana, gerçek PDF önizlemesiyle (soru + çözüm) gösterilir.
@@ -5286,12 +5462,21 @@ export default function App() {
                                       return (
                                         <div key={ok}>
                                           {head(!!poolTreeOpen[ok], o.id, o.rows.length, 2, () => toggle(ok), undefined,
-                                            o.rows.length > 1 ? (
-                                              <button
-                                                onClick={(e) => { e.stopPropagation(); setPoolTreeOpen((prev) => ({ ...prev, [ok]: true })); runDupCheck(ok, o.rows); }}
-                                                title="Bu kazanımın altındaki soruları birbiriyle karşılaştırır"
-                                                style={{ fontSize: '0.72rem', padding: '3px 9px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', color: '#0f172a', cursor: 'pointer', fontWeight: 'normal' }}
-                                              >🔍 Benzer soruları bul</button>
+                                            o.rows.length > 0 ? (
+                                              <span style={{ display: 'inline-flex', gap: '6px' }}>
+                                                <button
+                                                  onClick={(e) => { e.stopPropagation(); setRev({ name: o.id, ids: o.rows.map((r) => r.id), part: 0, size: 30, paste: '', parsed: {}, idx: 0, onlyIssues: false, showSol: false, error: '', copied: 0, pasteMode: false }); }}
+                                                  title="Bu kazanımın sorularını Gemini/Claude sitesinde kontrol ettirip sonucu burada soru soru incelersiniz"
+                                                  style={{ fontSize: '0.72rem', padding: '3px 9px', borderRadius: '6px', border: '1px solid #c7d2fe', backgroundColor: '#eef2ff', color: '#3730a3', cursor: 'pointer', fontWeight: 'normal' }}
+                                                >🧐 Soru incele</button>
+                                                {o.rows.length > 1 && (
+                                                  <button
+                                                    onClick={(e) => { e.stopPropagation(); setPoolTreeOpen((prev) => ({ ...prev, [ok]: true })); runDupCheck(ok, o.rows); }}
+                                                    title="Bu kazanımın altındaki soruları birbiriyle karşılaştırır"
+                                                    style={{ fontSize: '0.72rem', padding: '3px 9px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', color: '#0f172a', cursor: 'pointer', fontWeight: 'normal' }}
+                                                  >🔍 Benzer soruları bul</button>
+                                                )}
+                                              </span>
                                             ) : null)}
                                           {poolTreeOpen[ok] && dupState.key === ok && dupState.pairs && renderDupPanel()}
                                           {poolTreeOpen[ok] && (
@@ -5676,6 +5861,8 @@ export default function App() {
             </div>
           );
         })()}
+
+        {rev && renderReviewModal()}
 
         {showPoolEditor && (
           <PoolQuestionEditor
