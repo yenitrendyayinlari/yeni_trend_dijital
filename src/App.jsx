@@ -138,6 +138,70 @@ const pqParseReview = (txt) => {
   return out;
 };
 
+// ---- Bul / Değiştir (Soru Havuzu) ----
+// TipTap JSON'unda metin bul-değiştir. Eşleşme, aynı paragraftaki metin parçalarını (kalın/italik vb. dahil) birleştirerek aranır;
+// değiştirilen metin eşleşmenin ilk harfinin biçimini alır, resim/satır sonu gibi düğümler eşleşmeyi böler.
+function pqFrRegex(find, matchCase, whole) {
+  const esc = find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const body = whole ? `(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])` : esc;
+  return new RegExp(body, 'gu');
+}
+function pqFrPara(par, find, repl, matchCase, whole, snips) {
+  const kids = par.content || [];
+  const units = [];
+  kids.forEach((k, i) => {
+    if (k.type === 'text') { for (const ch of (k.text || '')) units.push({ c: ch, i }); }
+    else units.push({ c: '\n', i, raw: true });
+  });
+  const str = units.map((u) => u.c).join('');
+  const hay = matchCase ? str : str.toLocaleLowerCase('tr');
+  const needle = matchCase ? find : find.toLocaleLowerCase('tr');
+  if (hay.length !== str.length) return { par, n: 0 };
+  const re = pqFrRegex(needle, matchCase, whole);
+  const ms = [...hay.matchAll(re)].filter((m) => m[0].length > 0);
+  if (!ms.length) return { par, n: 0 };
+  // units dizisi UTF-16 karakter değil kod noktası bazlı; indeksleri de aynı bazda hesaplamak için string'i diziye çevirip eşleştiriyoruz.
+  const cps = Array.from(str);
+  const cpHay = Array.from(hay);
+  const out = [];
+  let pos = 0, n = 0;
+  // eşleşme indekslerini kod noktası indeksine çevir
+  const cpIndex = (u16) => Array.from(hay.slice(0, u16)).length;
+  ms.forEach((m) => {
+    const st = cpIndex(m.index), len = Array.from(m[0]).length;
+    for (; pos < st; pos++) out.push(units[pos]);
+    if (snips && snips.length < 1) {
+      const b = cps.slice(Math.max(0, st - 28), st).join(''), e = cps.slice(st + len, st + len + 28).join('');
+      snips.push({ before: b, hit: cps.slice(st, st + len).join(''), after: e, to: repl });
+    }
+    Array.from(repl).forEach((ch) => out.push({ c: ch, i: units[st].i }));
+    pos = st + len; n++;
+  });
+  for (; pos < units.length; pos++) out.push(units[pos]);
+  const newKids = [];
+  out.forEach((u) => {
+    if (u.raw) { newKids.push(kids[u.i]); return; }
+    const last = newKids[newKids.length - 1];
+    if (last && last.__i === u.i) { last.text += u.c; return; }
+    const src = kids[u.i];
+    const node = { ...src, text: u.c };
+    Object.defineProperty(node, '__i', { value: u.i, enumerable: false, writable: true });
+    newKids.push(node);
+  });
+  return { par: { ...par, content: newKids }, n };
+}
+function pqFrDoc(doc, find, repl, matchCase, whole, snips) {
+  let total = 0;
+  const walk = (node) => {
+    if (!node || !Array.isArray(node.content)) return node;
+    const hasInline = node.content.some((k) => k.type === 'text');
+    if (hasInline) { const r = pqFrPara(node, find, repl, matchCase, whole, snips); total += r.n; return r.par; }
+    return { ...node, content: node.content.map(walk) };
+  };
+  const out = walk(doc);
+  return { doc: out, n: total };
+}
+
 export default function App() {
   const [appMode, setAppMode] = useState('student'); 
   const [authMode, setAuthMode] = useState('login'); 
@@ -314,6 +378,9 @@ export default function App() {
   const [showPoolImport, setShowPoolImport] = useState(false);
   const [dupMin, setDupMin] = useState(85);
   const [dupIdx, setDupIdx] = useState(0);
+  const [fr, setFr] = useState(null); // Bul/Değiştir penceresi
+  const [frJob, setFrJob] = useState(null); // PDF'leri yeniden çizdirilecek sorular {rows, undoRows, isUndo}
+  const [frUndo, setFrUndo] = useState(null); // son değişikliğin geri alma bilgisi (yalnız bu oturumda)
   const [rev, setRev] = useState(null); // Soru İnceleme: {name, ids, part, size, paste, parsed:{id:{...}}, idx, onlyIssues, showSol, error}
   const [dupAi, setDupAi] = useState({ provider: 'gemini', running: false, done: 0, total: 0, error: '', results: {}, hideDifferent: false }); // results: { 'gemini:3100-3172': {clusters} }
   const [dupSkip, setDupSkip] = useState(() => new Set());
@@ -2468,6 +2535,153 @@ export default function App() {
       document.body.removeChild(ta); return ok;
     }
   };
+  // ---- Bul / Değiştir ----
+  const frUpd = (patch) => setFr((f) => ({ ...f, ...patch }));
+  const frScopeIds = (f) => {
+    const lessonIds = f.lesson ? lessonCategories.filter((l) => l.name === f.lesson).map((l) => l.id) : null;
+    const topicIds = f.topic ? topics.filter((t) => (!lessonIds || lessonIds.includes(t.lesson_category_id)) && t.name === f.topic).map((t) => t.id) : null;
+    const outcomeIds = f.outcome ? learningOutcomes.filter((o) => (!topicIds || topicIds.includes(o.topic_id)) && o.name === f.outcome).map((o) => o.id) : null;
+    return { lessonIds, topicIds, outcomeIds };
+  };
+  const frSearch = async () => {
+    const f = fr;
+    if (!f.find) { frUpd({ msg: 'Önce "Aranan" kutusunu doldurun.' }); return; }
+    frUpd({ busy: true, msg: '', results: null });
+    const { lessonIds, topicIds, outcomeIds } = frScopeIds(f);
+    const rows = [];
+    for (let from = 0; from < 20000; from += 500) {
+      let q = supabase.from('question_pool').select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, extra_outcome_ids, upload_batch_id, set_key, source_json').order('id').range(from, from + 499);
+      if (lessonIds) q = q.in('lesson_category_id', lessonIds);
+      if (topicIds) q = q.in('topic_id', topicIds);
+      if (outcomeIds) q = q.in('outcome_id', outcomeIds);
+      const { data, error } = await q;
+      if (error) { frUpd({ busy: false, msg: 'Okunamadı: ' + error.message }); return; }
+      rows.push(...(data || []));
+      if (!data || data.length < 500) break;
+    }
+    const results = [];
+    rows.forEach((r) => {
+      const sj = r.source_json;
+      if (!sj || sj.v !== 2 || !sj.q) return;
+      const snips = [];
+      let nQ = 0, nS = 0, q2 = sj.q, s2 = sj.s;
+      if (f.part !== 'sol') { const x = pqFrDoc(sj.q, f.find, f.repl, f.matchCase, f.whole, snips); nQ = x.n; q2 = x.doc; }
+      if (f.part !== 'q' && sj.s) { const x = pqFrDoc(sj.s, f.find, f.repl, f.matchCase, f.whole, snips); nS = x.n; s2 = x.doc; }
+      if (nQ + nS > 0) results.push({ row: r, nQ, nS, snip: snips[0], newJson: { ...sj, q: q2, s: s2 } });
+    });
+    results.sort((a, b) => a.row.id - b.row.id);
+    const sel = {}; results.forEach((x) => { sel[x.row.id] = true; });
+    frUpd({ busy: false, results, sel, scanned: rows.length, msg: '' });
+  };
+  const frApply = () => {
+    const chosen = fr.results.filter((x) => fr.sel[x.row.id]);
+    if (!chosen.length) return;
+    if (!window.confirm(`${chosen.length} soruda "${fr.find}" → "${fr.repl}" değiştirilecek ve bu soruların PDF'leri yeniden çizilecek (soru başına yaklaşık 2-3 sn).\n\nİşlem bitene kadar pencereyi kapatmayın. Devam edilsin mi?`)) return;
+    setFrJob({
+      rows: chosen.map((x) => ({ ...x.row, source_json: x.newJson })),
+      undoRows: chosen.map((x) => ({ ...x.row })),
+      isUndo: false,
+      label: `${fr.find} → ${fr.repl}`,
+    });
+  };
+  const frRunUndo = () => {
+    if (!frUndo || !window.confirm(`Son değişiklik (${frUndo.label}) geri alınsın mı? ${frUndo.rows.length} sorunun PDF'i yeniden çizilecek.`)) return;
+    setFrJob({ rows: frUndo.rows, undoRows: null, isUndo: true, label: frUndo.label });
+  };
+  const renderFrModal = () => {
+    const f = fr;
+    const lessonNames = lessonCategories.map((l) => l.name).filter((n, i, arr) => n && arr.indexOf(n) === i).sort((x, y) => x.localeCompare(y, 'tr'));
+    const lessonIds = f.lesson ? lessonCategories.filter((l) => l.name === f.lesson).map((l) => l.id) : [];
+    const topicNames = f.lesson ? topics.filter((t) => lessonIds.includes(t.lesson_category_id)).map((t) => t.name).filter((n, i, arr) => n && arr.indexOf(n) === i).sort((x, y) => x.localeCompare(y, 'tr')) : [];
+    const topicIds = f.topic ? topics.filter((t) => lessonIds.includes(t.lesson_category_id) && t.name === f.topic).map((t) => t.id) : [];
+    const outNames = f.topic ? learningOutcomes.filter((o) => topicIds.includes(o.topic_id)).map((o) => o.name).filter((n, i, arr) => n && arr.indexOf(n) === i).sort((x, y) => x.localeCompare(y, 'tr')) : [];
+    const inp = { width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #94a3b8', fontSize: '0.92rem', boxSizing: 'border-box' };
+    const lab = { display: 'block', fontSize: '0.8rem', fontWeight: 'bold', color: '#334155', margin: '10px 0 3px' };
+    const nSel = f.results ? f.results.filter((x) => f.sel[x.row.id]).length : 0;
+    return (
+      <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.55)', zIndex: 1060, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+        <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '18px 20px', width: '860px', maxWidth: '100%', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '4px' }}>
+            <h3 style={{ margin: 0 }}>🔎 Bul / Değiştir</h3>
+            <button onClick={() => setFr(null)} style={{ marginLeft: 'auto', padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat ✕</button>
+          </div>
+          <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', overflowY: 'auto' }}>
+            <div style={{ flex: '1 1 300px', minWidth: '260px' }}>
+              <label style={lab}>Aranan</label>
+              <input value={f.find} onChange={(e) => frUpd({ find: e.target.value, results: null })} onKeyDown={(e) => { if (e.key === 'Enter') frSearch(); }} style={inp} autoFocus />
+              <label style={lab}>Yeni metin</label>
+              <input value={f.repl} onChange={(e) => frUpd({ repl: e.target.value, results: null })} onKeyDown={(e) => { if (e.key === 'Enter') frSearch(); }} style={inp} placeholder="Boş bırakırsanız bulunan metin silinir" />
+              <div style={{ display: 'flex', gap: '16px', marginTop: '10px', flexWrap: 'wrap' }}>
+                <label style={{ fontSize: '0.85rem' }}><input type="checkbox" checked={f.matchCase} onChange={(e) => frUpd({ matchCase: e.target.checked, results: null })} /> Büyük/küçük harf ayrımı</label>
+                <label style={{ fontSize: '0.85rem' }}><input type="checkbox" checked={f.whole} onChange={(e) => frUpd({ whole: e.target.checked, results: null })} /> Tam kelime</label>
+              </div>
+            </div>
+            <div style={{ flex: '1 1 300px', minWidth: '260px' }}>
+              <label style={lab}>Nerede arayalım?</label>
+              <select value={f.part} onChange={(e) => frUpd({ part: e.target.value, results: null })} style={inp}>
+                <option value="both">Soru ve çözüm</option>
+                <option value="q">Yalnız soru</option>
+                <option value="sol">Yalnız çözüm</option>
+              </select>
+              <label style={lab}>Ders</label>
+              <select value={f.lesson} onChange={(e) => frUpd({ lesson: e.target.value, topic: '', outcome: '', results: null })} style={inp}>
+                <option value="">Tüm havuz (bütün dersler)</option>
+                {lessonNames.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <label style={lab}>Konu</label>
+              <select value={f.topic} disabled={!f.lesson} onChange={(e) => frUpd({ topic: e.target.value, outcome: '', results: null })} style={inp}>
+                <option value="">Tüm konular</option>
+                {topicNames.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <label style={lab}>Kazanım</label>
+              <select value={f.outcome} disabled={!f.topic} onChange={(e) => frUpd({ outcome: e.target.value, results: null })} style={inp}>
+                <option value="">Tüm kazanımlar</option>
+                {outNames.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', margin: '12px 0 8px', flexWrap: 'wrap' }}>
+            <button onClick={frSearch} disabled={f.busy} className="yt-btn yt-btn-primary" style={{ padding: '8px 18px' }}>{f.busy ? 'Aranıyor…' : 'Bul'}</button>
+            {f.results && f.results.length > 0 && (
+              <button onClick={frApply} style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}>Seçilenleri değiştir ({nSel} soru)</button>
+            )}
+            {frUndo && <button onClick={frRunUndo} style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid #f59e0b', backgroundColor: '#fffbeb', color: '#92400e', cursor: 'pointer' }}>↩ Son değişikliği geri al ({frUndo.rows.length})</button>}
+            {f.msg && <span style={{ color: '#b91c1c', fontSize: '0.85rem' }}>{f.msg}</span>}
+          </div>
+          {f.results && (
+            <div style={{ fontSize: '0.82rem', color: '#475569', marginBottom: '6px' }}>
+              {f.scanned} soru tarandı · <b>{f.results.length}</b> soruda toplam <b>{f.results.reduce((t, x) => t + x.nQ + x.nS, 0)}</b> eşleşme.
+              {f.results.length > 0 && (
+                <> <button onClick={() => { const sel = {}; f.results.forEach((x) => { sel[x.row.id] = true; }); frUpd({ sel }); }} style={{ marginLeft: 8, border: 'none', background: 'none', color: '#2563eb', cursor: 'pointer' }}>Hepsini seç</button>
+                <button onClick={() => frUpd({ sel: {} })} style={{ border: 'none', background: 'none', color: '#2563eb', cursor: 'pointer' }}>Hiçbirini seçme</button></>
+              )}
+            </div>
+          )}
+          {f.results && (
+            <div style={{ overflowY: 'auto', flex: 1, minHeight: '120px', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+              {f.results.length === 0 && <div style={{ padding: '16px', color: '#64748b' }}>Eşleşme bulunamadı.</div>}
+              {f.results.map((x) => (
+                <label key={x.row.id} style={{ display: 'flex', gap: '10px', padding: '8px 10px', borderBottom: '1px solid #f1f5f9', alignItems: 'flex-start', cursor: 'pointer', backgroundColor: f.sel[x.row.id] ? '#fff' : '#f8fafc', opacity: f.sel[x.row.id] ? 1 : 0.55 }}>
+                  <input type="checkbox" checked={!!f.sel[x.row.id]} onChange={(e) => frUpd({ sel: { ...f.sel, [x.row.id]: e.target.checked } })} style={{ marginTop: '3px' }} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '0.76rem', color: '#64748b' }}>
+                      <b>#{x.row.id}</b> · {poolNm(lessonCategories, x.row.lesson_category_id, 'Dersi belirsiz')} › {poolNm(learningOutcomes, x.row.outcome_id, 'Kazanımsız')} · {x.nQ > 0 && `soruda ${x.nQ}`}{x.nQ > 0 && x.nS > 0 && ', '}{x.nS > 0 && `çözümde ${x.nS}`}
+                    </div>
+                    {x.snip && (
+                      <div style={{ fontSize: '0.88rem', marginTop: '2px', wordBreak: 'break-word' }}>
+                        …{x.snip.before}<span style={{ backgroundColor: '#fecaca', textDecoration: 'line-through' }}>{x.snip.hit}</span><span style={{ backgroundColor: '#bbf7d0' }}>{x.snip.to}</span>{x.snip.after}…
+                      </div>
+                    )}
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   const renderReviewModal = () => {
     const byId = new Map(poolBrowserRows.map((r) => [r.id, r]));
     const allRows = rev.ids.map((id) => byId.get(id)).filter(Boolean);
@@ -5406,6 +5620,7 @@ export default function App() {
                     )}
                     <button onClick={() => { const o = {}; poolBrowserRows.forEach((r) => { const dn = poolNm(lessonCategories, r.lesson_category_id, 'Dersi belirsiz'), tn = poolNm(topics, r.topic_id, 'Konusuz'), on = poolNm(learningOutcomes, r.outcome_id, 'Kazanımsız'); o[`d:${dn}`] = true; o[`t:${dn}:${tn}`] = true; o[`o:${dn}:${tn}:${on}`] = true; }); setPoolTreeOpen(o); }} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini aç</button>
                     <button onClick={() => setPoolTreeOpen({})} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini kapat</button>
+                    <button onClick={() => setFr({ lesson: '', topic: '', outcome: '', find: '', repl: '', part: 'both', matchCase: false, whole: false, results: null, sel: {}, busy: false, msg: '' })} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#1d4ed8', cursor: 'pointer', fontWeight: 'bold' }} title="Havuzdaki sorularda metin bul ve değiştir">🔎 Bul / Değiştir</button>
                     <label style={{ fontSize: '0.78rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Kazanım başlığındaki 🔍 butonuyla yapılan benzer soru kontrolünde bu orandan yüksek benzerlikteki sorular listelenir. Düşürürseniz daha çok (daha az kesin) sonuç gelir.">
                       Benzerlik en az %
                       <input type="number" min="40" max="100" value={dupMin} onChange={(e) => setDupMin(Number(e.target.value) || 85)} style={{ width: '58px', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
@@ -5862,6 +6077,7 @@ export default function App() {
           );
         })()}
 
+        {fr && renderFrModal()}
         {rev && renderReviewModal()}
 
         {showPoolEditor && (
@@ -5883,6 +6099,28 @@ export default function App() {
               }
               fetchPoolBrowserRows(); fetchPoolBrowserGroups(); if (showPoolImport) fetchPoolBatches();
             }}
+          />
+        )}
+
+        {frJob && (
+          <PoolQuestionEditor
+            lessonCategories={lessonCategories}
+            topics={topics}
+            learningOutcomes={learningOutcomes}
+            existingGroups={[]}
+            editRow={frJob.rows[0]}
+            rerenderJob={frJob.rows}
+            onCreateLesson={createLessonForPicker}
+            onCreateTopic={createTopicForPicker}
+            onCreateOutcome={createOutcomeForPicker}
+            onSaved={(id) => { const t = Date.now(); setPoolPdfVersions((prev) => ({ ...prev, [`pdf_file:${id}`]: t, [`solution_pdf_file:${id}`]: t })); }}
+            onJobDone={(log) => {
+              const okIds = new Set(log.filter((l) => l.ok).map((l) => l.id));
+              if (frJob.isUndo) setFrUndo(null);
+              else setFrUndo({ label: frJob.label, rows: frJob.undoRows.filter((r) => okIds.has(r.id)) });
+              setFr((f) => (f ? { ...f, results: null, msg: '' } : f));
+            }}
+            onClose={() => { setFrJob(null); fetchPoolBrowserRows(); fetchPoolBrowserGroups(); }}
           />
         )}
 

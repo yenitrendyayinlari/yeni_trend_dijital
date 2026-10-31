@@ -826,7 +826,7 @@ const sepV = <span style={{ width: '1px', alignSelf: 'stretch', backgroundColor:
 const rowStyle = { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', padding: '3px 0' };
 const rowTag = { width: '22px', height: '22px', borderRadius: '4px', backgroundColor: '#334155', color: '#fff', fontSize: '0.75rem', fontWeight: 'bold', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' };
 
-export default function PoolQuestionEditor({ lessonCategories, topics, learningOutcomes, existingGroups, editRow, onClose, onSaved, onCreateLesson, onCreateTopic, onCreateOutcome }) {
+export default function PoolQuestionEditor({ lessonCategories, topics, learningOutcomes, existingGroups, editRow, onClose, onSaved, onCreateLesson, onCreateTopic, onCreateOutcome, rerenderJob, onJobDone }) {
   const src = (editRow && editRow.source_json) || {};
   const isEdit = !!editRow;
   const isV2 = src.v === 2;
@@ -997,6 +997,53 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     if (done && onSaved) onSaved();
   };
 
+  // Bul-Değiştir: App'ten gelen soruların (source_json'u değişmiş) PDF'lerini arka planda yeniden çizer ve kaydeder.
+  const [job, setJob] = useState(null); // {running, done, total, log:[{id, ok, msg}], finished}
+  const jobStop = useRef(false);
+  const jobStarted = useRef(false);
+  const runJob = async () => {
+    const rows = rerenderJob || [];
+    const log = [];
+    jobStop.current = false;
+    setJob({ running: true, done: 0, total: rows.length, log: [], finished: false });
+    for (let i = 0; i < rows.length; i++) {
+      if (jobStop.current) break;
+      const r = rows[i];
+      const sj = r.source_json || {};
+      try {
+        const w = sj.w || 16, h = sj.h || 9;
+        setStage('edit'); setPageW(w); setPageH(h); setHyph(sj.hyph !== false);
+        qEditor.chain().setMeta('addToHistory', false).setContent(sj.q || '').run();
+        sEditor.chain().setMeta('addToHistory', false).setContent(sj.s || '').run();
+        await sleep(560);
+        const avail = h * PX_PER_CM - PAD_Y * 2;
+        const hasSol = sEditor.getText().trim().length > 0;
+        if (qPageRef.current.querySelector('.ProseMirror').offsetHeight > avail + 1) throw new Error('değişiklikten sonra soru sayfaya sığmıyor (atlandı, soru olduğu gibi kaldı)');
+        if (hasSol && sPageRef.current.querySelector('.ProseMirror').offsetHeight > avail + 1) throw new Error('değişiklikten sonra çözüm sayfaya sığmıyor (atlandı)');
+        qEditor.commands.blur(); sEditor.commands.blur();
+        const qName = await uploadPdf(await pageToPdfBytes(qPageRef.current, w, h), 'pool');
+        let sName = null;
+        if (hasSol) sName = await uploadPdf(await pageToPdfBytes(sPageRef.current, w, h), 'pool_sol');
+        const { data: curNames } = await supabase.from('question_pool').select('pdf_file, solution_pdf_file').eq('id', r.id).maybeSingle();
+        const { error } = await supabase.from('question_pool').update({ pdf_file: qName, solution_pdf_file: sName, source_json: sj }).eq('id', r.id);
+        if (error) throw new Error(error.message);
+        const old = [curNames && curNames.pdf_file, curNames && curNames.solution_pdf_file].filter(Boolean);
+        if (old.length) { try { await supabase.storage.from('exam-files').remove(old); } catch (e) { /* önemsiz */ } }
+        if (onSaved) onSaved(r.id);
+        log.push({ id: r.id, ok: true });
+      } catch (err) { log.push({ id: r.id, ok: false, msg: err.message }); }
+      setJob({ running: true, done: i + 1, total: rows.length, log: log.slice(), finished: false });
+    }
+    setJob({ running: false, done: log.length, total: rows.length, log: log.slice(), finished: true });
+    if (onJobDone) onJobDone(log);
+  };
+  useEffect(() => {
+    if (!rerenderJob || jobStarted.current || !qEditor || !sEditor) return;
+    jobStarted.current = true;
+    runJob();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qEditor, sEditor]);
+
   const handleImageFile = async (e) => {
     const f = e.target.files[0];
     e.target.value = '';
@@ -1043,15 +1090,15 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       iframe.remove();
     }
   };
-  const pageToPdfBytes = async (node) => {
+  const pageToPdfBytes = async (node, pw = pageW, ph = pageH) => {
     const canvas = await captureCanvas(node);
     const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
     const pngBytes = new Uint8Array(await blob.arrayBuffer());
     canvas.width = 0; canvas.height = 0; // büyük tuvali hemen bırak (toplu yüklemede bellek şişmesin)
     const pdf = await PDFDocument.create();
     const image = await pdf.embedPng(pngBytes);
-    const page = pdf.addPage([pageW * PT_PER_CM, pageH * PT_PER_CM]);
-    page.drawImage(image, { x: 0, y: 0, width: pageW * PT_PER_CM, height: pageH * PT_PER_CM });
+    const page = pdf.addPage([pw * PT_PER_CM, ph * PT_PER_CM]);
+    page.drawImage(image, { x: 0, y: 0, width: pw * PT_PER_CM, height: ph * PT_PER_CM });
     return await pdf.save();
   };
 
@@ -1359,6 +1406,27 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         .pq-page .ProseMirror img.ProseMirror-selectednode { outline: 2px solid #2563eb; }
         .pq-page .ProseMirror sub, .pq-page .ProseMirror sup { line-height: 0; }
       `}</style>
+      {rerenderJob && job && (
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.7)', zIndex: 1400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '22px', width: '520px', maxWidth: '100%', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
+            <h3 style={{ margin: '0 0 8px' }}>🔁 Değişiklikler uygulanıyor</h3>
+            <div style={{ fontSize: '0.88rem', color: '#334155', marginBottom: '8px' }}>
+              {job.finished ? 'Bitti.' : 'Soru PDF’leri yeniden çiziliyor. Lütfen bu pencereyi kapatmayın.'} <b>{job.done}</b> / {job.total}
+              {job.log.some((l) => !l.ok) && <span style={{ color: '#b91c1c' }}> · atlanan: {job.log.filter((l) => !l.ok).length}</span>}
+            </div>
+            <div style={{ height: '8px', backgroundColor: '#e2e8f0', borderRadius: '4px', overflow: 'hidden', marginBottom: '10px' }}>
+              <div style={{ height: '100%', width: `${job.total ? (job.done / job.total) * 100 : 0}%`, backgroundColor: '#2563eb', transition: 'width .2s' }} />
+            </div>
+            <div style={{ overflowY: 'auto', fontSize: '0.8rem', flex: 1, minHeight: 0 }}>
+              {job.log.filter((l) => !l.ok).map((l) => <div key={l.id} style={{ color: '#b91c1c', marginBottom: '3px' }}>#{l.id}: {l.msg}</div>)}
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '12px' }}>
+              {!job.finished && <button onClick={() => { jobStop.current = true; }} style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Durdur</button>}
+              {job.finished && <button onClick={onClose} style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', backgroundColor: '#2563eb', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}>Kapat</button>}
+            </div>
+          </div>
+        </div>
+      )}
       {bulk && (
         <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.6)', zIndex: 1250, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '20px', width: '760px', maxWidth: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}>
