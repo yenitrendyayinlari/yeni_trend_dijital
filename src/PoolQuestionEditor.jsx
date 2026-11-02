@@ -24,8 +24,8 @@ import { supabase } from './supabase';
 // saklanır, "Düzenle" ile aynen açılır.
 const PX_PER_CM = 40; // ekranda 1 cm = 40 px (16 cm = 640 px)
 const PT_PER_CM = 28.3465;
-const PAD_X = 28;
-const PAD_Y = 24;
+const PAD_X = 20;
+const PAD_Y = 20;
 const BASE_PX = 13; // varsayılan yazı boyutu
 const PX_PER_PT = 1.411; // ekran px / punto
 const SIZE_PRESETS = [
