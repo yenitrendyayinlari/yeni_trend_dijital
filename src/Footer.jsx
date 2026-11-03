@@ -237,6 +237,7 @@ function LegalModal({ docKey, onClose }) {
 
 export default function Footer() {
   const [activeDoc, setActiveDoc] = useState(null);
+  const [openMenu, setOpenMenu] = useState(null); // açık açılır menü: 'sualink' | 'Kurumsal' | ... 
   const year = new Date().getFullYear();
 
   const linkGroups = [
@@ -264,164 +265,140 @@ export default function Footer() {
     }
   ];
 
+  const linkBtn = (item) => (
+    <button key={item.key} className="yt-fl-item" onClick={() => { setOpenMenu(null); setActiveDoc(item.key); }}>{item.label}</button>
+  );
+  const group = (title) => linkGroups.find((g) => g.title === title);
+
+  // Açılır menü içerikleri (başlığa tıklayınca yukarı doğru açılır)
+  const menus = {
+    sualink: {
+      title: SITE_NAME, side: 'left',
+      body: (
+        <>
+          <p className="yt-fl-text">Dijital sınav ve soru bankası platformu. Sorularınızı çözün, performansınızı takip edin.</p>
+        </>
+      )
+    },
+    Kurumsal: {
+      title: 'Kurumsal', side: 'left',
+      body: (
+        <>
+          {group('Kurumsal').items.map(linkBtn)}
+          <a className="yt-fl-item" href={`mailto:${COMPANY_EMAIL}`}>{COMPANY_EMAIL}</a>
+        </>
+      )
+    },
+    Yasal: {
+      title: 'Yasal', side: 'left',
+      body: (
+        <>
+          {group('Yasal').items.map(linkBtn)}
+          <a href={ETBIS_URL} target="_blank" rel="noopener noreferrer" className="yt-footer-etbis-link" title="ETBİS kaydını doğrula">
+            <img src="https://etbis-papi.ticaret.gov.tr/cms-api/MediaAndFile/GetFile?fileLink=etbis-cms/Settings/logo1.png" alt="e-ticaret Bilgi Platformu" loading="lazy" />
+          </a>
+        </>
+      )
+    },
+    Sipariş: { title: 'Sipariş', side: 'left', body: <>{group('Sipariş').items.map(linkBtn)}</> },
+    Sürdürülebilirlik: {
+      title: 'Sürdürülebilirlik', side: 'center',
+      body: (
+        <div className="yt-eco-badge" style={{ margin: 0, maxWidth: 'none' }}>
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 4.5 9.5 8.5h2.2v3H14v-3h2.3L12 4.5Z" fill="#2f7a3d" />
+            <path d="M6 19.5l-1.7-3 1.1-1.9 1.9 3.3-1.3 1.6Z" fill="#2f7a3d" />
+            <path d="M18 19.5l1.7-3-1.1-1.9-1.9 3.3 1.3 1.6Z" fill="#2f7a3d" />
+            <path d="M12 4.5c-3.5 0-6.4 1.8-8 4.5M20 9c-1.6-2.7-4.5-4.5-8-4.5M6 19.5H18M4.3 16.5c-.8-1.4-1.3-3-1.3-4.7M19.7 16.5c.8-1.4 1.3-3 1.3-4.7" stroke="#2f7a3d" strokeWidth="1.6" strokeLinecap="round" fill="none" />
+          </svg>
+          <p>Kağıt kullanmıyoruz.<br />Kargo göndermiyoruz.<br />%100 dijital olarak karbon ayak izimizi azaltıyoruz.</p>
+        </div>
+      )
+    },
+    'Güvenli Alışveriş': {
+      title: 'Güvenli Alışveriş', side: 'right',
+      body: (
+        <>
+          <div className="yt-footer-badges" style={{ marginTop: 0 }}>
+            <span className="yt-footer-badge">iyzico</span>
+            <span className="yt-footer-badge">VISA</span>
+            <span className="yt-footer-badge">Mastercard</span>
+            <span className="yt-footer-badge">Troy</span>
+            <span className="yt-footer-badge">3D Secure</span>
+          </div>
+          <p className="yt-footer-secure-note">Ödemeleriniz iyzico altyapısı üzerinden SSL ile şifrelenerek işlenir. Kart bilgileriniz sitemizde saklanmaz.</p>
+        </>
+      )
+    },
+  };
+
+  const trigger = (key, label) => {
+    const m = menus[key];
+    return (
+      <div className="yt-fl-wrap" key={key}>
+        <button className={`yt-fl-head${openMenu === key ? ' open' : ''}`} onClick={() => setOpenMenu(openMenu === key ? null : key)} aria-expanded={openMenu === key}>
+          {label || m.title}
+        </button>
+        {openMenu === key && (
+          <div className={`yt-fl-pop yt-fl-pop-${m.side}`} role="dialog">
+            <div className="yt-fl-pop-title">{m.title}</div>
+            {m.body}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <>
       <style>{`
-        .yt-footer {
-          border-top: 2px solid var(--yt-ink);
-          background: var(--yt-paper-2);
-          margin-top: 40px;
-        }
-        .yt-footer-inner {
-          max-width: 1100px;
-          margin: 0 auto;
-          padding: 40px 24px 24px;
-        }
-        .yt-footer-grid {
-          display: grid;
-          grid-template-columns: 1.4fr 1fr 1fr 1fr 1.2fr;
-          gap: 28px;
-        }
-        @media (max-width: 900px) {
-          .yt-footer-grid {
-            grid-template-columns: 1fr 1fr;
-          }
-        }
-        @media (max-width: 520px) {
-          .yt-footer-grid {
-            grid-template-columns: 1fr;
-          }
-        }
-        .yt-footer-brand-block img { height: 30px; width: auto; display: block; margin-bottom: 10px; }
-        .yt-footer-brand-block p {
-          font-size: 0.82rem; color: var(--yt-graphite); line-height: 1.6; max-width: 260px;
-        }
-        .yt-footer-col h4 {
-          font-family: var(--yt-font-mono); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em;
-          text-transform: uppercase; color: var(--yt-ink); margin: 0 0 12px;
-        }
-        .yt-footer-col ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
-        .yt-footer-col button.yt-footer-link {
-          background: none; border: none; padding: 0; cursor: pointer; text-align: left;
-          font-family: var(--yt-font-body); font-size: 0.84rem; color: var(--yt-graphite);
-        }
-        .yt-footer-col button.yt-footer-link:hover { color: var(--yt-ink); text-decoration: underline; }
-        .yt-footer-col a {
-          font-family: var(--yt-font-body); font-size: 0.84rem; color: var(--yt-graphite); text-decoration: none;
-        }
-        .yt-footer-col a:hover { color: var(--yt-ink); text-decoration: underline; }
+        .yt-footer { border-top: 1px solid var(--yt-line); background: var(--yt-paper-2); margin-top: 0; position: relative; }
+        .yt-footer-bar { max-width: 1400px; margin: 0 auto; padding: 4px 20px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 18px; min-height: 48px; }
+        .yt-fl-group { display: flex; flex-wrap: wrap; align-items: center; gap: 0 4px; }
+        .yt-fl-wrap { position: relative; }
+        .yt-fl-head { background: none; border: none; cursor: pointer; font-family: var(--yt-font-body); font-size: 0.86rem; color: var(--yt-graphite); padding: 12px 10px; border-radius: 6px; }
+        .yt-fl-head:hover, .yt-fl-head.open { color: var(--yt-ink); background: rgba(27,33,56,0.06); }
+        .yt-fl-pop { position: absolute; bottom: calc(100% + 4px); z-index: 60; min-width: 240px; max-width: 320px; background: #fff; border: 1px solid var(--yt-line); border-radius: 12px; box-shadow: 0 6px 24px rgba(27,33,56,0.18); padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+        .yt-fl-pop-left { left: 0; }
+        .yt-fl-pop-right { right: 0; }
+        .yt-fl-pop-center { left: 50%; transform: translateX(-50%); }
+        .yt-fl-pop-title { font-family: var(--yt-font-mono); font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--yt-ink); margin-bottom: 6px; }
+        .yt-fl-item { background: none; border: none; text-align: left; padding: 6px 0; cursor: pointer; font-family: var(--yt-font-body); font-size: 0.88rem; color: var(--yt-graphite); text-decoration: none; }
+        .yt-fl-item:hover { color: var(--yt-ink); text-decoration: underline; }
+        .yt-fl-text { font-size: 0.86rem; color: var(--yt-graphite); line-height: 1.55; margin: 0; }
+        .yt-fl-copy { font-family: var(--yt-font-mono); font-size: 0.72rem; color: var(--yt-graphite-soft); padding: 0 10px; }
         .yt-footer-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-        .yt-footer-badge {
-          font-family: var(--yt-font-mono); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.02em;
-          padding: 5px 9px; border-radius: 5px; border: 1.5px solid var(--yt-line); color: var(--yt-ink-2);
-          background: #fff;
-        }
-        .yt-footer-secure-note {
-          font-size: 0.76rem; color: var(--yt-graphite-soft); margin-top: 10px; line-height: 1.5;
-        }
-        .yt-footer-bottom {
-          border-top: 1px solid var(--yt-line); margin-top: 32px; padding-top: 18px;
-          display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center;
-        }
-        .yt-footer-bottom span {
-          font-family: var(--yt-font-mono); font-size: 0.72rem; color: var(--yt-graphite-soft);
-        }
-        .yt-footer-etbis-link {
-          display: inline-flex; align-items: center; margin-top: 12px;
-          padding: 4px; border: 1px solid var(--yt-line); border-radius: 6px;
-          background: #fff; transition: box-shadow 0.2s;
-        }
-        .yt-footer-etbis-link:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
-        .yt-footer-etbis-link img { height: 40px; width: auto; display: block; }
+        .yt-footer-badge { font-family: var(--yt-font-mono); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.02em; padding: 5px 9px; border-radius: 5px; border: 1.5px solid var(--yt-line); color: var(--yt-ink-2); background: #fff; }
+        .yt-footer-secure-note { font-size: 0.76rem; color: var(--yt-graphite-soft); margin: 10px 0 0; line-height: 1.5; }
+        .yt-footer-etbis-link { display: inline-flex; align-items: center; margin-top: 8px; padding: 4px; border: 1px solid var(--yt-line); border-radius: 6px; background: #fff; align-self: flex-start; }
+        .yt-footer-etbis-link img { height: 36px; width: auto; display: block; }
         .yt-legal-body p { font-size: 0.86rem; color: var(--yt-graphite); line-height: 1.65; margin: 0 0 14px; }
-        .yt-eco-badge {
-          display: flex; flex-direction: column; align-items: center; text-align: center;
-          gap: 6px; margin-top: 12px; max-width: 220px;
-          padding: 12px 14px; border-radius: 8px; background: #eef6ee;
-          border: 1px solid #d7ead9;
-        }
-        .yt-eco-badge svg { flex-shrink: 0; }
-        .yt-eco-badge p { font-size: 0.76rem; color: #2f7a3d; line-height: 1.5; font-weight: 600; margin: 0; }
+        .yt-eco-badge { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 12px 14px; border-radius: 8px; background: #eef6ee; border: 1px solid #d7ead9; }
+        .yt-eco-badge p { font-size: 0.78rem; color: #2f7a3d; line-height: 1.5; font-weight: 600; margin: 0; }
         .yt-legal-body strong { color: var(--yt-ink); }
+        @media (max-width: 700px) {
+          .yt-footer-bar { justify-content: center; padding: 6px 10px; }
+          .yt-fl-group { justify-content: center; }
+          .yt-fl-wrap { position: static; }
+          .yt-fl-pop { position: fixed; left: 12px !important; right: 12px !important; bottom: 12px; transform: none !important; max-width: none; z-index: 1100; }
+        }
       `}</style>
 
       <footer className="yt-footer">
-        <div className="yt-footer-inner">
-          <div className="yt-footer-grid">
-            <div className="yt-footer-brand-block">
-              <div style={{ fontFamily: 'var(--yt-font-display)', fontWeight: 700, fontSize: '1.05rem', color: 'var(--yt-ink)', marginBottom: '8px' }}>
-                {SITE_NAME}
-              </div>
-              <p>Dijital sınav ve soru bankası platformu. Sorularınızı çözün,
-                performansınızı takip edin.</p>
-              <div className="yt-eco-badge">
-                <svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                  <path d="M12 4.5 9.5 8.5h2.2v3H14v-3h2.3L12 4.5Z" fill="#2f7a3d" />
-                  <path d="M6 19.5l-1.7-3 1.1-1.9 1.9 3.3-1.3 1.6Z" fill="#2f7a3d" />
-                  <path d="M18 19.5l1.7-3-1.1-1.9-1.9 3.3 1.3 1.6Z" fill="#2f7a3d" />
-                  <path d="M12 4.5c-3.5 0-6.4 1.8-8 4.5M20 9c-1.6-2.7-4.5-4.5-8-4.5M6 19.5H18M4.3 16.5c-.8-1.4-1.3-3-1.3-4.7M19.7 16.5c.8-1.4 1.3-3 1.3-4.7"
-                    stroke="#2f7a3d" strokeWidth="1.6" strokeLinecap="round" fill="none" />
-                </svg>
-                <p>
-                  Kağıt kullanmıyoruz.<br />
-                  Kargo göndermiyoruz.<br />
-                  %100 dijital olarak karbon ayak izimizi azaltıyoruz.
-                </p>
-              </div>
-            </div>
-
-            {linkGroups.map(group => (
-              <div className="yt-footer-col" key={group.title}>
-                <h4>{group.title}</h4>
-                <ul>
-                  {group.items.map(item => (
-                    <li key={item.key}>
-                      <button className="yt-footer-link" onClick={() => setActiveDoc(item.key)}>
-                        {item.label}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-                {group.title === 'Yasal' && (
-                  <a
-                    href={ETBIS_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="yt-footer-etbis-link"
-                    title="ETBİS kaydını doğrula"
-                  >
-                    <img
-                      src="https://etbis-papi.ticaret.gov.tr/cms-api/MediaAndFile/GetFile?fileLink=etbis-cms/Settings/logo1.png"
-                      alt="e-ticaret Bilgi Platformu"
-                      loading="lazy"
-                    />
-                  </a>
-                )}
-              </div>
-            ))}
-
-            <div className="yt-footer-col">
-              <h4>Güvenli Alışveriş</h4>
-              <p style={{ fontSize: '0.84rem', color: 'var(--yt-graphite)', margin: '0 0 4px' }}>
-                <a href={`mailto:${COMPANY_EMAIL}`}>{COMPANY_EMAIL}</a>
-              </p>
-              <div className="yt-footer-badges">
-                <span className="yt-footer-badge">iyzico</span>
-                <span className="yt-footer-badge">VISA</span>
-                <span className="yt-footer-badge">Mastercard</span>
-                <span className="yt-footer-badge">Troy</span>
-                <span className="yt-footer-badge">3D Secure</span>
-              </div>
-              <p className="yt-footer-secure-note">
-                Ödemeleriniz iyzico altyapısı üzerinden SSL ile şifrelenerek işlenir.
-                Kart bilgileriniz sitemizde saklanmaz.
-              </p>
-            </div>
+        {openMenu && <div onClick={() => setOpenMenu(null)} style={{ position: 'fixed', inset: 0, zIndex: 55 }} />}
+        <div className="yt-footer-bar" style={{ position: 'relative', zIndex: 56 }}>
+          <div className="yt-fl-group">
+            {trigger('sualink')}
+            {trigger('Kurumsal')}
+            {trigger('Yasal')}
+            {trigger('Sipariş')}
           </div>
-
-          <div className="yt-footer-bottom">
-            <span>© {year} {SITE_URL} · Tüm hakları saklıdır.</span>
-            <span>{SITE_URL}</span>
+          <div className="yt-fl-group">
+            {trigger('Sürdürülebilirlik', '🌱 Sürdürülebilirlik')}
+          </div>
+          <div className="yt-fl-group">
+            {trigger('Güvenli Alışveriş', '🔒 Güvenli Alışveriş')}
+            <span className="yt-fl-copy">© {year} {SITE_URL}</span>
           </div>
         </div>
       </footer>
