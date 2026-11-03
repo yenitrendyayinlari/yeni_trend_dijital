@@ -378,6 +378,10 @@ export default function App() {
   const [showPoolImport, setShowPoolImport] = useState(false);
   const [dupMin, setDupMin] = useState(85);
   const [dupIdx, setDupIdx] = useState(0);
+  // Yeni ana sayfa (Google tarzı seçim ekranı): sınav / ders / mod / konu / kazanım seçimleri tarayıcıda hatırlanır.
+  const [hs, setHs] = useState(() => { try { return JSON.parse(localStorage.getItem('slHome') || '{}') || {}; } catch (e) { return {}; } });
+  const setHsP = (patch) => setHs((prev) => { const n = { ...prev, ...patch }; try { localStorage.setItem('slHome', JSON.stringify(n)); } catch (e) { /* önemsiz */ } return n; });
+  const [eclRows, setEclRows] = useState([]); // exam_category_lessons: sınav <-> ders bağlantısı
   const [fr, setFr] = useState(null); // Bul/Değiştir penceresi
   const [frJob, setFrJob] = useState(null); // PDF'leri yeniden çizdirilecek sorular {rows, undoRows, isUndo}
   const [frUndo, setFrUndo] = useState(null); // son değişikliğin geri alma bilgisi (yalnız bu oturumda)
@@ -1541,6 +1545,9 @@ export default function App() {
       .order('name');
     if (!outcomesError && outcomes) setLearningOutcomes(outcomes);
     else if (outcomesError) console.error('learning_outcomes okunamadı:', outcomesError);
+
+    const { data: eclData } = await supabase.from('exam_category_lessons').select('exam_category_id, lesson_category_id');
+    if (eclData) setEclRows(eclData);
 
     // Riskli kazanımların altında gösterilen ders notu (PDF) / video kaynakları.
     const { data: resourceRows, error: resourcesError } = await supabase
@@ -7898,6 +7905,113 @@ export default function App() {
     }
 
     if (!activeStudentExamId) {
+      // ---- Yeni ana sayfa: Google tarzı seçim ekranı. Eski ana sayfa için adres sonuna ?eski=1 ekleyin. ----
+      if (!new URLSearchParams(window.location.search).get('eski')) {
+        const sinavlar = [...examCategories].sort((x, y) => String(x.name).localeCompare(String(y.name), 'tr'));
+        const sinav = sinavlar.find((c) => String(c.id) === String(hs.exam)) || null;
+        const uniq = (arr) => arr.filter((n, i, r) => n && r.indexOf(n) === i).sort((x, y) => String(x).localeCompare(String(y), 'tr'));
+        const lessonIdSet = new Set();
+        if (sinav) {
+          eclRows.filter((r) => String(r.exam_category_id) === String(sinav.id)).forEach((r) => lessonIdSet.add(r.lesson_category_id));
+          lessonCategories.filter((l) => String(l.exam_category_id) === String(sinav.id)).forEach((l) => lessonIdSet.add(l.id));
+        }
+        const dersler = uniq(lessonCategories.filter((l) => lessonIdSet.has(l.id)).map((l) => l.name));
+        const ders = dersler.includes(hs.lesson) ? hs.lesson : '';
+        const dersIds = ders ? lessonCategories.filter((l) => l.name === ders).map((l) => l.id) : [];
+        const konular = uniq(topics.filter((t) => dersIds.includes(t.lesson_category_id)).map((t) => t.name));
+        const konu = konular.includes(hs.topic) ? hs.topic : '';
+        const konuIds = konu ? topics.filter((t) => dersIds.includes(t.lesson_category_id) && t.name === konu).map((t) => t.id) : [];
+        const kazanimlar = uniq(learningOutcomes.filter((o) => konuIds.includes(o.topic_id)).map((o) => o.name));
+        const kazanim = kazanimlar.includes(hs.outcome) ? hs.outcome : '';
+        const mod = ders ? hs.mode : '';
+        const denemeler = sinav && mod === 'deneme'
+          ? exams.filter((e) => e.isPublished && !e.parentId && (e.categoryExamType || '').trim() === String(sinav.name).trim())
+          : [];
+        return (
+          <div className="yt-shell" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+            <TopBanner />
+            <style>{`
+              .sl-home-top { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 12px 20px; flex-wrap: wrap; }
+              .sl-home-main { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 6vh 20px 60px; }
+              .sl-home-logo { width: min(340px, 78vw); height: auto; display: block; }
+              .sl-home-tag { margin: 10px 0 26px; color: var(--yt-graphite); font-size: 0.95rem; text-align: center; }
+              .sl-home-card { width: min(920px, 100%); }
+              .sl-home-row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+              .sl-sel { flex: 1 1 200px; max-width: 280px; min-width: 170px; padding: 13px 18px; border-radius: 28px; border: 1.5px solid var(--yt-line); background: #fff; font-size: 0.98rem; font-family: inherit; color: var(--yt-ink); box-shadow: 0 1px 6px rgba(27,33,56,0.08); cursor: pointer; }
+              .sl-sel:hover:not(:disabled) { box-shadow: 0 2px 10px rgba(27,33,56,0.16); }
+              .sl-sel:focus { outline: none; border-color: var(--yt-ink); }
+              .sl-sel:disabled { background: #f6f5f1; color: var(--yt-graphite-soft); cursor: not-allowed; box-shadow: none; }
+              .sl-mode { display: flex; gap: 12px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
+              .sl-mode button { padding: 12px 26px; border-radius: 24px; border: 1.5px solid var(--yt-line); background: #f8f9fa; font-size: 0.98rem; font-family: inherit; cursor: pointer; color: var(--yt-ink); }
+              .sl-mode button:hover { border-color: var(--yt-ink); }
+              .sl-mode button.on { background: var(--yt-ink); color: #fff; border-color: var(--yt-ink); }
+              .sl-go { margin-top: 20px; display: flex; justify-content: center; }
+              .sl-go button { padding: 13px 40px; border-radius: 28px; border: none; background: #0b86f6; color: #fff; font-size: 1.02rem; font-weight: 700; cursor: pointer; font-family: inherit; }
+              .sl-dlist { margin-top: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+              @media (max-width: 640px) { .sl-dlist { grid-template-columns: 1fr; } .sl-sel { max-width: none; flex-basis: 100%; } }
+              .sl-d { text-align: left; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--yt-line); background: #fff; cursor: pointer; font-family: inherit; font-size: 0.95rem; color: var(--yt-ink); }
+              .sl-d:hover { border-color: var(--yt-ink); }
+            `}</style>
+            <div className="sl-home-top">{renderHeaderRight()}</div>
+            <div className="sl-home-main">
+              <img src={sualinkLogo} alt="Sualink" className="sl-home-logo" />
+              <div className="sl-home-card">
+                <div className="sl-home-row" style={{ marginTop: '28px' }}>
+                  <select className="sl-sel" value={sinav ? String(sinav.id) : ''} onChange={(e) => setHsP({ exam: e.target.value, lesson: '', mode: '', topic: '', outcome: '' })}>
+                    <option value="">Sınav seçin</option>
+                    {sinavlar.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                  </select>
+                  {sinav && (
+                    <select className="sl-sel" value={ders} onChange={(e) => setHsP({ lesson: e.target.value, mode: '', topic: '', outcome: '' })}>
+                      <option value="">Ders seçin</option>
+                      {dersler.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  )}
+                  {ders && mod === 'konu' && (
+                    <select className="sl-sel" value={konu} onChange={(e) => setHsP({ topic: e.target.value, outcome: '' })}>
+                      <option value="">Tüm konular</option>
+                      {konular.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  )}
+                  {ders && mod === 'konu' && konu && kazanimlar.length > 0 && (
+                    <select className="sl-sel" value={kazanim} onChange={(e) => setHsP({ outcome: e.target.value })}>
+                      <option value="">Tüm kazanımlar</option>
+                      {kazanimlar.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  )}
+                </div>
+                {sinav && ders && (
+                  <div className="sl-mode">
+                    <button className={mod === 'konu' ? 'on' : ''} onClick={() => setHsP({ mode: 'konu' })}>Konu testi</button>
+                    <button className={mod === 'deneme' ? 'on' : ''} onClick={() => setHsP({ mode: 'deneme' })}>Deneme</button>
+                  </div>
+                )}
+                {mod === 'konu' && (
+                  <div className="sl-go">
+                    <button onClick={() => alert('Konu testi çözme ekranı bir sonraki aşamada eklenecek.')}>Başla</button>
+                  </div>
+                )}
+                {mod === 'deneme' && (
+                  denemeler.length > 0 ? (
+                    <div className="sl-dlist">
+                      {denemeler.map((e) => (
+                        <button key={e.id} className="sl-d" onClick={() => setInspectingExamId(e.id)}>{e.name}</button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p style={{ textAlign: 'center', color: 'var(--yt-graphite)', marginTop: '22px' }}>Bu sınav için henüz deneme eklenmedi.</p>
+                  )
+                )}
+              </div>
+            </div>
+            <Footer />
+            {renderCartDrawer()}
+            {renderBillingGateModal()}
+            {renderNotifDrawer()}
+            {renderAuthModal()}
+          </div>
+        );
+      }
       const publishedExams = exams.filter(e => {
         if (!e.isPublished) return false;
         if (e.parentId) return false;
