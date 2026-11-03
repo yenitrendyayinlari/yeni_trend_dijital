@@ -8,7 +8,7 @@ import SecurePdfViewer from './SecurePdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
 import sualinkLogo from './sualinklogo.png';
-import sualinkSembol from './sualink-sembol.png';
+import sualinkLogoYeni from './sualink-logo-yeni.png';
 import TopBanner, { TopBannerManageButton } from './TopBanner';
 import { SignupBonusManageButton } from './SignupBonus';
 import BalanceGiftModal from './BalanceGiftModal';
@@ -7932,14 +7932,10 @@ export default function App() {
           <div className="yt-shell" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
             <TopBanner />
             <style>{`
-              @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@500&display=swap');
               .sl-home-top { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 12px 20px; flex-wrap: wrap; }
               .sl-home-main { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 15vh 20px 60px; }
-              .sl-brand { display: flex; align-items: center; gap: 14px; }
-              .sl-brand img { height: 78px; width: auto; display: block; }
-              .sl-brand-t { font-family: 'Poppins', 'Inter', sans-serif; font-weight: 500; font-size: 54px; line-height: 1; letter-spacing: 0.06em; color: #021f49; }
-              .sl-brand-t b { color: #0096f5; font-weight: 500; }
-              @media (max-width: 520px) { .sl-brand img { height: 58px; } .sl-brand-t { font-size: 38px; } .sl-home-main { padding-top: 10vh; } }
+              .sl-logo-yeni { width: min(430px, 80vw); height: auto; display: block; }
+              @media (max-width: 520px) { .sl-home-main { padding-top: 10vh; } }
               .sl-pill { display: flex; align-items: stretch; width: min(640px, 100%); margin: 0 auto; background: #fff; border: 1.5px solid var(--yt-line); border-radius: 32px; box-shadow: 0 1px 8px rgba(27,33,56,0.10); overflow: hidden; }
               .sl-pill:hover { box-shadow: 0 2px 14px rgba(27,33,56,0.16); }
               .sl-pill select { flex: 1 1 0; min-width: 0; border: none; background: transparent; padding: 16px 22px; font-size: 1rem; font-family: inherit; color: var(--yt-ink); cursor: pointer; outline: none; }
@@ -7966,10 +7962,7 @@ export default function App() {
             `}</style>
             <div className="sl-home-top">{renderHeaderRight()}</div>
             <div className="sl-home-main">
-              <div className="sl-brand" aria-label="Sualink">
-                <img src={sualinkSembol} alt="" />
-                <span className="sl-brand-t">SUAL<b>ink</b></span>
-              </div>
+              <img src={sualinkLogoYeni} alt="Sualink" className="sl-logo-yeni" />
               <div className="sl-home-card">
                 <div className="sl-pill" style={{ marginTop: '36px' }}>
                   <select value={sinav ? String(sinav.id) : ''} onChange={(e) => setHsP({ exam: e.target.value, lesson: '', mode: '', topic: '', outcome: '' })} aria-label="Sınav">
