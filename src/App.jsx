@@ -7934,6 +7934,8 @@ export default function App() {
             <style>{`
               .sl-home-top { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 12px 20px; flex-wrap: wrap; }
               .sl-home-main { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 15vh 20px 60px; }
+              .sl-tik { width: 22px; height: 22px; flex: none; }
+              .sl-slogan { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; margin: 18px 0 0; font-size: 1.12rem; font-weight: 600; color: var(--yt-ink); letter-spacing: 0.01em; text-align: center; }
               .sl-logo-yeni { width: min(430px, 80vw); height: auto; display: block; }
               @media (max-width: 520px) { .sl-home-main { padding-top: 10vh; } }
               .sl-pill { display: flex; align-items: stretch; width: min(640px, 100%); margin: 0 auto; background: #fff; border: 1.5px solid var(--yt-line); border-radius: 32px; box-shadow: 0 1px 8px rgba(27,33,56,0.10); overflow: hidden; }
@@ -7963,8 +7965,17 @@ export default function App() {
             <div className="sl-home-top">{renderHeaderRight()}</div>
             <div className="sl-home-main">
               <img src={sualinkLogoYeni} alt="Sualink" className="sl-logo-yeni" />
+              <p className="sl-slogan">
+                Senin sınavın
+                <svg className="sl-tik" viewBox="0 0 24 24" aria-hidden="true">
+                  <defs><linearGradient id="slTikG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#12bfff" /><stop offset="1" stopColor="#0a78ff" /></linearGradient></defs>
+                  <circle cx="12" cy="12" r="12" fill="url(#slTikG)" />
+                  <path d="M6.6 12.4l3.6 3.7 7.2-7.8" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Senin seçimin
+              </p>
               <div className="sl-home-card">
-                <div className="sl-pill" style={{ marginTop: '36px' }}>
+                <div className="sl-pill" style={{ marginTop: '22px' }}>
                   <select value={sinav ? String(sinav.id) : ''} onChange={(e) => setHsP({ exam: e.target.value, lesson: '', mode: '', topic: '', outcome: '' })} aria-label="Sınav">
                     <option value="">Sınav seçin</option>
                     {sinavlar.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
