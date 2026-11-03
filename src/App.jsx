@@ -8,6 +8,7 @@ import SecurePdfViewer from './SecurePdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
 import sualinkLogo from './sualinklogo.png';
+import sualinkSembol from './sualink-sembol.png';
 import TopBanner, { TopBannerManageButton } from './TopBanner';
 import { SignupBonusManageButton } from './SignupBonus';
 import BalanceGiftModal from './BalanceGiftModal';
@@ -7908,7 +7909,7 @@ export default function App() {
       // ---- Yeni ana sayfa: Google tarzı seçim ekranı. Eski ana sayfa için adres sonuna ?eski=1 ekleyin. ----
       if (!new URLSearchParams(window.location.search).get('eski')) {
         const sinavlar = [...examCategories].sort((x, y) => String(x.name).localeCompare(String(y.name), 'tr'));
-        const sinav = sinavlar.find((c) => String(c.id) === String(hs.exam)) || null;
+        const sinav = sinavlar.find((c) => String(c.id) === String(hs.exam)) || sinavlar.find((c) => /kpss/i.test(c.name)) || null; // varsayılan: KPSS
         const uniq = (arr) => arr.filter((n, i, r) => n && r.indexOf(n) === i).sort((x, y) => String(x).localeCompare(String(y), 'tr'));
         const lessonIdSet = new Set();
         if (sinav) {
@@ -7931,9 +7932,20 @@ export default function App() {
           <div className="yt-shell" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
             <TopBanner />
             <style>{`
+              @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@500&display=swap');
               .sl-home-top { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 12px 20px; flex-wrap: wrap; }
-              .sl-home-main { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 6vh 20px 60px; }
-              .sl-home-logo { width: min(340px, 78vw); height: auto; display: block; }
+              .sl-home-main { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 15vh 20px 60px; }
+              .sl-brand { display: flex; align-items: center; gap: 14px; }
+              .sl-brand img { height: 78px; width: auto; display: block; }
+              .sl-brand-t { font-family: 'Poppins', 'Inter', sans-serif; font-weight: 500; font-size: 54px; line-height: 1; letter-spacing: 0.06em; color: #021f49; }
+              .sl-brand-t b { color: #0096f5; font-weight: 500; }
+              @media (max-width: 520px) { .sl-brand img { height: 58px; } .sl-brand-t { font-size: 38px; } .sl-home-main { padding-top: 10vh; } }
+              .sl-pill { display: flex; align-items: stretch; width: min(640px, 100%); margin: 0 auto; background: #fff; border: 1.5px solid var(--yt-line); border-radius: 32px; box-shadow: 0 1px 8px rgba(27,33,56,0.10); overflow: hidden; }
+              .sl-pill:hover { box-shadow: 0 2px 14px rgba(27,33,56,0.16); }
+              .sl-pill select { flex: 1 1 0; min-width: 0; border: none; background: transparent; padding: 16px 22px; font-size: 1rem; font-family: inherit; color: var(--yt-ink); cursor: pointer; outline: none; }
+              .sl-pill select:disabled { color: var(--yt-graphite-soft); cursor: not-allowed; }
+              .sl-pill-div { width: 1.5px; background: var(--yt-line); margin: 10px 0; flex: none; }
+              @media (max-width: 520px) { .sl-pill { flex-direction: column; border-radius: 22px; } .sl-pill-div { width: auto; height: 1.5px; margin: 0 14px; } }
               .sl-home-tag { margin: 10px 0 26px; color: var(--yt-graphite); font-size: 0.95rem; text-align: center; }
               .sl-home-card { width: min(920px, 100%); }
               .sl-home-row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
@@ -7954,19 +7966,23 @@ export default function App() {
             `}</style>
             <div className="sl-home-top">{renderHeaderRight()}</div>
             <div className="sl-home-main">
-              <img src={sualinkLogo} alt="Sualink" className="sl-home-logo" />
+              <div className="sl-brand" aria-label="Sualink">
+                <img src={sualinkSembol} alt="" />
+                <span className="sl-brand-t">SUAL<b>ink</b></span>
+              </div>
               <div className="sl-home-card">
-                <div className="sl-home-row" style={{ marginTop: '28px' }}>
-                  <select className="sl-sel" value={sinav ? String(sinav.id) : ''} onChange={(e) => setHsP({ exam: e.target.value, lesson: '', mode: '', topic: '', outcome: '' })}>
+                <div className="sl-pill" style={{ marginTop: '36px' }}>
+                  <select value={sinav ? String(sinav.id) : ''} onChange={(e) => setHsP({ exam: e.target.value, lesson: '', mode: '', topic: '', outcome: '' })} aria-label="Sınav">
                     <option value="">Sınav seçin</option>
                     {sinavlar.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
                   </select>
-                  {sinav && (
-                    <select className="sl-sel" value={ders} onChange={(e) => setHsP({ lesson: e.target.value, mode: '', topic: '', outcome: '' })}>
-                      <option value="">Ders seçin</option>
-                      {dersler.map((n) => <option key={n} value={n}>{n}</option>)}
-                    </select>
-                  )}
+                  <div className="sl-pill-div" />
+                  <select value={ders} disabled={!sinav} onChange={(e) => setHsP({ lesson: e.target.value, mode: '', topic: '', outcome: '' })} aria-label="Ders">
+                    <option value="">Ders seçin</option>
+                    {dersler.map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </div>
+                <div className="sl-home-row" style={{ marginTop: '14px' }}>
                   {ders && mod === 'konu' && (
                     <select className="sl-sel" value={konu} onChange={(e) => setHsP({ topic: e.target.value, outcome: '' })}>
                       <option value="">Tüm konular</option>
