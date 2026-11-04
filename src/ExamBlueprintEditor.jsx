@@ -1,6 +1,7 @@
 // Sınav içeriği / soru dağılımı: Sınav > Ders > Konu > Kazanım ağacı, her seviyede o sınavdaki soru sayısı.
-// Kurallar: bir üst seviyenin sayısı, alt seviyelerinin toplamına eşit olmalı (alt seviyeye sayı girildiyse);
-// tutmayan satır kırmızı gösterilir ve Kaydet engellenir. Kaydedilenler:
+// Kurallar: Ders sayısı = konu sayılarının toplamı (tam eşit olmalı). Konu sayısı >= kazanımlara yazılan KESİN sayıların toplamı;
+// kazanım kutusu boşsa "serbest" (denemede kalan sorular o konunun kazanımlarından rastgele gelir). Kurala uymayan satır
+// kırmızı gösterilir ve Kaydet engellenir. Ders / konu / kazanım sırası ▲▼ ile belirlenir (sınava özel). Kaydedilenler:
 //   exam_category_lessons (ders, soru sayısı, sıra), exam_distribution (konu / kazanım sayıları),
 //   exam_categories (süre, yanlış katsayısı).
 import { useState, useEffect } from 'react';
@@ -17,6 +18,8 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
   const [lessons, setLessons] = useState([]); // [{id, count}] -- sıra = dizi sırası
   const [tCount, setTCount] = useState({});
   const [oCount, setOCount] = useState({});
+  const [tSort, setTSort] = useState({}); // konu id -> sıra
+  const [oSort, setOSort] = useState({}); // kazanım id -> sıra
   const [open, setOpen] = useState({});
   const [pool, setPool] = useState({ lesson: {}, topic: {}, outcome: {} });
   const [poolReady, setPoolReady] = useState(false);
@@ -32,7 +35,7 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
         if (ex.error) throw new Error('Sınav bilgileri okunamadı (sinav_dagilimi.sql çalıştırıldı mı?): ' + ex.error.message);
         const el = await supabase.from('exam_category_lessons').select('lesson_category_id, question_count, sort_order').eq('exam_category_id', exam.id);
         if (el.error) throw new Error('Dersler okunamadı (sinav_dagilimi.sql çalıştırıldı mı?): ' + el.error.message);
-        const ds = await supabase.from('exam_distribution').select('level, ref_id, question_count').eq('exam_category_id', exam.id);
+        const ds = await supabase.from('exam_distribution').select('level, ref_id, question_count, sort_order').eq('exam_category_id', exam.id);
         if (ds.error) throw new Error('Dağılım okunamadı (sinav_dagilimi.sql çalıştırıldı mı?): ' + ds.error.message);
         if (dead) return;
         const row = ex.data || {};
@@ -41,9 +44,12 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
         const nameOf = (id) => (lessonCategories.find((l) => l.id === id) || {}).name || '';
         const ls = (el.data || []).slice().sort((a, b) => (a.sort_order - b.sort_order) || trSort(nameOf(a.lesson_category_id), nameOf(b.lesson_category_id)));
         setLessons(ls.map((r) => ({ id: r.lesson_category_id, count: r.question_count ? String(r.question_count) : '' })));
-        const t = {}, o = {};
-        (ds.data || []).forEach((r) => { (r.level === 'topic' ? t : o)[r.ref_id] = String(r.question_count); });
-        setTCount(t); setOCount(o);
+        const t = {}, o = {}, ts = {}, os = {};
+        (ds.data || []).forEach((r) => {
+          if (r.level === 'topic') { if (r.question_count > 0) t[r.ref_id] = String(r.question_count); ts[r.ref_id] = r.sort_order || 0; }
+          else { if (r.question_count > 0) o[r.ref_id] = String(r.question_count); os[r.ref_id] = r.sort_order || 0; }
+        });
+        setTCount(t); setOCount(o); setTSort(ts); setOSort(os);
         setLoading(false);
       } catch (e) { if (!dead) { setLoadErr(e.message); setLoading(false); } }
     })();
@@ -90,18 +96,25 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
     const ts = topics.filter((t) => t.lesson_category_id === l.id);
     const cnt = toInt(l.count);
     const sumT = ts.reduce((s, t) => s + toInt(tCount[t.id]), 0);
-    if (sumT > 0 && sumT !== cnt) { checks.lesson[l.id] = { err: `Konuların toplamı ${sumT}, ders sayısı ${cnt} olmalı` }; errCount++; }
-    else if (cnt > 0 && sumT === 0 && ts.length > 0) checks.lesson[l.id] = { note: 'Konu dağılımı girilmedi' };
+    if (ts.length > 0 && sumT !== cnt) { checks.lesson[l.id] = { err: `Konuların toplamı ${sumT}, ders sayısı ${cnt} olmalı` }; errCount++; }
     ts.forEach((t) => {
       const os = learningOutcomes.filter((o) => o.topic_id === t.id);
       const tc = toInt(tCount[t.id]);
       const sumO = os.reduce((s, o) => s + toInt(oCount[o.id]), 0);
-      if (sumO > 0 && sumO !== tc) { checks.topic[t.id] = { err: `Kazanımların toplamı ${sumO}, konu sayısı ${tc} olmalı` }; errCount++; }
-      else if (tc > 0 && sumO === 0 && os.length > 0) checks.topic[t.id] = { note: 'Kazanım dağılımı girilmedi' };
+      if (sumO > tc) { checks.topic[t.id] = { err: `Kesin kazanımların toplamı ${sumO}, konu sayısı ${tc}'i aşıyor` }; errCount++; }
+      else if (tc > 0 && os.length > 0) checks.topic[t.id] = { note: sumO === tc ? `${tc} soru kesin (hepsi kazanımlara dağıtıldı)` : (sumO > 0 ? `${sumO} soru kesin, ${tc - sumO} soru serbest (kazanımlardan rastgele)` : `${tc} soru serbest (kazanımlardan rastgele)`) };
     });
   });
   const total = lessons.reduce((s, l) => s + toInt(l.count), 0);
 
+  const sorted = (arr, sortMap) => arr.slice().sort((a, b) => ((sortMap[a.id] != null ? sortMap[a.id] : 1e6) - (sortMap[b.id] != null ? sortMap[b.id] : 1e6)) || trSort(a.name, b.name));
+  // Bir grubun (dersin konuları / konunun kazanımları) sırasını yukarı-aşağı kaydır; tüm grubun sırasını yeniden numaralandır
+  const moveIn = (list, sortMap, setSortMap, idx, d) => {
+    const j = idx + d;
+    if (j < 0 || j >= list.length) return;
+    const c = list.slice(); [c[idx], c[j]] = [c[j], c[idx]];
+    setSortMap((p) => { const n = { ...p }; c.forEach((x, k) => { n[x.id] = k; }); return n; });
+  };
   const move = (i, d) => setLessons((arr) => { const j = i + d; if (j < 0 || j >= arr.length) return arr; const c = arr.slice(); [c[i], c[j]] = [c[j], c[i]]; return c; });
   const addLesson = () => {
     const id = Number(addSel);
@@ -139,12 +152,10 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
       if (del2.error) throw new Error(del2.error.message);
       const dist = [];
       lessons.forEach((l) => {
-        topics.filter((t) => t.lesson_category_id === l.id).forEach((t) => {
-          const tc = toInt(tCount[t.id]);
-          if (tc > 0) dist.push({ exam_category_id: exam.id, level: 'topic', ref_id: t.id, question_count: tc });
-          learningOutcomes.filter((o) => o.topic_id === t.id).forEach((o) => {
-            const oc = toInt(oCount[o.id]);
-            if (oc > 0) dist.push({ exam_category_id: exam.id, level: 'outcome', ref_id: o.id, question_count: oc });
+        sorted(topics.filter((t) => t.lesson_category_id === l.id), tSort).forEach((t, ti) => {
+          dist.push({ exam_category_id: exam.id, level: 'topic', ref_id: t.id, question_count: toInt(tCount[t.id]), sort_order: ti });
+          sorted(learningOutcomes.filter((o) => o.topic_id === t.id), oSort).forEach((o, oi) => {
+            dist.push({ exam_category_id: exam.id, level: 'outcome', ref_id: o.id, question_count: toInt(oCount[o.id]), sort_order: oi });
           });
         });
       });
@@ -159,9 +170,15 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
   };
 
   // ---- Görünüm ----
-  const numInp = (value, onChange, hasErr) => (
-    <input type="text" inputMode="numeric" value={value} placeholder="0" onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, ''))}
+  const numInp = (value, onChange, hasErr, ph = '0') => (
+    <input type="text" inputMode="numeric" value={value} placeholder={ph} onChange={(e) => onChange(e.target.value.replace(/[^\d]/g, ''))}
       style={{ width: '54px', padding: '5px 6px', textAlign: 'center', borderRadius: '6px', border: `1.5px solid ${hasErr ? '#dc2626' : '#cbd5e1'}`, backgroundColor: hasErr ? '#fef2f2' : '#fff', fontSize: '0.88rem' }} />
+  );
+  const upDown = (onUp, onDown, firstRow, lastRow) => (
+    <>
+      <button type="button" onClick={onUp} disabled={firstRow} title="Yukarı" style={{ border: 'none', background: 'none', cursor: 'pointer', opacity: firstRow ? 0.25 : 1, padding: '0 2px' }}>▲</button>
+      <button type="button" onClick={onDown} disabled={lastRow} title="Aşağı" style={{ border: 'none', background: 'none', cursor: 'pointer', opacity: lastRow ? 0.25 : 1, padding: '0 2px' }}>▼</button>
+    </>
   );
   const arrow = (k) => (
     <button type="button" onClick={() => setOpen((p) => ({ ...p, [k]: !p[k] }))} style={{ border: 'none', background: 'none', cursor: 'pointer', width: '20px', color: '#64748b' }}>{open[k] ? '▾' : '▸'}</button>
@@ -198,7 +215,7 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
             <div style={{ overflowY: 'auto', flex: 1, minHeight: '200px', padding: '8px 0' }}>
               {lessons.length === 0 && <p style={{ color: '#94a3b8', fontSize: '0.86rem' }}>Bu sınava henüz ders eklenmedi. Aşağıdan ekleyin.</p>}
               {lessons.map((l, i) => {
-                const ts = topics.filter((t) => t.lesson_category_id === l.id).sort((a, b) => trSort(a.name, b.name));
+                const ts = sorted(topics.filter((t) => t.lesson_category_id === l.id), tSort);
                 const c = checks.lesson[l.id];
                 const lcnt = toInt(l.count);
                 return (
@@ -216,8 +233,8 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
                     {open['l:' + l.id] && (
                       <div style={{ paddingLeft: '26px', paddingTop: '4px' }}>
                         {ts.length === 0 && <p style={{ color: '#cbd5e1', fontSize: '0.76rem', margin: '4px 0' }}>Bu derse bağlı konu yok.</p>}
-                        {ts.map((t) => {
-                          const os = learningOutcomes.filter((o) => o.topic_id === t.id).sort((a, b) => trSort(a.name, b.name));
+                        {ts.map((t, ti) => {
+                          const os = sorted(learningOutcomes.filter((o) => o.topic_id === t.id), oSort);
                           const tc = checks.topic[t.id];
                           const tcnt = toInt(tCount[t.id]);
                           return (
@@ -227,17 +244,19 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
                                 <span style={{ flex: 1, fontSize: '0.88rem' }}>{t.name} <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>({os.length} kazanım)</span></span>
                                 {poolBadge(pool.topic[t.id], tcnt)}
                                 {numInp(tCount[t.id] || '', (v) => setTCount((p) => ({ ...p, [t.id]: v })), !!(tc && tc.err))}
+                                {upDown(() => moveIn(ts, tSort, setTSort, ti, -1), () => moveIn(ts, tSort, setTSort, ti, 1), ti === 0, ti === ts.length - 1)}
                               </div>
                               {statusText(tc)}
                               {open['t:' + t.id] && (
                                 <div style={{ paddingLeft: '26px' }}>
                                   {os.length === 0 && <p style={{ color: '#cbd5e1', fontSize: '0.74rem', margin: '3px 0' }}>Bu konuya bağlı kazanım yok.</p>}
-                                  {os.map((o) => (
+                                  {os.map((o, oi) => (
                                     <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '3px 0' }}>
                                       <span style={{ width: '20px' }} />
                                       <span style={{ flex: 1, fontSize: '0.82rem', color: '#475569' }}>{o.name}</span>
                                       {poolBadge(pool.outcome[o.id], toInt(oCount[o.id]))}
-                                      {numInp(oCount[o.id] || '', (v) => setOCount((p) => ({ ...p, [o.id]: v })), false)}
+                                      {numInp(oCount[o.id] || '', (v) => setOCount((p) => ({ ...p, [o.id]: v })), false, '–')}
+                                      {upDown(() => moveIn(os, oSort, setOSort, oi, -1), () => moveIn(os, oSort, setOSort, oi, 1), oi === 0, oi === os.length - 1)}
                                     </div>
                                   ))}
                                 </div>

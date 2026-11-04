@@ -383,6 +383,7 @@ export default function App() {
   // Yeni ana sayfa (Google tarzı seçim ekranı): sınav / ders / mod / konu / kazanım seçimleri tarayıcıda hatırlanır.
   const [hs, setHs] = useState(() => { try { return JSON.parse(localStorage.getItem('slHome') || '{}') || {}; } catch (e) { return {}; } });
   const setHsP = (patch) => setHs((prev) => { const n = { ...prev, ...patch }; try { localStorage.setItem('slHome', JSON.stringify(n)); } catch (e) { /* önemsiz */ } return n; });
+  const [distRows, setDistRows] = useState([]); // exam_distribution: konu/kazanım sırası (ve soru dağılımı)
   const [eclRows, setEclRows] = useState([]); // exam_category_lessons: sınav <-> ders bağlantısı
   const [bpExam, setBpExam] = useState(null); // Sınav içeriği / soru dağılımı penceresi (açık sınav kaydı)
   const [mgrNewExam, setMgrNewExam] = useState(''); // Tanımla > Sınavlar: yeni sınav adı
@@ -1553,6 +1554,8 @@ export default function App() {
     let eclRes = await supabase.from('exam_category_lessons').select('exam_category_id, lesson_category_id, sort_order, question_count');
     if (eclRes.error) eclRes = await supabase.from('exam_category_lessons').select('exam_category_id, lesson_category_id'); // sinav_dagilimi.sql henüz çalıştırılmadıysa
     if (eclRes.data) setEclRows(eclRes.data);
+    const distRes = await supabase.from('exam_distribution').select('exam_category_id, level, ref_id, sort_order');
+    if (distRes.data) setDistRows(distRes.data);
 
     // Riskli kazanımların altında gösterilen ders notu (PDF) / video kaynakları.
     const { data: resourceRows, error: resourcesError } = await supabase
@@ -7958,10 +7961,18 @@ export default function App() {
           .filter((n, i, r) => n && r.indexOf(n) === i);
         const ders = dersler.includes(hs.lesson) ? hs.lesson : '';
         const dersIds = ders ? lessonCategories.filter((l) => l.name === ders).map((l) => l.id) : [];
-        const konular = uniq(topics.filter((t) => dersIds.includes(t.lesson_category_id)).map((t) => t.name));
+        // Konu / kazanım sırası: Tanımla > Sınavlar > İçerik ve dağılım'da verilen sıra; sırası olmayanlar sona, alfabetik
+        const sortOf = { topic: {}, outcome: {} };
+        if (sinav) distRows.filter((r) => String(r.exam_category_id) === String(sinav.id)).forEach((r) => { sortOf[r.level][r.ref_id] = r.sort_order || 0; });
+        const ordNames = (items, level) => items
+          .map((x) => ({ name: x.name, o: sortOf[level][x.id] != null ? sortOf[level][x.id] : 9999 }))
+          .sort((x, y) => (x.o - y.o) || String(x.name).localeCompare(String(y.name), 'tr'))
+          .map((x) => x.name)
+          .filter((n, i, r) => n && r.indexOf(n) === i);
+        const konular = ordNames(topics.filter((t) => dersIds.includes(t.lesson_category_id)), 'topic');
         const konu = konular.includes(hs.topic) ? hs.topic : '';
         const konuIds = konu ? topics.filter((t) => dersIds.includes(t.lesson_category_id) && t.name === konu).map((t) => t.id) : [];
-        const kazanimlar = uniq(learningOutcomes.filter((o) => konuIds.includes(o.topic_id)).map((o) => o.name));
+        const kazanimlar = ordNames(learningOutcomes.filter((o) => konuIds.includes(o.topic_id)), 'outcome');
         const kazanim = kazanimlar.includes(hs.outcome) ? hs.outcome : '';
         const mod = ders ? hs.mode : '';
         const denemeler = sinav && mod === 'deneme'
