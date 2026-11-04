@@ -13,6 +13,7 @@ import TopBanner, { TopBannerManageButton } from './TopBanner';
 import { SignupBonusManageButton } from './SignupBonus';
 import BalanceGiftModal from './BalanceGiftModal';
 import Footer from './Footer';
+import ExamBlueprintEditor from './ExamBlueprintEditor';
 
 // --- Meta (Facebook/Instagram) Pixel ---
 // Temel kod ve otomatik PageView, index.html'de. Burada sadece sitedeki
@@ -383,6 +384,8 @@ export default function App() {
   const [hs, setHs] = useState(() => { try { return JSON.parse(localStorage.getItem('slHome') || '{}') || {}; } catch (e) { return {}; } });
   const setHsP = (patch) => setHs((prev) => { const n = { ...prev, ...patch }; try { localStorage.setItem('slHome', JSON.stringify(n)); } catch (e) { /* önemsiz */ } return n; });
   const [eclRows, setEclRows] = useState([]); // exam_category_lessons: sınav <-> ders bağlantısı
+  const [bpExam, setBpExam] = useState(null); // Sınav içeriği / soru dağılımı penceresi (açık sınav kaydı)
+  const [mgrNewExam, setMgrNewExam] = useState(''); // Tanımla > Sınavlar: yeni sınav adı
   const [fr, setFr] = useState(null); // Bul/Değiştir penceresi
   const [frJob, setFrJob] = useState(null); // PDF'leri yeniden çizdirilecek sorular {rows, undoRows, isUndo}
   const [frUndo, setFrUndo] = useState(null); // son değişikliğin geri alma bilgisi (yalnız bu oturumda)
@@ -1547,8 +1550,9 @@ export default function App() {
     if (!outcomesError && outcomes) setLearningOutcomes(outcomes);
     else if (outcomesError) console.error('learning_outcomes okunamadı:', outcomesError);
 
-    const { data: eclData } = await supabase.from('exam_category_lessons').select('exam_category_id, lesson_category_id');
-    if (eclData) setEclRows(eclData);
+    let eclRes = await supabase.from('exam_category_lessons').select('exam_category_id, lesson_category_id, sort_order, question_count');
+    if (eclRes.error) eclRes = await supabase.from('exam_category_lessons').select('exam_category_id, lesson_category_id'); // sinav_dagilimi.sql henüz çalıştırılmadıysa
+    if (eclRes.data) setEclRows(eclRes.data);
 
     // Riskli kazanımların altında gösterilen ders notu (PDF) / video kaynakları.
     const { data: resourceRows, error: resourcesError } = await supabase
@@ -1581,6 +1585,18 @@ export default function App() {
     setNewExamForm((prev) => ({ ...prev, categoryExamType: created.name }));
     setNewExamCategoryName('');
     setShowNewExamCategoryInput(false);
+  };
+
+  // Tanımla > Sınavlar sekmesindeki "+ Yeni sınav ekle" (Yeni Sınav/Paket Oluştur ekranındaki ile aynı exam_categories tablosu)
+  const addExamFromManager = async () => {
+    const trimmed = mgrNewExam.trim();
+    if (!trimmed) return;
+    const dup = examCategories.find((c) => c.name.trim().toLocaleLowerCase('tr') === trimmed.toLocaleLowerCase('tr'));
+    if (dup) { alert(`"${dup.name}" sınavı zaten var.`); return; }
+    const { data, error } = await supabase.from('exam_categories').insert([{ name: trimmed }]).select();
+    if (error) { alert('Sınav eklenemedi: ' + error.message); return; }
+    setExamCategories((prev) => [...prev, data[0]].sort((x, y) => x.name.localeCompare(y.name, 'tr')));
+    setMgrNewExam('');
   };
 
   const fetchUserPurchases = async (userEmail) => {
@@ -5235,12 +5251,17 @@ export default function App() {
                       Sınavlar, "Yeni Sınav / Paket Oluştur" ekranındaki Sınav Türü kutusundan eklenir; burada adı düzeltilir ya da silinir.
                       Sınav silinince dersler silinmez.
                     </div>
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                      <input value={mgrNewExam} onChange={(e) => setMgrNewExam(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addExamFromManager(); }} placeholder="Yeni sınav adı (ör. KPSS)" style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                      <button type="button" onClick={addExamFromManager} disabled={!mgrNewExam.trim()} style={{ padding: '8px 14px', borderRadius: '6px', border: 'none', backgroundColor: mgrNewExam.trim() ? '#0f172a' : '#cbd5e1', color: '#fff', fontWeight: 'bold', cursor: mgrNewExam.trim() ? 'pointer' : 'not-allowed' }}>+ Yeni sınav ekle</button>
+                    </div>
                     <div style={{ overflowY: 'auto', flex: 1 }}>
                       {examCategories.length === 0 ? (
                         <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz sınav türü yok.</p>
                       ) : examCategories.map((cat) => (
                         <div key={cat.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 4px', borderBottom: '1px solid #f1f5f9' }}>
                           <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#0f172a', flex: 1 }}>{cat.name}</span>
+                          <button type="button" onClick={() => setBpExam(cat)} title="Bu sınavın derslerini, konu/kazanım soru dağılımını, süresini belirle" style={{ padding: '5px 10px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#1d4ed8', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}>📐 İçerik ve dağılım</button>
                           <button type="button" onClick={() => renameExamCategory(cat.id, cat.name)} title="Adını düzenle" style={iconBtn}>✏️</button>
                           <button
                             type="button"
@@ -6085,6 +6106,16 @@ export default function App() {
           );
         })()}
 
+        {bpExam && (
+          <ExamBlueprintEditor
+            exam={bpExam}
+            lessonCategories={lessonCategories}
+            topics={topics}
+            learningOutcomes={learningOutcomes}
+            onClose={() => setBpExam(null)}
+            onSaved={() => { fetchCategoryLists(); }}
+          />
+        )}
         {fr && renderFrModal()}
         {rev && renderReviewModal()}
 
@@ -7916,7 +7947,15 @@ export default function App() {
           eclRows.filter((r) => String(r.exam_category_id) === String(sinav.id)).forEach((r) => lessonIdSet.add(r.lesson_category_id));
           lessonCategories.filter((l) => String(l.exam_category_id) === String(sinav.id)).forEach((l) => lessonIdSet.add(l.id));
         }
-        const dersler = uniq(lessonCategories.filter((l) => lessonIdSet.has(l.id)).map((l) => l.name));
+        // Ders sırası: Tanımla > Sınavlar'da verilen sıra; sırası olmayanlar sona, alfabetik
+        const orderOf = {};
+        if (sinav) eclRows.filter((r) => String(r.exam_category_id) === String(sinav.id)).forEach((r) => { if (r.sort_order != null) orderOf[r.lesson_category_id] = r.sort_order; });
+        const dersler = lessonCategories
+          .filter((l) => lessonIdSet.has(l.id))
+          .map((l) => ({ name: l.name, o: orderOf[l.id] != null ? orderOf[l.id] : 9999 }))
+          .sort((x, y) => (x.o - y.o) || String(x.name).localeCompare(String(y.name), 'tr'))
+          .map((x) => x.name)
+          .filter((n, i, r) => n && r.indexOf(n) === i);
         const ders = dersler.includes(hs.lesson) ? hs.lesson : '';
         const dersIds = ders ? lessonCategories.filter((l) => l.name === ders).map((l) => l.id) : [];
         const konular = uniq(topics.filter((t) => dersIds.includes(t.lesson_category_id)).map((t) => t.name));
