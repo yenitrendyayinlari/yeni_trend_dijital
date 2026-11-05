@@ -17,6 +17,7 @@ export default function KonuTesti({ title, lessonIds, topicIds, outcomeIds, roun
   const [stats, setStats] = useState(null);
   const [log, setLog] = useState([]);        // bu turda verilen cevaplar
   const [done, setDone] = useState(false);
+  const [viewPos, setViewPos] = useState(null); // null = şu anki soru; sayı = turda geri dönüp baktığımız soru (log indeksi)
   const seenRef = useRef([]);
 
   const call = async (body) => {
@@ -31,7 +32,7 @@ export default function KonuTesti({ title, lessonIds, topicIds, outcomeIds, roun
   };
 
   const loadNext = async () => {
-    setBusy(true); setErr(''); setRes(null); setPicked(null); setShowSol(false); setQ(null); // eski soru gitsin, dönen simge görünsün
+    setBusy(true); setErr(''); setRes(null); setPicked(null); setShowSol(false); setViewPos(null); setQ(null); // eski soru gitsin, dönen simge görünsün
     try {
       const j = await call({ action: 'next', lessonIds, topicIds, outcomeIds, seen: seenRef.current });
       if (j.needLogin) { setQ(null); setGate(true); setBusy(false); return; }
@@ -46,14 +47,32 @@ export default function KonuTesti({ title, lessonIds, topicIds, outcomeIds, roun
   useEffect(() => { if (gate && user) { setGate(false); loadNext(); } /* eslint-disable-next-line */ }, [user]);
 
   const answer = async (choice) => {
-    if (res || busy || !q) return;
+    if (res || busy || !q || viewPos !== null) return null;
     setPicked(choice); setBusy(true);
+    let out = null;
     try {
       const j = await call({ action: 'answer', poolId: q.id, choice });
       setRes(j);
-      setLog((l) => [...l, { id: q.id, choice, ok: j.isCorrect }]);
+      setLog((l) => [...l, { id: q.id, choice, ok: j.isCorrect, q, res: j }]);
+      out = j;
     } catch (e) { setErr(e.message); setPicked(null); }
     setBusy(false);
+    return out;
+  };
+
+  // Önceki / Sonraki soru (tur içinde). Cevaplamadan "Sonraki soru"ya basmak soruyu boş bırakır.
+  const liveIdx = res ? log.length - 1 : log.length;
+  const roundStart = Math.floor(Math.max(liveIdx, 0) / ROUND) * ROUND;
+  const curIdx = viewPos !== null ? viewPos : liveIdx;
+  const canPrev = !busy && curIdx - 1 >= roundStart && curIdx - 1 >= 0 && !!log[curIdx - 1];
+  const goPrev = () => { if (!canPrev) return; setShowSol(false); setViewPos(curIdx - 1); };
+  const goNext = async () => {
+    if (busy && viewPos === null) return;
+    setShowSol(false);
+    if (viewPos !== null) { setViewPos(viewPos + 1 >= liveIdx ? null : viewPos + 1); return; }
+    if (res) { next(); return; }
+    const j = await answer(null); // boş bırak
+    if (j) { const n = log.length + 1; if (n >= ROUND && n % ROUND === 0) setDone(true); else loadNext(); }
   };
 
   const next = () => { if (log.length >= ROUND && log.length % ROUND === 0) setDone(true); else loadNext(); };
@@ -66,12 +85,16 @@ export default function KonuTesti({ title, lessonIds, topicIds, outcomeIds, roun
     .kt-bar { position: sticky; top: 0; background: #fff; border-bottom: 1px solid #e5e2da; padding: 12px 18px; display: flex; align-items: center; gap: 14px; z-index: 2; }
     .kt-bar b { flex: 1; font-size: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .kt-x { border: 1.5px solid #d9d5ca; background: #fff; border-radius: 20px; padding: 7px 16px; cursor: pointer; font-family: inherit; font-size: .9rem; }
-    .kt-body { max-width: 760px; margin: 0 auto; padding: 18px 16px 60px; }
+    .kt-body { max-width: 860px; margin: 0 auto; padding: 18px 16px 60px; }
     .kt-prog { height: 6px; background: #e5e2da; border-radius: 4px; overflow: hidden; margin-bottom: 14px; }
     .kt-prog i { display: block; height: 100%; background: #0b86f6; transition: width .3s; }
     .kt-card { background: #fff; border-radius: 14px; box-shadow: 0 1px 8px rgba(27,33,56,.10); padding: 12px; }
-    .kt-opts { display: flex; gap: 10px; justify-content: center; margin: 18px 0 6px; flex-wrap: wrap; }
-    .kt-opt { width: 58px; height: 58px; border-radius: 50%; border: 2px solid #d9d5ca; background: #fff; font-size: 1.25rem; font-weight: 700; cursor: pointer; font-family: inherit; color: #17213a; }
+    .kt-opts { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+    .kt-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 16px 0 6px; flex-wrap: wrap; }
+    .kt-navb { padding: 10px 18px; border-radius: 8px; border: 1.5px solid #17213a; background: #17213a; color: #fff; font-weight: 700; font-size: .92rem; cursor: pointer; font-family: inherit; }
+    .kt-navb.prev { background: transparent; color: #17213a; }
+    .kt-navb:disabled { opacity: .35; cursor: not-allowed; }
+    .kt-opt { width: 40px; height: 40px; border-radius: 50%; border: 2px solid #17213a; background: #fff; font-size: .95rem; font-weight: 700; cursor: pointer; font-family: inherit; color: #17213a; }
     .kt-opt:hover:not(:disabled) { border-color: #17213a; }
     .kt-opt:disabled { cursor: default; }
     .kt-opt.ok { background: #16a34a; border-color: #16a34a; color: #fff; }
@@ -124,31 +147,38 @@ export default function KonuTesti({ title, lessonIds, topicIds, outcomeIds, roun
           </div>
         ) : (
           <>
-            <div className="kt-prog"><i style={{ width: `${((log.length % ROUND) / ROUND) * 100}%` }} /></div>
-            {q && (
+            <div className="kt-prog"><i style={{ width: `${(((log.length % ROUND) || (log.length ? ROUND : 0)) / ROUND) * 100}%` }} /></div>
+            {(q || viewPos !== null) && (() => {
+              const v = viewPos !== null ? log[viewPos] : null;
+              const dq = v ? v.q : q;
+              const dres = v ? v.res : res;
+              const dpicked = v ? v.choice : picked;
+              if (!dq) return null;
+              return (
               <>
-                <span className="kt-tag">Soru {(log.length % ROUND) + (res ? 0 : 1) + (res && log.length % ROUND === 0 ? ROUND : 0)} / {ROUND}{q.kind === 'wrong' ? ' · daha önce yanlış yaptığın' : q.kind === 'right' ? ' · tekrar' : ''}</span>
-                <div className="kt-card"><PdfViewer file={q.url} pageNumber={1} /></div>
-                <div className="kt-opts">
-                  {LETTERS.map((L) => (
-                    <button key={L} className={`kt-opt ${res && L === res.correct ? 'ok' : res && L === picked ? 'bad' : ''}`} disabled={!!res || busy} onClick={() => answer(L)}>{L}</button>
-                  ))}
+                <span className="kt-tag">Soru {(curIdx % ROUND) + 1} / {ROUND}{v ? ' · önceki soru' : (dq.kind === 'wrong' ? ' · daha önce yanlış yaptığın' : dq.kind === 'right' ? ' · tekrar' : '')}</span>
+                <div className="kt-card"><PdfViewer file={dq.url} pageNumber={1} /></div>
+                <div className="kt-nav">
+                  <button className="kt-navb prev" disabled={!canPrev} onClick={goPrev}>◀ Önceki Soru</button>
+                  <div className="kt-opts">
+                    {LETTERS.map((L) => (
+                      <button key={L} className={`kt-opt ${dres && L === dres.correct ? 'ok' : dres && L === dpicked ? 'bad' : ''}`} disabled={!!dres || busy} onClick={() => answer(L)}>{L}</button>
+                    ))}
+                  </div>
+                  <button className="kt-navb" disabled={busy && viewPos === null} onClick={goNext}>{!v && dres && log.length % ROUND === 0 ? 'Sonucu gör' : 'Sonraki Soru'} ▶</button>
                 </div>
-                {!res && <div className="kt-row"><button className="kt-btn alt" disabled={busy} onClick={() => answer(null)}>Boş bırak</button></div>}
-                {res && (
+                {dres && (
                   <>
-                    <div className="kt-note" style={{ color: res.isCorrect ? '#16a34a' : '#dc2626' }}>
-                      {res.isCorrect ? 'Doğru!' : picked ? `Yanlış — doğru cevap ${res.correct}` : `Boş — doğru cevap ${res.correct}`}
+                    <div className="kt-note" style={{ color: dres.isCorrect ? '#16a34a' : '#dc2626' }}>
+                      {dres.isCorrect ? 'Doğru!' : dpicked ? `Yanlış — doğru cevap ${dres.correct}` : `Boş — doğru cevap ${dres.correct}`}
                     </div>
-                    {showSol && res.solutionUrl && <div className="kt-card" style={{ marginBottom: 12 }}><PdfViewer file={res.solutionUrl} pageNumber={1} /></div>}
-                    <div className="kt-row">
-                      {res.solutionUrl && <button className="kt-btn alt" onClick={() => setShowSol((s) => !s)}>{showSol ? 'Çözümü gizle' : 'Çözümü göster'}</button>}
-                      <button className="kt-btn" onClick={next}>{log.length % ROUND === 0 ? 'Sonucu gör' : 'Sonraki soru'}</button>
-                    </div>
+                    {showSol && dres.solutionUrl && <div className="kt-card" style={{ marginBottom: 12 }}><PdfViewer file={dres.solutionUrl} pageNumber={1} /></div>}
+                    {dres.solutionUrl && <div className="kt-row"><button className="kt-btn alt" onClick={() => setShowSol((x) => !x)}>{showSol ? 'Çözümü gizle' : 'Çözümü göster'}</button></div>}
                   </>
                 )}
               </>
-            )}
+              );
+            })()}
             {!q && busy && (
               <div style={{ textAlign: 'center', color: '#6b7180', marginTop: 70 }}>
                 <div className="kt-spin" />

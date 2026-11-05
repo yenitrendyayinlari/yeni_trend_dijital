@@ -106,7 +106,9 @@ export default function PdfViewer({ file, pageNumber, onDocumentLoadSuccess }) {
       // daha darsa kutu genişliği) korunur. 16 cm ve geniş sayfalar (A4 vb.) eskisi gibi doldurur.
       const pageCm = baseViewport.width / 28.3465;
       if (pageCm < 15.9) {
-        availableWidth = Math.max(availableWidth * (pageCm / 16), Math.min(availableWidth, 320));
+        // Dar sayfa: 9 cm genişlikte ~560 px (konu testi ile deneme ekranının ortası); kutu daha darsa kutuya sığar.
+        // 560 px'e oranla pageCm/9 ile ölçeklenir; telefonda en az 320 px (ya da kutu daha darsa kutu genişliği).
+        availableWidth = Math.max(Math.min(availableWidth, 560 * (pageCm / 9)), Math.min(availableWidth, 320));
       }
       const displayScale = availableWidth / baseViewport.width;
 
