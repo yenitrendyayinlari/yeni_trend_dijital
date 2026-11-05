@@ -1557,7 +1557,7 @@ export default function App() {
     let eclRes = await supabase.from('exam_category_lessons').select('exam_category_id, lesson_category_id, sort_order, question_count');
     if (eclRes.error) eclRes = await supabase.from('exam_category_lessons').select('exam_category_id, lesson_category_id'); // sinav_dagilimi.sql henüz çalıştırılmadıysa
     if (eclRes.data) setEclRows(eclRes.data);
-    const distRes = await supabase.from('exam_distribution').select('exam_category_id, level, ref_id, sort_order, excluded');
+    const distRes = await supabase.from('exam_distribution').select('exam_category_id, level, ref_id, sort_order, excluded, parent_lesson_id');
     if (distRes.data) setDistRows(distRes.data);
 
     // Riskli kazanımların altında gösterilen ders notu (PDF) / video kaynakları.
@@ -7975,7 +7975,11 @@ export default function App() {
         // Bu sınavda sorulmayan (yönetici "çıkar" dediği) konu / kazanımlar
         const offSet = { topic: new Set(), outcome: new Set() };
         if (sinav) distRows.filter((r) => String(r.exam_category_id) === String(sinav.id) && r.excluded).forEach((r) => offSet[r.level].add(r.ref_id));
-        const konuListe = topics.filter((t) => dersIds.includes(t.lesson_category_id) && !offSet.topic.has(t.id));
+        // Başka dersten bu sınava alınan konular (ör. Vatandaşlık > Anayasa, Mevzuat altında)
+        const borrowOf = {};
+        if (sinav) distRows.filter((r) => String(r.exam_category_id) === String(sinav.id) && r.level === 'topic' && r.parent_lesson_id).forEach((r) => { borrowOf[r.ref_id] = r.parent_lesson_id; });
+        const konuListe = topics.filter((t) => (borrowOf[t.id] ? dersIds.includes(borrowOf[t.id]) : dersIds.includes(t.lesson_category_id)) && !offSet.topic.has(t.id));
+        const hasBorrowed = Object.keys(borrowOf).some((k) => dersIds.includes(borrowOf[k]) || (topics.find((t) => String(t.id) === k) || {}).lesson_category_id && dersIds.includes((topics.find((t) => String(t.id) === k) || {}).lesson_category_id));
         const konular = ordNames(konuListe, 'topic');
         const konu = konular.includes(hs.topic) ? hs.topic : '';
         const konuIds = konu ? konuListe.filter((t) => t.name === konu).map((t) => t.id) : [];
@@ -8076,7 +8080,7 @@ export default function App() {
                     </select>
                     <button onClick={() => {
                       // Sınavdan çıkarılmış konu/kazanım varsa "tümü" seçiminde de yalnız izinli olanlardan soru gelsin
-                      const anyTopicOff = topics.some((t) => dersIds.includes(t.lesson_category_id) && offSet.topic.has(t.id));
+                      const anyTopicOff = hasBorrowed || topics.some((t) => dersIds.includes(t.lesson_category_id) && offSet.topic.has(t.id));
                       const tIds = konu ? konuIds : (anyTopicOff ? konuListe.map((t) => t.id) : []);
                       const anyOutOff = konu && learningOutcomes.some((o) => konuIds.includes(o.topic_id) && offSet.outcome.has(o.id));
                       const oIds = kazanim ? kazanimListe.filter((o) => o.name === kazanim).map((o) => o.id) : (anyOutOff ? kazanimListe.map((o) => o.id) : []);

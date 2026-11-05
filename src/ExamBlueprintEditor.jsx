@@ -22,6 +22,7 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
   const [oSort, setOSort] = useState({}); // kazanım id -> sıra
   const [tOff, setTOff] = useState({}); // bu sınavda sorulmayan konular (id -> true)
   const [oOff, setOOff] = useState({}); // bu sınavda sorulmayan kazanımlar
+  const [borrow, setBorrow] = useState({}); // konu id -> bu sınavda hangi dersin altında gösterileceği (başka dersten alınan konu)
   const [open, setOpen] = useState({});
   const [pool, setPool] = useState({ lesson: {}, topic: {}, outcome: {} });
   const [poolReady, setPoolReady] = useState(false);
@@ -37,7 +38,7 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
         if (ex.error) throw new Error('Sınav bilgileri okunamadı (sinav_dagilimi.sql çalıştırıldı mı?): ' + ex.error.message);
         const el = await supabase.from('exam_category_lessons').select('lesson_category_id, question_count, sort_order').eq('exam_category_id', exam.id);
         if (el.error) throw new Error('Dersler okunamadı (sinav_dagilimi.sql çalıştırıldı mı?): ' + el.error.message);
-        const ds = await supabase.from('exam_distribution').select('level, ref_id, question_count, sort_order, excluded').eq('exam_category_id', exam.id);
+        const ds = await supabase.from('exam_distribution').select('level, ref_id, question_count, sort_order, excluded, parent_lesson_id').eq('exam_category_id', exam.id);
         if (ds.error) throw new Error('Dağılım okunamadı (sinav_dagilimi.sql çalıştırıldı mı?): ' + ds.error.message);
         if (dead) return;
         const row = ex.data || {};
@@ -46,13 +47,14 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
         const nameOf = (id) => (lessonCategories.find((l) => l.id === id) || {}).name || '';
         const ls = (el.data || []).slice().sort((a, b) => (a.sort_order - b.sort_order) || trSort(nameOf(a.lesson_category_id), nameOf(b.lesson_category_id)));
         setLessons(ls.map((r) => ({ id: r.lesson_category_id, count: r.question_count ? String(r.question_count) : '' })));
-        const t = {}, o = {}, ts = {}, os = {}, toff = {}, ooff = {};
+        const t = {}, o = {}, ts = {}, os = {}, toff = {}, ooff = {}, bw = {};
         (ds.data || []).forEach((r) => {
+          if (r.level === 'topic' && r.parent_lesson_id) bw[r.ref_id] = r.parent_lesson_id;
           if (r.excluded) { if (r.level === 'topic') toff[r.ref_id] = true; else ooff[r.ref_id] = true; }
           if (r.level === 'topic') { if (r.question_count > 0) t[r.ref_id] = String(r.question_count); ts[r.ref_id] = r.sort_order || 0; }
           else { if (r.question_count > 0) o[r.ref_id] = String(r.question_count); os[r.ref_id] = r.sort_order || 0; }
         });
-        setTCount(t); setOCount(o); setTSort(ts); setOSort(os); setTOff(toff); setOOff(ooff);
+        setTCount(t); setOCount(o); setTSort(ts); setOSort(os); setTOff(toff); setOOff(ooff); setBorrow(bw);
         setLoading(false);
       } catch (e) { if (!dead) { setLoadErr(e.message); setLoading(false); } }
     })();
@@ -91,12 +93,14 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Bir dersin bu sınavdaki konuları: kendi konuları (başka derse alınmamış olanlar) + başka dersten alınanlar
+  const topicsOf = (lid) => topics.filter((t) => (borrow[t.id] ? borrow[t.id] === lid : t.lesson_category_id === lid));
   // ---- Doğrulama ----
   const lessonName = (id) => (lessonCategories.find((l) => l.id === id) || {}).name || `#${id}`;
   const checks = { lesson: {}, topic: {} }; // id -> {err, note}
   let errCount = 0;
   lessons.forEach((l) => {
-    const ts = topics.filter((t) => t.lesson_category_id === l.id && !tOff[t.id]);
+    const ts = topicsOf(l.id).filter((t) => !tOff[t.id]);
     const cnt = toInt(l.count);
     const sumT = ts.reduce((s, t) => s + toInt(tCount[t.id]), 0);
     if (ts.length > 0 && sumT !== cnt) { checks.lesson[l.id] = { err: `Konuların toplamı ${sumT}, ders sayısı ${cnt} olmalı` }; errCount++; }
@@ -155,9 +159,9 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
       if (del2.error) throw new Error(del2.error.message);
       const dist = [];
       lessons.forEach((l) => {
-        sorted(topics.filter((t) => t.lesson_category_id === l.id), tSort).forEach((t, ti) => {
+        sorted(topicsOf(l.id), tSort).forEach((t, ti) => {
           const tx = !!tOff[t.id];
-          dist.push({ exam_category_id: exam.id, level: 'topic', ref_id: t.id, question_count: tx ? 0 : toInt(tCount[t.id]), sort_order: ti, excluded: tx });
+          dist.push({ exam_category_id: exam.id, level: 'topic', ref_id: t.id, question_count: tx ? 0 : toInt(tCount[t.id]), sort_order: ti, excluded: tx, parent_lesson_id: borrow[t.id] || null });
           sorted(learningOutcomes.filter((o) => o.topic_id === t.id), oSort).forEach((o, oi) => {
             const ox = tx || !!oOff[o.id];
             dist.push({ exam_category_id: exam.id, level: 'outcome', ref_id: o.id, question_count: ox ? 0 : toInt(oCount[o.id]), sort_order: oi, excluded: ox });
@@ -224,7 +228,7 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
             <div style={{ overflowY: 'auto', flex: 1, minHeight: '200px', padding: '8px 0' }}>
               {lessons.length === 0 && <p style={{ color: '#94a3b8', fontSize: '0.86rem' }}>Bu sınava henüz ders eklenmedi. Aşağıdan ekleyin.</p>}
               {lessons.map((l, i) => {
-                const ts = sorted(topics.filter((t) => t.lesson_category_id === l.id), tSort);
+                const ts = sorted(topicsOf(l.id), tSort);
                 const activeTopics = ts.filter((t) => !tOff[t.id]).length;
                 const c = checks.lesson[l.id];
                 const lcnt = toInt(l.count);
@@ -252,11 +256,13 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
                             <div key={t.id} style={{ borderTop: '1px solid #f1f5f9', padding: '4px 0', opacity: tx ? 0.55 : 1 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 {arrow('t:' + t.id)}
-                                <span style={{ flex: 1, fontSize: '0.88rem', textDecoration: tx ? 'line-through' : 'none' }}>{t.name} <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>({os.length} kazanım)</span>{tx && <span style={{ color: '#b45309', fontSize: '0.72rem', marginLeft: '6px' }}>bu sınavda sorulmuyor</span>}</span>
+                                <span style={{ flex: 1, fontSize: '0.88rem', textDecoration: tx ? 'line-through' : 'none' }}>{t.name} <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>({os.length} kazanım)</span>{borrow[t.id] && <span style={{ color: '#2563eb', fontSize: '0.72rem', marginLeft: '6px' }}>{lessonName(t.lesson_category_id)}'dan</span>}{tx && <span style={{ color: '#b45309', fontSize: '0.72rem', marginLeft: '6px' }}>bu sınavda sorulmuyor</span>}</span>
                                 {!tx && poolBadge(pool.topic[t.id], tcnt)}
                                 {!tx && numInp(tCount[t.id] || '', (v) => setTCount((p) => ({ ...p, [t.id]: v })), !!(tc && tc.err))}
                                 {!tx && upDown(() => moveIn(ts, tSort, setTSort, ti, -1), () => moveIn(ts, tSort, setTSort, ti, 1), ti === 0, ti === ts.length - 1)}
-                                {offBtn(tx, () => setTOff((p) => ({ ...p, [t.id]: !p[t.id] })), 'konuyu')}
+                                {borrow[t.id]
+                                  ? <button type="button" title="Bu sınavdan kaldır" onClick={() => setBorrow((p) => { const n = { ...p }; delete n[t.id]; return n; })} style={{ border: 'none', background: '#fee2e2', color: '#dc2626', borderRadius: '6px', cursor: 'pointer', padding: '3px 7px', fontSize: '0.75rem' }}>✕</button>
+                                  : offBtn(tx, () => setTOff((p) => ({ ...p, [t.id]: !p[t.id] })), 'konuyu')}
                               </div>
                               {!tx && statusText(tc)}
                               {open['t:' + t.id] && (
@@ -280,6 +286,15 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
                             </div>
                           );
                         })}
+                        <div style={{ paddingTop: '8px' }}>
+                          <select value="" onChange={(e) => { const tid = Number(e.target.value); if (tid) { setBorrow((p) => ({ ...p, [tid]: l.id })); setOpen((p) => ({ ...p, ['l:' + l.id]: true })); } }} style={{ padding: '5px', borderRadius: '6px', border: '1px dashed #94a3b8', fontSize: '0.8rem', maxWidth: '100%' }}>
+                            <option value="">+ Başka dersten konu ekle…</option>
+                            {lessonCategories.filter((x) => !lessons.some((q) => q.id === x.id)).sort((a, b) => trSort(a.name, b.name)).map((x) => {
+                              const ops = topics.filter((t) => t.lesson_category_id === x.id && !borrow[t.id]);
+                              return ops.length ? <optgroup key={x.id} label={x.name}>{ops.sort((a, b) => trSort(a.name, b.name)).map((t) => <option key={t.id} value={t.id}>{x.name} › {t.name}</option>)}</optgroup> : null;
+                            })}
+                          </select>
+                        </div>
                       </div>
                     )}
                   </div>
