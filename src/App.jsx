@@ -210,6 +210,7 @@ export default function App() {
   const [authMode, setAuthMode] = useState('login'); 
   const [showAuthModal, setShowAuthModal] = useState(false); 
   const [user, setUser] = useState(null);
+  const [denemeBusy, setDenemeBusy] = useState(false); // anlık deneme hazırlanıyor
   const [solveCount, setSolveCount] = useState(10); // konu testi soru sayısı (10/20/30)
   const [solve, setSolve] = useState(null); // öğrenci konu testi {title, lessonIds, topicIds, outcomeIds}
   const [email, setEmail] = useState('');
@@ -1691,11 +1692,14 @@ export default function App() {
   const EXAM_ANONYMOUS_COLUMNS = 'id,name,duration,exam_type,category_exam_type,category_lesson,pdf_file,sections,is_published,num_pages,price,original_price,is_parent,parent_id,sort_order,topic_map,campaign_ends_at,description,created_at';
 
   const fetchPublicExams = async () => {
-    const { data, error } = await supabase
+    // owner_email dolu olanlar öğrenciye özel anlık denemelerdir; genel listelerde görünmez.
+    let { data, error } = await supabase
       .from('exams')
       .select(EXAM_ANONYMOUS_COLUMNS)
       .eq('is_published', true)
+      .is('owner_email', null)
       .order('created_at', { ascending: false });
+    if (error) ({ data, error } = await supabase.from('exams').select(EXAM_ANONYMOUS_COLUMNS).eq('is_published', true).order('created_at', { ascending: false })); // owner_email sütunu henüz yoksa
 
     if (error) {
       console.error("Sınavlar yüklenirken hata oluştu:", error);
@@ -1705,12 +1709,16 @@ export default function App() {
   };
 
   const fetchExams = async (currentUser = user) => {
-    const query = supabase.from('exams').select(EXAM_PUBLIC_COLUMNS).order('created_at', { ascending: false });
-    if (!currentUser || currentUser.email !== 'admin@yayinevi.com') {
-      query.eq('is_published', true);
-    }
-
-    const { data, error } = await query;
+    const buildQ = (noOwner) => {
+      const query = supabase.from('exams').select(EXAM_PUBLIC_COLUMNS).order('created_at', { ascending: false });
+      if (!currentUser || currentUser.email !== 'admin@yayinevi.com') {
+        query.eq('is_published', true);
+      }
+      if (noOwner) query.is('owner_email', null); // öğrenciye özel anlık denemeler genel listelerde görünmez
+      return query;
+    };
+    let { data, error } = await buildQ(true);
+    if (error) ({ data, error } = await buildQ(false)); // owner_email sütunu henüz yoksa
 
     if (error) {
       console.error("Sınavlar yüklenirken hata oluştu:", error);
@@ -8017,6 +8025,8 @@ export default function App() {
               .sl-mode button { padding: 12px 26px; border-radius: 24px; border: 1.5px solid var(--yt-line); background: #f8f9fa; font-size: 0.98rem; font-family: inherit; cursor: pointer; color: var(--yt-ink); }
               .sl-mode button:hover { border-color: var(--yt-ink); }
               .sl-mode button.on { background: var(--yt-ink); color: #fff; border-color: var(--yt-ink); }
+              .kt-spin-home { width: 34px; height: 34px; border-radius: 50%; border: 4px solid #e5e2da; border-top-color: #0b86f6; animation: kt-rot-home .8s linear infinite; }
+              @keyframes kt-rot-home { to { transform: rotate(360deg); } }
               .sl-go { margin-top: 20px; display: flex; justify-content: center; }
               .sl-go button { padding: 13px 40px; border-radius: 28px; border: none; background: #0b86f6; color: #fff; font-size: 1.02rem; font-weight: 700; cursor: pointer; font-family: inherit; }
               .sl-dlist { margin-top: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -8088,6 +8098,39 @@ export default function App() {
                     }}>Başla</button>
                   </div>
                 )}
+                {mod === 'deneme' && (() => {
+                  const dRows = eclRows.filter((r) => sinav && String(r.exam_category_id) === String(sinav.id) && dersIds.includes(r.lesson_category_id));
+                  const dSoru = dRows.reduce((t, r) => t + (Number(r.question_count) || 0), 0);
+                  const topSoru = eclRows.filter((r) => sinav && String(r.exam_category_id) === String(sinav.id)).reduce((t, r) => t + (Number(r.question_count) || 0), 0);
+                  const dSure = sinav && sinav.duration_min && topSoru > 0 ? Math.max(1, Math.round(sinav.duration_min * dSoru / topSoru)) : (dSoru ? Math.round(dSoru * 1.2) : 0);
+                  return (
+                    <div className="sl-go" style={{ flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+                      {dSoru > 0 ? (
+                        <>
+                          <p style={{ margin: 0, color: 'var(--yt-graphite)', fontSize: '0.95rem' }}>{ders} denemesi · {dSoru} soru · {dSure} dk</p>
+                          <button disabled={denemeBusy} style={{ opacity: denemeBusy ? 0.7 : 1 }} onClick={async () => {
+                            if (!user) { alert('Deneme çözmek için lütfen giriş yapın veya üye olun.'); setAuthMode('login'); setShowAuthModal(true); return; }
+                            setDenemeBusy(true);
+                            try {
+                              const { data: sd } = await supabase.auth.getSession();
+                              const r = await fetch('/api/make-deneme', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sd?.session?.access_token}` }, body: JSON.stringify({ examCategoryId: sinav.id, lessonIds: dersIds }) });
+                              const j = await r.json();
+                              if (!r.ok) { alert((j.error || 'Deneme hazırlanamadı.') + (j.detail ? '\n\n' + j.detail : '')); }
+                              else { const ex = formatExamData(j.exam); setExams((prev) => [ex, ...prev.filter((x) => x.id !== ex.id)]); startExam(ex); }
+                            } catch (e) { alert('Deneme hazırlanamadı, tekrar deneyin.'); }
+                            setDenemeBusy(false);
+                          }}>{denemeBusy ? 'Denemen hazırlanıyor…' : 'Denemeyi başlat'}</button>
+                          {denemeBusy && <div className="kt-spin-home" aria-label="Hazırlanıyor" />}
+                        </>
+                      ) : (
+                        <p style={{ textAlign: 'center', color: 'var(--yt-graphite)', margin: 0 }}>Bu ders için sınav tanımında soru sayısı girilmemiş.</p>
+                      )}
+                    </div>
+                  );
+                })()}
+                {mod === 'deneme' && denemeler.length > 0 && (
+                  <p style={{ textAlign: 'center', color: 'var(--yt-graphite)', margin: '22px 0 8px', fontSize: '0.9rem' }}>Hazır denemeler</p>
+                )}
                 {mod === 'deneme' && (
                   denemeler.length > 0 ? (
                     <div className="sl-dlist">
@@ -8095,9 +8138,7 @@ export default function App() {
                         <button key={e.id} className="sl-d" onClick={() => setInspectingExamId(e.id)}>{e.name}</button>
                       ))}
                     </div>
-                  ) : (
-                    <p style={{ textAlign: 'center', color: 'var(--yt-graphite)', marginTop: '22px' }}>Bu sınav için henüz deneme eklenmedi.</p>
-                  )
+                  ) : null
                 )}
               </div>
             </div>
