@@ -96,7 +96,7 @@ export default async function handler(req, res) {
 
   const { data: exam, error: examError } = await supabaseAdmin
     .from('exams')
-    .select('id, parent_id, price, pdf_file, solution_pdf_file, is_published')
+    .select('id, parent_id, price, pdf_file, solution_pdf_file, is_published, owner_email')
     .eq('id', examId)
     .single();
 
@@ -108,7 +108,7 @@ export default async function handler(req, res) {
   // sayfa): giriş/satın alma gerektirmez, ama kısa ömürlü bir URL veririz.
   // Yayınlanmamış bir sınavın önizlemesi herkese açık gösterilmemeli.
   if (type === 'exam-preview') {
-    if (!exam.is_published) {
+    if (!exam.is_published || exam.owner_email) { // öğrenciye özel (anlık üretilen) denemelerin önizlemesi yok
       return res.status(404).json({ error: 'Sınav bulunamadı' });
     }
     const path = extractStoragePath(exam.pdf_file);
@@ -175,6 +175,10 @@ export default async function handler(req, res) {
 
   if (!isAdmin && !exam.is_published) {
     return res.status(404).json({ error: 'Sınav bulunamadı' });
+  }
+  // Anlık üretilen öğrenciye özel deneme: yalnız sahibi (ve yönetici) görebilir.
+  if (!isAdmin && exam.owner_email && exam.owner_email !== studentEmail) {
+    return res.status(403).json({ error: 'Bu içeriğe erişim yetkiniz yok.' });
   }
 
   if (!isAdmin) {
