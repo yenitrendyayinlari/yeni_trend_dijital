@@ -7200,7 +7200,7 @@ export default function App() {
           Sınavlarım
         </button>
       )}
-      {user && appMode !== 'admin' && studentBalance !== null && (
+      {false && user && appMode !== 'admin' && studentBalance !== null && ( /* hediye bakiye rozeti şimdilik kapalı */
         <div
           title="Bakiyeniz -- ödemelerde kullanılabilir"
           style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '8px', border: '1.5px solid var(--yt-line)', backgroundColor: 'var(--yt-paper-2)', whiteSpace: 'nowrap' }}
@@ -8053,7 +8053,12 @@ export default function App() {
                     </select>
                   )}
                 </div>
-                {sinav && ders && (
+                {sinav && ders && mod === 'konu' && (
+                  <div style={{ textAlign: 'center', marginTop: '14px' }}>
+                    <button onClick={() => setHsP({ mode: '', topic: '', outcome: '' })} style={{ border: 'none', background: 'none', color: 'var(--yt-graphite)', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.9rem', textDecoration: 'underline' }}>‹ Geri</button>
+                  </div>
+                )}
+                {sinav && ders && mod !== 'konu' && (
                   <div className="sl-mode">
                     <button className={mod === 'konu' ? 'on' : ''} onClick={() => setHsP({ mode: 'konu' })}>Konu testi</button>
                     <button className={mod === 'deneme' ? 'on' : ''} onClick={() => setHsP({ mode: 'deneme' })}>Deneme</button>
