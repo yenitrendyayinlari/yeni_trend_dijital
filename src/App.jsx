@@ -14,6 +14,7 @@ import { SignupBonusManageButton } from './SignupBonus';
 import BalanceGiftModal from './BalanceGiftModal';
 import Footer from './Footer';
 import ExamBlueprintEditor from './ExamBlueprintEditor';
+import KonuTesti from './KonuTesti';
 
 // --- Meta (Facebook/Instagram) Pixel ---
 // Temel kod ve otomatik PageView, index.html'de. Burada sadece sitedeki
@@ -209,6 +210,8 @@ export default function App() {
   const [authMode, setAuthMode] = useState('login'); 
   const [showAuthModal, setShowAuthModal] = useState(false); 
   const [user, setUser] = useState(null);
+  const [solveCount, setSolveCount] = useState(10); // konu testi soru sayısı (10/20/30)
+  const [solve, setSolve] = useState(null); // öğrenci konu testi {title, lessonIds, topicIds, outcomeIds}
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
@@ -8058,7 +8061,14 @@ export default function App() {
                 )}
                 {mod === 'konu' && (
                   <div className="sl-go">
-                    <button onClick={() => alert('Konu testi çözme ekranı bir sonraki aşamada eklenecek.')}>Başla</button>
+                    <select className="sl-sel" style={{ flex: 'none', width: 'auto', minWidth: 0, marginRight: '10px' }} value={solveCount} onChange={(e) => setSolveCount(Number(e.target.value))} aria-label="Soru sayısı">
+                      {[10, 20, 30].map((n) => <option key={n} value={n}>{n} soru</option>)}
+                    </select>
+                    <button onClick={() => {
+                      const tIds = konu ? konuIds : [];
+                      const oIds = kazanim ? learningOutcomes.filter((o) => konuIds.includes(o.topic_id) && o.name === kazanim).map((o) => o.id) : [];
+                      setSolve({ title: [ders, konu, kazanim].filter(Boolean).join(' › '), lessonIds: dersIds, topicIds: tIds, outcomeIds: oIds });
+                    }}>Başla</button>
                   </div>
                 )}
                 {mod === 'deneme' && (
@@ -8075,6 +8085,18 @@ export default function App() {
               </div>
             </div>
             <Footer />
+            {solve && (
+              <KonuTesti
+                title={solve.title}
+                lessonIds={solve.lessonIds}
+                topicIds={solve.topicIds}
+                outcomeIds={solve.outcomeIds}
+                round={solveCount}
+                user={user}
+                onNeedLogin={(mode) => { setAuthMode(mode); setShowAuthModal(true); }}
+                onClose={() => setSolve(null)}
+              />
+            )}
             {renderCartDrawer()}
             {renderBillingGateModal()}
             {renderNotifDrawer()}
