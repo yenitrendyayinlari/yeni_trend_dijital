@@ -50,7 +50,9 @@ export default async function handler(req, res) {
       // Havuzdaki uygun soruların id'leri (sayfa sayfa)
       const all = [];
       for (let from = 0; ; from += 1000) {
-        let q = supabaseAdmin.from('question_pool').select('id').in('lesson_category_id', lessonIds).not('pdf_file', 'is', null).in('correct_answer', ['A', 'B', 'C', 'D', 'E']).order('id').range(from, from + 999);
+        let q = supabaseAdmin.from('question_pool').select('id').not('pdf_file', 'is', null).in('correct_answer', ['A', 'B', 'C', 'D', 'E']).order('id').range(from, from + 999);
+        // Konu/kazanım seçiliyse ders süzgeci uygulanmaz (başka dersten alınmış konular da gelebilsin)
+        if (!topicIds.length && !outcomeIds.length) q = q.in('lesson_category_id', lessonIds);
         if (topicIds.length) q = q.in('topic_id', topicIds);
         if (outcomeIds.length) q = q.or([`outcome_id.in.(${outcomeIds.join(',')})`, ...outcomeIds.map((o) => `extra_outcome_ids.cs.[${o}]`)].join(','));
         const { data, error } = await q;
