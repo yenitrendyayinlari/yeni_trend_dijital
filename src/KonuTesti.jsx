@@ -31,7 +31,7 @@ export default function KonuTesti({ title, lessonIds, topicIds, outcomeIds, roun
   };
 
   const loadNext = async () => {
-    setBusy(true); setErr(''); setRes(null); setPicked(null); setShowSol(false);
+    setBusy(true); setErr(''); setRes(null); setPicked(null); setShowSol(false); setQ(null); // eski soru gitsin, dönen simge görünsün
     try {
       const j = await call({ action: 'next', lessonIds, topicIds, outcomeIds, seen: seenRef.current });
       if (j.needLogin) { setQ(null); setGate(true); setBusy(false); return; }
@@ -81,6 +81,8 @@ export default function KonuTesti({ title, lessonIds, topicIds, outcomeIds, roun
     .kt-btn.alt { background: #fff; color: #17213a; border: 1.5px solid #d9d5ca; }
     .kt-row { display: flex; gap: 10px; justify-content: center; margin-top: 14px; flex-wrap: wrap; }
     .kt-tag { display: inline-block; font-size: .78rem; padding: 3px 10px; border-radius: 12px; background: #eef2ff; color: #3b4a8a; margin-bottom: 8px; }
+    .kt-spin { width: 44px; height: 44px; margin: 0 auto; border-radius: 50%; border: 4px solid #e5e2da; border-top-color: #0b86f6; animation: kt-rot .8s linear infinite; }
+    @keyframes kt-rot { to { transform: rotate(360deg); } }
     .kt-sum { text-align: center; padding: 30px 10px; }
     .kt-sum .big { font-size: 3rem; font-weight: 800; }
   `;
@@ -147,7 +149,12 @@ export default function KonuTesti({ title, lessonIds, topicIds, outcomeIds, roun
                 )}
               </>
             )}
-            {!q && busy && <p style={{ textAlign: 'center', color: '#6b7180', marginTop: 60 }}>Soru hazırlanıyor…</p>}
+            {!q && busy && (
+              <div style={{ textAlign: 'center', color: '#6b7180', marginTop: 70 }}>
+                <div className="kt-spin" />
+                <p style={{ marginTop: 14 }}>Yeni soru geliyor…</p>
+              </div>
+            )}
           </>
         )}
       </div>

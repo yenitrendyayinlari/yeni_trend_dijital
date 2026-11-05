@@ -1557,7 +1557,7 @@ export default function App() {
     let eclRes = await supabase.from('exam_category_lessons').select('exam_category_id, lesson_category_id, sort_order, question_count');
     if (eclRes.error) eclRes = await supabase.from('exam_category_lessons').select('exam_category_id, lesson_category_id'); // sinav_dagilimi.sql henüz çalıştırılmadıysa
     if (eclRes.data) setEclRows(eclRes.data);
-    const distRes = await supabase.from('exam_distribution').select('exam_category_id, level, ref_id, sort_order');
+    const distRes = await supabase.from('exam_distribution').select('exam_category_id, level, ref_id, sort_order, excluded');
     if (distRes.data) setDistRows(distRes.data);
 
     // Riskli kazanımların altında gösterilen ders notu (PDF) / video kaynakları.
@@ -7972,10 +7972,15 @@ export default function App() {
           .sort((x, y) => (x.o - y.o) || String(x.name).localeCompare(String(y.name), 'tr'))
           .map((x) => x.name)
           .filter((n, i, r) => n && r.indexOf(n) === i);
-        const konular = ordNames(topics.filter((t) => dersIds.includes(t.lesson_category_id)), 'topic');
+        // Bu sınavda sorulmayan (yönetici "çıkar" dediği) konu / kazanımlar
+        const offSet = { topic: new Set(), outcome: new Set() };
+        if (sinav) distRows.filter((r) => String(r.exam_category_id) === String(sinav.id) && r.excluded).forEach((r) => offSet[r.level].add(r.ref_id));
+        const konuListe = topics.filter((t) => dersIds.includes(t.lesson_category_id) && !offSet.topic.has(t.id));
+        const konular = ordNames(konuListe, 'topic');
         const konu = konular.includes(hs.topic) ? hs.topic : '';
-        const konuIds = konu ? topics.filter((t) => dersIds.includes(t.lesson_category_id) && t.name === konu).map((t) => t.id) : [];
-        const kazanimlar = ordNames(learningOutcomes.filter((o) => konuIds.includes(o.topic_id)), 'outcome');
+        const konuIds = konu ? konuListe.filter((t) => t.name === konu).map((t) => t.id) : [];
+        const kazanimListe = learningOutcomes.filter((o) => konuIds.includes(o.topic_id) && !offSet.outcome.has(o.id));
+        const kazanimlar = ordNames(kazanimListe, 'outcome');
         const kazanim = kazanimlar.includes(hs.outcome) ? hs.outcome : '';
         const mod = ders ? hs.mode : '';
         const denemeler = sinav && mod === 'deneme'
@@ -8070,8 +8075,11 @@ export default function App() {
                       {[10, 20, 30].map((n) => <option key={n} value={n}>{n} soru</option>)}
                     </select>
                     <button onClick={() => {
-                      const tIds = konu ? konuIds : [];
-                      const oIds = kazanim ? learningOutcomes.filter((o) => konuIds.includes(o.topic_id) && o.name === kazanim).map((o) => o.id) : [];
+                      // Sınavdan çıkarılmış konu/kazanım varsa "tümü" seçiminde de yalnız izinli olanlardan soru gelsin
+                      const anyTopicOff = topics.some((t) => dersIds.includes(t.lesson_category_id) && offSet.topic.has(t.id));
+                      const tIds = konu ? konuIds : (anyTopicOff ? konuListe.map((t) => t.id) : []);
+                      const anyOutOff = konu && learningOutcomes.some((o) => konuIds.includes(o.topic_id) && offSet.outcome.has(o.id));
+                      const oIds = kazanim ? kazanimListe.filter((o) => o.name === kazanim).map((o) => o.id) : (anyOutOff ? kazanimListe.map((o) => o.id) : []);
                       setSolve({ title: [ders, konu, kazanim].filter(Boolean).join(' › '), lessonIds: dersIds, topicIds: tIds, outcomeIds: oIds });
                     }}>Başla</button>
                   </div>

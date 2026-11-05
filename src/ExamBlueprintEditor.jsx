@@ -20,6 +20,8 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
   const [oCount, setOCount] = useState({});
   const [tSort, setTSort] = useState({}); // konu id -> sıra
   const [oSort, setOSort] = useState({}); // kazanım id -> sıra
+  const [tOff, setTOff] = useState({}); // bu sınavda sorulmayan konular (id -> true)
+  const [oOff, setOOff] = useState({}); // bu sınavda sorulmayan kazanımlar
   const [open, setOpen] = useState({});
   const [pool, setPool] = useState({ lesson: {}, topic: {}, outcome: {} });
   const [poolReady, setPoolReady] = useState(false);
@@ -35,7 +37,7 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
         if (ex.error) throw new Error('Sınav bilgileri okunamadı (sinav_dagilimi.sql çalıştırıldı mı?): ' + ex.error.message);
         const el = await supabase.from('exam_category_lessons').select('lesson_category_id, question_count, sort_order').eq('exam_category_id', exam.id);
         if (el.error) throw new Error('Dersler okunamadı (sinav_dagilimi.sql çalıştırıldı mı?): ' + el.error.message);
-        const ds = await supabase.from('exam_distribution').select('level, ref_id, question_count, sort_order').eq('exam_category_id', exam.id);
+        const ds = await supabase.from('exam_distribution').select('level, ref_id, question_count, sort_order, excluded').eq('exam_category_id', exam.id);
         if (ds.error) throw new Error('Dağılım okunamadı (sinav_dagilimi.sql çalıştırıldı mı?): ' + ds.error.message);
         if (dead) return;
         const row = ex.data || {};
@@ -44,12 +46,13 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
         const nameOf = (id) => (lessonCategories.find((l) => l.id === id) || {}).name || '';
         const ls = (el.data || []).slice().sort((a, b) => (a.sort_order - b.sort_order) || trSort(nameOf(a.lesson_category_id), nameOf(b.lesson_category_id)));
         setLessons(ls.map((r) => ({ id: r.lesson_category_id, count: r.question_count ? String(r.question_count) : '' })));
-        const t = {}, o = {}, ts = {}, os = {};
+        const t = {}, o = {}, ts = {}, os = {}, toff = {}, ooff = {};
         (ds.data || []).forEach((r) => {
+          if (r.excluded) { if (r.level === 'topic') toff[r.ref_id] = true; else ooff[r.ref_id] = true; }
           if (r.level === 'topic') { if (r.question_count > 0) t[r.ref_id] = String(r.question_count); ts[r.ref_id] = r.sort_order || 0; }
           else { if (r.question_count > 0) o[r.ref_id] = String(r.question_count); os[r.ref_id] = r.sort_order || 0; }
         });
-        setTCount(t); setOCount(o); setTSort(ts); setOSort(os);
+        setTCount(t); setOCount(o); setTSort(ts); setOSort(os); setTOff(toff); setOOff(ooff);
         setLoading(false);
       } catch (e) { if (!dead) { setLoadErr(e.message); setLoading(false); } }
     })();
@@ -93,12 +96,12 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
   const checks = { lesson: {}, topic: {} }; // id -> {err, note}
   let errCount = 0;
   lessons.forEach((l) => {
-    const ts = topics.filter((t) => t.lesson_category_id === l.id);
+    const ts = topics.filter((t) => t.lesson_category_id === l.id && !tOff[t.id]);
     const cnt = toInt(l.count);
     const sumT = ts.reduce((s, t) => s + toInt(tCount[t.id]), 0);
     if (ts.length > 0 && sumT !== cnt) { checks.lesson[l.id] = { err: `Konuların toplamı ${sumT}, ders sayısı ${cnt} olmalı` }; errCount++; }
     ts.forEach((t) => {
-      const os = learningOutcomes.filter((o) => o.topic_id === t.id);
+      const os = learningOutcomes.filter((o) => o.topic_id === t.id && !oOff[o.id]);
       const tc = toInt(tCount[t.id]);
       const sumO = os.reduce((s, o) => s + toInt(oCount[o.id]), 0);
       if (sumO > tc) { checks.topic[t.id] = { err: `Kesin kazanımların toplamı ${sumO}, konu sayısı ${tc}'i aşıyor` }; errCount++; }
@@ -153,9 +156,11 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
       const dist = [];
       lessons.forEach((l) => {
         sorted(topics.filter((t) => t.lesson_category_id === l.id), tSort).forEach((t, ti) => {
-          dist.push({ exam_category_id: exam.id, level: 'topic', ref_id: t.id, question_count: toInt(tCount[t.id]), sort_order: ti });
+          const tx = !!tOff[t.id];
+          dist.push({ exam_category_id: exam.id, level: 'topic', ref_id: t.id, question_count: tx ? 0 : toInt(tCount[t.id]), sort_order: ti, excluded: tx });
           sorted(learningOutcomes.filter((o) => o.topic_id === t.id), oSort).forEach((o, oi) => {
-            dist.push({ exam_category_id: exam.id, level: 'outcome', ref_id: o.id, question_count: toInt(oCount[o.id]), sort_order: oi });
+            const ox = tx || !!oOff[o.id];
+            dist.push({ exam_category_id: exam.id, level: 'outcome', ref_id: o.id, question_count: ox ? 0 : toInt(oCount[o.id]), sort_order: oi, excluded: ox });
           });
         });
       });
@@ -179,6 +184,10 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
       <button type="button" onClick={onUp} disabled={firstRow} title="Yukarı" style={{ border: 'none', background: 'none', cursor: 'pointer', opacity: firstRow ? 0.25 : 1, padding: '0 2px' }}>▲</button>
       <button type="button" onClick={onDown} disabled={lastRow} title="Aşağı" style={{ border: 'none', background: 'none', cursor: 'pointer', opacity: lastRow ? 0.25 : 1, padding: '0 2px' }}>▼</button>
     </>
+  );
+  const offBtn = (off, toggle, what) => (
+    <button type="button" onClick={toggle} title={off ? 'Bu sınava geri al' : `Bu ${what} bu sınavdan çıkar (havuzdan silinmez)`}
+      style={{ border: 'none', background: off ? '#dcfce7' : '#fee2e2', color: off ? '#15803d' : '#dc2626', borderRadius: '6px', cursor: 'pointer', padding: '3px 7px', fontSize: '0.75rem' }}>{off ? '↩' : '✕'}</button>
   );
   const arrow = (k) => (
     <button type="button" onClick={() => setOpen((p) => ({ ...p, [k]: !p[k] }))} style={{ border: 'none', background: 'none', cursor: 'pointer', width: '20px', color: '#64748b' }}>{open[k] ? '▾' : '▸'}</button>
@@ -216,13 +225,14 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
               {lessons.length === 0 && <p style={{ color: '#94a3b8', fontSize: '0.86rem' }}>Bu sınava henüz ders eklenmedi. Aşağıdan ekleyin.</p>}
               {lessons.map((l, i) => {
                 const ts = sorted(topics.filter((t) => t.lesson_category_id === l.id), tSort);
+                const activeTopics = ts.filter((t) => !tOff[t.id]).length;
                 const c = checks.lesson[l.id];
                 const lcnt = toInt(l.count);
                 return (
                   <div key={l.id} style={{ borderBottom: '1px solid #e2e8f0', padding: '6px 0' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       {arrow('l:' + l.id)}
-                      <span style={{ fontWeight: 'bold', flex: 1 }}>{lessonName(l.id)} <span style={{ fontWeight: 'normal', color: '#94a3b8', fontSize: '0.74rem' }}>({ts.length} konu)</span></span>
+                      <span style={{ fontWeight: 'bold', flex: 1 }}>{lessonName(l.id)} <span style={{ fontWeight: 'normal', color: '#94a3b8', fontSize: '0.74rem' }}>({activeTopics} konu{activeTopics !== ts.length ? `, ${ts.length - activeTopics} çıkarıldı` : ''})</span></span>
                       {poolBadge(pool.lesson[l.id], lcnt)}
                       {numInp(l.count, (v) => setLessons((arr) => arr.map((x) => (x.id === l.id ? { ...x, count: v } : x))), !!(c && c.err))}
                       <button type="button" onClick={() => move(i, -1)} disabled={i === 0} title="Yukarı" style={{ border: 'none', background: 'none', cursor: 'pointer', opacity: i === 0 ? 0.25 : 1 }}>▲</button>
@@ -236,29 +246,35 @@ export default function ExamBlueprintEditor({ exam, lessonCategories, topics, le
                         {ts.map((t, ti) => {
                           const os = sorted(learningOutcomes.filter((o) => o.topic_id === t.id), oSort);
                           const tc = checks.topic[t.id];
-                          const tcnt = toInt(tCount[t.id]);
+                          const tx = !!tOff[t.id];
+                          const tcnt = tx ? 0 : toInt(tCount[t.id]);
                           return (
-                            <div key={t.id} style={{ borderTop: '1px solid #f1f5f9', padding: '4px 0' }}>
+                            <div key={t.id} style={{ borderTop: '1px solid #f1f5f9', padding: '4px 0', opacity: tx ? 0.55 : 1 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                 {arrow('t:' + t.id)}
-                                <span style={{ flex: 1, fontSize: '0.88rem' }}>{t.name} <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>({os.length} kazanım)</span></span>
-                                {poolBadge(pool.topic[t.id], tcnt)}
-                                {numInp(tCount[t.id] || '', (v) => setTCount((p) => ({ ...p, [t.id]: v })), !!(tc && tc.err))}
-                                {upDown(() => moveIn(ts, tSort, setTSort, ti, -1), () => moveIn(ts, tSort, setTSort, ti, 1), ti === 0, ti === ts.length - 1)}
+                                <span style={{ flex: 1, fontSize: '0.88rem', textDecoration: tx ? 'line-through' : 'none' }}>{t.name} <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>({os.length} kazanım)</span>{tx && <span style={{ color: '#b45309', fontSize: '0.72rem', marginLeft: '6px' }}>bu sınavda sorulmuyor</span>}</span>
+                                {!tx && poolBadge(pool.topic[t.id], tcnt)}
+                                {!tx && numInp(tCount[t.id] || '', (v) => setTCount((p) => ({ ...p, [t.id]: v })), !!(tc && tc.err))}
+                                {!tx && upDown(() => moveIn(ts, tSort, setTSort, ti, -1), () => moveIn(ts, tSort, setTSort, ti, 1), ti === 0, ti === ts.length - 1)}
+                                {offBtn(tx, () => setTOff((p) => ({ ...p, [t.id]: !p[t.id] })), 'konuyu')}
                               </div>
-                              {statusText(tc)}
+                              {!tx && statusText(tc)}
                               {open['t:' + t.id] && (
                                 <div style={{ paddingLeft: '26px' }}>
                                   {os.length === 0 && <p style={{ color: '#cbd5e1', fontSize: '0.74rem', margin: '3px 0' }}>Bu konuya bağlı kazanım yok.</p>}
-                                  {os.map((o, oi) => (
-                                    <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '3px 0' }}>
+                                  {os.map((o, oi) => {
+                                    const ox = tx || !!oOff[o.id];
+                                    return (
+                                    <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '3px 0', opacity: ox ? 0.55 : 1 }}>
                                       <span style={{ width: '20px' }} />
-                                      <span style={{ flex: 1, fontSize: '0.82rem', color: '#475569' }}>{o.name}</span>
-                                      {poolBadge(pool.outcome[o.id], toInt(oCount[o.id]))}
-                                      {numInp(oCount[o.id] || '', (v) => setOCount((p) => ({ ...p, [o.id]: v })), false, '–')}
-                                      {upDown(() => moveIn(os, oSort, setOSort, oi, -1), () => moveIn(os, oSort, setOSort, oi, 1), oi === 0, oi === os.length - 1)}
+                                      <span style={{ flex: 1, fontSize: '0.82rem', color: '#475569', textDecoration: ox ? 'line-through' : 'none' }}>{o.name}</span>
+                                      {!ox && poolBadge(pool.outcome[o.id], toInt(oCount[o.id]))}
+                                      {!ox && numInp(oCount[o.id] || '', (v) => setOCount((p) => ({ ...p, [o.id]: v })), false, '–')}
+                                      {!ox && upDown(() => moveIn(os, oSort, setOSort, oi, -1), () => moveIn(os, oSort, setOSort, oi, 1), oi === 0, oi === os.length - 1)}
+                                      {!tx && offBtn(!!oOff[o.id], () => setOOff((p) => ({ ...p, [o.id]: !p[o.id] })), 'kazanımı')}
                                     </div>
-                                  ))}
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
