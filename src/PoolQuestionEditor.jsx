@@ -655,6 +655,11 @@ function icmlParaToJson(p) {
   return content.length ? { type: 'paragraph', attrs, content } : { type: 'paragraph', attrs };
 }
 
+// Toplu aktarma öğesi: düzeltilmişse (qJson/sJson) onu, değilse ICML'den üretileni kullan
+const itemQDoc = (it) => it.qJson || { type: 'doc', content: icmlParasToJson(it.q) };
+const itemHasSol = (it) => (it.sJson !== undefined ? !!it.sHas : !!(it.s && it.s.some((p) => p.table || (p.segs || []).length)));
+const itemSDoc = (it) => (it.sJson !== undefined ? it.sJson : (itemHasSol(it) ? { type: 'doc', content: icmlParasToJson(it.s) } : ''));
+
 // ---- InDesign tarzı simgeler ve Sekmeler paneli ----
 const SvgI = ({ children, w = 16 }) => (
   <svg width={w} height={16} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>{children}</svg>
@@ -1017,10 +1022,57 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         const first = (qp.map(paraText).join(' ')).replace(/\s+/g, ' ').trim();
         return { n: i + 1, q: qp, s: ex.paras, answer: ex.answer, answerLine: ex.found, label: first.slice(0, 100), fig: /harita|grafik|şekil|resim|görsel|piramit|tabloda|diyagram/i.test(first) };
       });
-      setBulk({ items, notes, from: 1, to: Math.min(items.length, 50), running: false, done: 0, log: [], finished: false });
+      setBulk({ items, notes, from: 1, to: Math.min(items.length, 50), running: false, done: 0, log: [], finished: false, checking: false, checked: 0, editing: null, onlyBad: false });
+      setTimeout(() => runPrecheck(items), 300); // sığmayan soru/çözümleri kaydetmeden önce bul
     } catch (err) { alert('Dosya okunamadı: ' + err.message); }
   };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Ön kontrol: her soru/çözümü editöre yükleyip ölçer (kaydetmez). Sığmayanları listede işaretler.
+  const runPrecheck = async (items0) => {
+    if (!qEditor || !sEditor) return;
+    bulkStop.current = false;
+    const avail = contentPxH - PAD_Y * 2;
+    const items = items0.slice();
+    setBulk((b) => (b ? { ...b, checking: true, checked: 0 } : b));
+    for (let i = 0; i < items.length; i++) {
+      if (bulkStop.current) break;
+      const it = items[i];
+      try {
+        qEditor.chain().setMeta('addToHistory', false).setContent(itemQDoc(it)).run();
+        sEditor.chain().setMeta('addToHistory', false).setContent(itemHasSol(it) ? itemSDoc(it) : '').run();
+        await sleep(200);
+        const qh = qPageRef.current.querySelector('.ProseMirror').offsetHeight;
+        const sh = sPageRef.current.querySelector('.ProseMirror').offsetHeight;
+        items[i] = { ...it, qOver: qh > avail + 1 ? Math.ceil(qh - avail) : 0, sOver: itemHasSol(it) && sh > avail + 1 ? Math.ceil(sh - avail) : 0 };
+      } catch (e) { /* bu öğe ölçülemedi, kayıt sırasında yine denenir */ }
+      if (i % 10 === 9 || i === items.length - 1) setBulk((b) => (b ? { ...b, items: items.slice(), checked: i + 1 } : b));
+    }
+    qEditor.commands.clearContent(true); sEditor.commands.clearContent(true); setAnswer('');
+    setBulk((b) => (b ? { ...b, items: items.slice(), checking: false } : b));
+  };
+  // Sorunlu soruyu ana editöre açıp düzeltme
+  const startEdit = (it) => {
+    if (!qEditor || !sEditor || bulk.checking || bulk.running) return;
+    qEditor.commands.setContent(itemQDoc(it));
+    sEditor.commands.setContent(itemHasSol(it) ? itemSDoc(it) : '');
+    setAnswer(it.answer || '');
+    setBulk((b) => ({ ...b, editing: it.n }));
+  };
+  const finishEdit = async (save) => {
+    const n = bulk.editing;
+    if (save) {
+      await sleep(150);
+      const avail = contentPxH - PAD_Y * 2;
+      const qh = qPageRef.current.querySelector('.ProseMirror').offsetHeight;
+      const sh = sPageRef.current.querySelector('.ProseMirror').offsetHeight;
+      const sHas = sEditor.getText().trim().length > 0 || /<img|<table/.test(sEditor.getHTML());
+      const qJson = qEditor.getJSON(), sJson = sHas ? sEditor.getJSON() : null;
+      const ans = answer;
+      setBulk((b) => ({ ...b, items: b.items.map((x) => (x.n === n ? { ...x, qJson, sJson: sJson === null ? '' : sJson, sHas, answer: ans || x.answer, fixed: true, qOver: qh > avail + 1 ? Math.ceil(qh - avail) : 0, sOver: sHas && sh > avail + 1 ? Math.ceil(sh - avail) : 0 } : x)) }));
+    }
+    qEditor.commands.clearContent(true); sEditor.commands.clearContent(true); setAnswer('');
+    setBulk((b) => ({ ...b, editing: null }));
+  };
   const runBulk = async () => {
     const batch = batchName.trim();
     if (!batch) { alert('Önce sağdaki "Grup Adı" alanını doldurun.'); return; }
@@ -1038,9 +1090,9 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       const it = bulk.items[n - 1];
       try {
         if (!it.answer) throw new Error(it.answerLine ? 'doğru cevap okunamadı (kalın harf yok ya da birden fazla)' : 'çözüm dosyasında cevap satırı bulunamadı');
-        qEditor.chain().setMeta('addToHistory', false).setContent({ type: 'doc', content: icmlParasToJson(it.q) }).run(); // geri al geçmişi şişmesin
-        const hasSol = it.s && it.s.some((p) => p.table || (p.segs || []).length);
-        sEditor.chain().setMeta('addToHistory', false).setContent(hasSol ? { type: 'doc', content: icmlParasToJson(it.s) } : '').run();
+        qEditor.chain().setMeta('addToHistory', false).setContent(itemQDoc(it)).run(); // geri al geçmişi şişmesin
+        const hasSol = itemHasSol(it);
+        sEditor.chain().setMeta('addToHistory', false).setContent(hasSol ? itemSDoc(it) : '').run();
         setAnswer(it.answer);
         await sleep(420);
         const qh = qPageRef.current.querySelector('.ProseMirror').offsetHeight;
@@ -1497,7 +1549,14 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
           </div>
         </div>
       )}
-      {bulk && (
+      {bulk && bulk.editing && (
+        <div style={{ position: 'fixed', left: '50%', bottom: '18px', transform: 'translateX(-50%)', zIndex: 1260, backgroundColor: '#0f172a', color: '#fff', borderRadius: '12px', padding: '10px 14px', display: 'flex', gap: '10px', alignItems: 'center', boxShadow: '0 6px 24px rgba(0,0,0,0.35)', fontSize: '0.85rem' }}>
+          <span>Toplu aktarma · <b>{bulk.editing}. soru</b> düzenleniyor. Sığacak şekilde düzeltin (yazı boyutu, boşluk, kısaltma…).</span>
+          <button style={{ ...tbBtn(true), height: '32px', backgroundColor: '#16a34a', color: '#fff' }} onClick={() => finishEdit(true)}>✓ Düzeltmeyi kaydet, listeye dön</button>
+          <button style={{ ...tbBtn(false), height: '32px' }} onClick={() => finishEdit(false)}>Vazgeç</button>
+        </div>
+      )}
+      {bulk && !bulk.editing && (
         <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.6)', zIndex: 1250, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '20px', width: '760px', maxWidth: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}>
             <h3 style={{ margin: '0 0 8px' }}>📚 InDesign'dan toplu aktar</h3>
@@ -1523,11 +1582,15 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                 <div style={{ fontSize: '0.82rem', color: '#334155', marginBottom: '6px' }}>
                   <b>{bulk.items.length}</b> soru bulundu · doğru cevabı okunan: <b>{bulk.items.filter((x) => x.answer).length}</b>
                   {bulk.items.some((x) => !x.answer) && <span style={{ color: '#b45309' }}> · cevabı bulunamayan: {bulk.items.filter((x) => !x.answer).length} (kaydedilmez, listede işaretli)</span>}
+                  {bulk.items.some((x) => x.qOver > 0 || x.sOver > 0) && <span style={{ color: '#dc2626' }}> · sayfaya sığmayan: {bulk.items.filter((x) => x.qOver > 0 || x.sOver > 0).length}</span>}
+                  {!bulk.checking && bulk.items.some((x) => x.qOver !== undefined) && !bulk.items.some((x) => x.qOver > 0 || x.sOver > 0) && <span style={{ color: '#16a34a' }}> · hepsi sayfaya sığıyor ✓</span>}
                 </div>
+                {bulk.checking && <div style={{ fontSize: '0.8rem', color: '#2563eb', marginBottom: '4px' }}>⏳ Sığma kontrolü: {bulk.checked} / {bulk.items.length} (kaydetmez, yalnızca ölçer)…</div>}
+                <label style={{ fontSize: '0.78rem', color: '#475569', display: 'flex', gap: '5px', alignItems: 'center' }}><input type="checkbox" checked={!!bulk.onlyBad} onChange={(e) => setBulk((b) => ({ ...b, onlyBad: e.target.checked }))} /> Yalnız sorunlu olanları göster (sığmayan / cevabı bulunamayan)</label>
                 {bulk.notes.map((t, i) => <div key={i} style={{ fontSize: '0.78rem', color: '#b45309', marginBottom: '3px' }}>⚠ {t}</div>)}
                 <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #e2e8f0', borderRadius: '8px', margin: '8px 0', minHeight: '140px' }}>
                   {(() => { bulkLogMap.current = new Map(bulk.log.map((l) => [l.n, l])); return null; })()}
-                  {bulk.items.map((it) => {
+                  {bulk.items.filter((it) => !bulk.onlyBad || it.qOver > 0 || it.sOver > 0 || !it.answer).map((it) => {
                     const lg = bulkLogMap.current.get(it.n);
                     return (
                       <div key={it.n} style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '5px 8px', fontSize: '0.78rem', borderBottom: '1px solid #f1f5f9', backgroundColor: lg ? (lg.ok ? '#f0fdf4' : '#fef2f2') : 'transparent' }}>
@@ -1535,6 +1598,10 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                         <span style={{ width: '24px', fontWeight: 'bold', color: it.answer ? '#16a34a' : '#dc2626' }}>{it.answer || '?'}</span>
                         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.label}</span>
                         {it.fig && <span title="Metinde şekil/harita/grafik geçiyor; resmi eklemeniz gerekebilir">🖼?</span>}
+                        {it.qOver > 0 && <span style={{ color: '#dc2626', fontWeight: 'bold' }} title="Soru sayfadan taşıyor">⚠ soru sığmıyor (+{Math.ceil(it.qOver / MM_PX)} mm)</span>}
+                        {it.sOver > 0 && <span style={{ color: '#dc2626', fontWeight: 'bold' }} title="Çözüm sayfadan taşıyor">⚠ çözüm sığmıyor (+{Math.ceil(it.sOver / MM_PX)} mm)</span>}
+                        {it.fixed && !(it.qOver > 0 || it.sOver > 0) && <span style={{ color: '#16a34a' }}>✓ düzeltildi</span>}
+                        {(it.qOver > 0 || it.sOver > 0 || !it.answer) && !bulk.running && !bulk.checking && <button style={{ ...tbBtn(false), height: '24px', padding: '0 8px' }} onClick={() => startEdit(it)}>✎ Düzenle</button>}
                         {lg && <span style={{ color: lg.ok ? '#16a34a' : '#dc2626' }}>{lg.ok ? '✓ kaydedildi' : '✗ ' + lg.msg}</span>}
                       </div>
                     );
@@ -1545,15 +1612,22 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                   <input type="number" min={1} max={bulk.items.length} value={bulk.from} disabled={bulk.running} onChange={(e) => setBulk((b) => ({ ...b, from: Number(e.target.value) }))} style={{ width: '70px', height: '30px' }} />
                   <span>–</span>
                   <input type="number" min={1} max={bulk.items.length} value={bulk.to} disabled={bulk.running} onChange={(e) => setBulk((b) => ({ ...b, to: Number(e.target.value) }))} style={{ width: '70px', height: '30px' }} />
-                  <span style={{ color: '#64748b' }}>Grup: <b>{batchName.trim() || '(sağdan girin)'}</b> · Sayfa: {pageW}×{pageH} cm</span>
+                  <span style={{ color: '#64748b' }}>Grup: <b>{batchName.trim() || '(sağdan girin)'}</b></span>
+                  <span style={{ color: '#64748b' }}>Sayfa (cm):</span>
+                  <input type="text" inputMode="decimal" value={wInput} disabled={bulk.running || bulk.checking} onChange={(e) => setWInput(e.target.value)} onBlur={() => commitSize('w')} style={{ width: '52px', height: '30px' }} title="Sayfa genişliği" />
+                  <span>×</span>
+                  <input type="text" inputMode="decimal" value={hInput} disabled={bulk.running || bulk.checking} onChange={(e) => setHInput(e.target.value)} onBlur={() => commitSize('h')} style={{ width: '52px', height: '30px' }} title="Sayfa yüksekliği (sığmayanlar için büyütüp yeniden kontrol edin)" />
                 </div>
                 {bulk.running && <div style={{ marginTop: '8px', fontSize: '0.85rem' }}>⏳ {bulk.done} / {Math.min(bulk.items.length, bulk.to) - Math.max(1, bulk.from) + 1} işleniyor… (sekmeyi kapatmayın)</div>}
                 {bulk.finished && <div style={{ marginTop: '8px', fontSize: '0.85rem', fontWeight: 'bold' }}>Bitti: {bulk.log.filter((l) => l.ok).length} kaydedildi, {bulk.log.filter((l) => !l.ok).length} atlandı.</div>}
                 <div style={{ marginTop: '12px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                   {bulk.running
                     ? <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => { bulkStop.current = true; }}>Durdur</button>
+                    : bulk.checking
+                    ? <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => { bulkStop.current = true; }}>Kontrolü durdur</button>
                     : <>
                       <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => setBulk(null)}>Kapat</button>
+                      <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => runPrecheck(bulk.items)}>Sığmayı yeniden kontrol et</button>
                       <button style={{ ...tbBtn(true), height: '34px', backgroundColor: '#2563eb', color: '#fff' }} onClick={runBulk}>Seçili aralığı havuza kaydet</button>
                     </>}
                 </div>
