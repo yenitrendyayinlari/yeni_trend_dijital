@@ -371,7 +371,7 @@ const baseExtensions = () => [
 ];
 
 // Yüklenen şekli (PNG/JPG/SVG ya da PDF/Illustrator-PDF'in ilk sayfası) PNG data URL'ine çevirir.
-const fileToPngDataUrl = async (file) => {
+const fileToPngDataUrl = async (file, opts) => {
   const MAX_W = 1100;
   const isPdf = file.type === 'application/pdf' || /\.(pdf|ai)$/i.test(file.name);
   const canvas = document.createElement('canvas');
@@ -400,7 +400,7 @@ const fileToPngDataUrl = async (file) => {
     ctx.drawImage(img, 0, 0, w, h);
     URL.revokeObjectURL(url);
   }
-  return trimWhiteMargins(canvas).toDataURL('image/png');
+  return (opts && opts.trim === false ? canvas : trimWhiteMargins(canvas)).toDataURL('image/png');
 };
 
 // Çizimin etrafındaki boş beyaz alanı otomatik kırpar (6 px pay bırakır).
@@ -461,7 +461,7 @@ const kids = (el, tag) => Array.from(el.children).filter((c) => c.tagName === ta
 // Bir paragrafın (ya da tablonun) düz metni
 function paraText(p) {
   if (p.table) return p.table.cells.map((c) => c.paras.map(paraText).join(' ')).join(' ');
-  return (p.segs || []).map((g) => g.text || '').join('');
+  return (p.segs || []).map((g) => (g.img ? '\uFFFC' : (g.text || ''))).join(''); // resim 1 karakter sayılır (yoksa resim-only paragraf boş sanılır)
 }
 function countTables(paras) { return (paras || []).reduce((n, p) => n + (p.table ? 1 + p.table.cells.reduce((m, c) => m + countTables(c.paras), 0) : 0), 0); }
 function parseIcml(xmlText) {
@@ -484,6 +484,33 @@ function parseIcml(xmlText) {
   };
   const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
   let skippedTables = 0;
+  let unlinkedImages = 0;
+  // Satır içi resim çerçevesi: InDesign "Bağlantılar" paneli = <Link LinkResourceURI="file:C:/.../resim.eps">.
+  // Gerçek resim ICML içinde yok; yalnızca dosya adı ve çerçeve boyutu var.
+  const imgKey = (name) => String(name || '').replace(/\.[^.\\/]+$/, '').normalize('NFC').toLowerCase().trim();
+  const imgFromRect = (rect) => {
+    const link = rect.getElementsByTagName('Link')[0];
+    const uri = link ? link.getAttribute('LinkResourceURI') : null;
+    if (!uri) { if (rect.getAttribute('ContentType') === 'GraphicType') unlinkedImages++; return null; }
+    let name = uri; try { name = decodeURIComponent(uri); } catch (e) { /* olduğu gibi */ }
+    name = name.split(/[\\/]/).pop();
+    // çerçeve boyutu (pt): Rectangle > Properties > PathGeometry noktalarının sınırları x ölçek
+    const props = kids(rect, 'Properties')[0];
+    const pg = props ? kids(props, 'PathGeometry')[0] : null;
+    let wMm = null, hMm = null;
+    if (pg) {
+      const pts = Array.from(pg.getElementsByTagName('PathPointType')).map((q) => (q.getAttribute('Anchor') || '').trim().split(/\s+/).map(Number)).filter((a) => a.length === 2 && a.every(Number.isFinite));
+      if (pts.length) {
+        const xs = pts.map((a) => a[0]), ys = pts.map((a) => a[1]);
+        const t = (rect.getAttribute('ItemTransform') || '1 0 0 1 0 0').trim().split(/\s+/).map(Number);
+        const sx = Number.isFinite(t[0]) && Number.isFinite(t[1]) ? Math.hypot(t[0], t[1]) : 1;
+        const sy = Number.isFinite(t[2]) && Number.isFinite(t[3]) ? Math.hypot(t[2], t[3]) : 1;
+        wMm = round1((Math.max(...xs) - Math.min(...xs)) * sx * PT_MM);
+        hMm = round1((Math.max(...ys) - Math.min(...ys)) * sy * PT_MM);
+      }
+    }
+    return { name, key: imgKey(name), wMm: wMm > 0 ? wMm : null, hMm: hMm > 0 ? hMm : null };
+  };
   const storyPages = [];
   const collectPsr = (node, out) => {
     Array.from(node.children).forEach((c) => {
@@ -543,6 +570,7 @@ function parseIcml(xmlText) {
             parts.forEach((t, i) => { if (i > 0) { cur.segs.push({ br: true }); } if (t) cur.segs.push({ text: t, marks }); });
             open = true;
           } else if (ch.tagName === 'Br') { push(); }
+          else if (ch.tagName === 'Rectangle') { const im = imgFromRect(ch); if (im) { cur.segs.push({ img: im }); open = true; } }
           else if (ch.tagName === 'Table') { if (cur.segs.length) push(); paras.push({ table: parseTable(ch) }); open = false; }
         });
         // Sayfa/sütun sonu işareti (InDesign'da "Page Break" ya da bağlı kutudan sonraki kutuya geçiş)
@@ -588,7 +616,7 @@ function parseIcml(xmlText) {
     if (b.length) blocks.push(b);
     blocks.forEach((bl) => stories.push({ paras: bl, label: textOf(bl[0]).replace(/\s+/g, ' ').trim().slice(0, 110) || textOf(bl[bl.length - 1]).trim().slice(0, 110), count: bl.length }));
   });
-  return { blocks: stories, skippedTables, storyPages };
+  return { blocks: stories, skippedTables, storyPages, unlinkedImages };
 }
 // Çözüm sayfasının altındaki "|A|B|C|D|E|" satırını bulur; kalın (Black/Bold) harf doğru cevaptır.
 function extractAnswer(paras) {
@@ -601,7 +629,7 @@ function extractAnswer(paras) {
   // Cevap satırı bazen ayrı bir paragraf, bazen çözüm metninin hemen sonunda: sondan geriye
   // yalnızca "|", A-E harfleri ve boşluk içeren parçaları topla.
   let k = last.segs.length;
-  while (k > 0) { const g = last.segs[k - 1]; if (g.br || !/^[|A-E\s]*$/.test(g.text || '')) break; k--; }
+  while (k > 0) { const g = last.segs[k - 1]; if (g.br || g.img || !/^[|A-E\s]*$/.test(g.text || '')) break; k--; }
   const tail = last.segs.slice(k);
   const tailText = tail.map((g) => g.text || '').join('');
   if (!(tailText.length <= 30 && tailText.replace(/[^A-E]/g, '') === 'ABCDE')) return { answer: null, paras, found: false };
@@ -612,8 +640,8 @@ function extractAnswer(paras) {
   while (rest.length && txt(rest[rest.length - 1]).length === 0) rest.pop();
   return { answer: heavy.size === 1 ? [...heavy][0] : null, paras: rest, found: true };
 }
-const icmlParasToJson = (paras) => paras.map((p) => (p.table ? icmlTableToJson(p.table) : icmlParaToJson(p)));
-function icmlTableToJson(tb) {
+const icmlParasToJson = (paras, imgMap) => paras.map((p) => (p.table ? icmlTableToJson(p.table, imgMap) : icmlParaToJson(p, imgMap)));
+function icmlTableToJson(tb, imgMap) {
   const rows = [];
   for (let y = 0; y < tb.rowH.length; y++) {
     const cs = tb.cells.filter((c) => c.y === y).sort((a, b) => a.x - b.x);
@@ -623,7 +651,7 @@ function icmlTableToJson(tb) {
       content: cs.map((c) => {
         const widths = [];
         for (let i = c.x; i < c.x + c.cs; i++) widths.push(Math.max(8, Math.round((tb.colW[i] || 30) * PT_MM * MM_PX)));
-        const body = c.paras.filter((q) => !q.table).map(icmlParaToJson);
+        const body = c.paras.filter((q) => !q.table).map((q) => icmlParaToJson(q, imgMap));
         return {
           type: 'tableCell',
           attrs: { colspan: c.cs, rowspan: c.rs, colwidth: widths, bT: c.edges.t || null, bB: c.edges.b || null, bL: c.edges.l || null, bR: c.edges.r || null, pad: c.pad },
@@ -634,12 +662,13 @@ function icmlTableToJson(tb) {
   }
   return { type: 'table', attrs: { borderW: 0, fit: false }, content: rows };
 }
-function icmlParaToJson(p) {
+function icmlParaToJson(p, imgMap) {
   const attrs = { indentLeft: p.indentLeft, indentRight: p.indentRight, firstLine: p.firstLine, spaceBefore: p.spaceBefore, spaceAfter: p.spaceAfter, leading: p.leading, tabs: p.tabs || null };
   if (p.textAlign) attrs.textAlign = p.textAlign;
   const content = [];
   p.segs.forEach((g) => {
     if (g.br) { content.push({ type: 'hardBreak' }); return; }
+    if (g.img) { const src = imgMap && imgMap.get(g.img.key); if (src) content.push({ type: 'image', attrs: { src, srcName: g.img.name, widthMm: g.img.wMm } }); return; }
     const m = g.marks; const marks = [];
     if (m.bold) marks.push({ type: 'bold' });
     if (m.italic) marks.push({ type: 'italic' });
@@ -656,9 +685,9 @@ function icmlParaToJson(p) {
 }
 
 // Toplu aktarma öğesi: düzeltilmişse (qJson/sJson) onu, değilse ICML'den üretileni kullan
-const itemQDoc = (it) => it.qJson || { type: 'doc', content: icmlParasToJson(it.q) };
+const itemQDoc = (it, imgMap) => it.qJson || { type: 'doc', content: icmlParasToJson(it.q, imgMap) };
 const itemHasSol = (it) => (it.sJson !== undefined ? !!it.sHas : !!(it.s && it.s.some((p) => p.table || (p.segs || []).length)));
-const itemSDoc = (it) => (it.sJson !== undefined ? it.sJson : (itemHasSol(it) ? { type: 'doc', content: icmlParasToJson(it.s) } : ''));
+const itemSDoc = (it, imgMap) => (it.sJson !== undefined ? it.sJson : (itemHasSol(it) ? { type: 'doc', content: icmlParasToJson(it.s, imgMap) } : ''));
 
 // ---- InDesign tarzı simgeler ve Sekmeler paneli ----
 const SvgI = ({ children, w = 16 }) => (
@@ -920,6 +949,8 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const setSideBySide = (b) => { setSideBySideState(b); try { localStorage.setItem('pqSide', b ? '1' : '0'); } catch (e) { /* önemsiz */ } };
   const [bulk, setBulk] = useState(null); // toplu aktarma penceresi: {items, notes, from, to, running, done, log}
   const bulkStop = useRef(false);
+  const bulkImgFiles = useRef(new Map()); // resim anahtarı (uzantısız ad) -> File
+  const bulkImgCache = useRef(new Map()); // resim anahtarı -> PNG data URL (PDF'ler tekrar tekrar çözülmesin)
   const bulkLogMap = useRef(new Map());
   const cssRef = useRef(null);
   const [tRows, setTRows] = useState('3');
@@ -1004,15 +1035,44 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
 
   // ---- Toplu aktarma (soru dosyası + çözüm dosyası, her sayfa bir soru) ----
   const mainPages = (res) => (res.storyPages.slice().sort((a, b) => b.len - a.len)[0] || { pages: [] }).pages;
-  const handleBulkFiles = async (qFile, sFile) => {
+  const imgKeyOf = (name) => String(name || '').replace(/\.[^.\\/]+$/, '').normalize('NFC').toLowerCase().trim();
+  const collectImgs = (paras) => {
+    const out = new Map();
+    const walk = (ps) => (ps || []).forEach((p) => { if (p.table) p.table.cells.forEach((c) => walk(c.paras)); else (p.segs || []).forEach((g) => { if (g.img && !out.has(g.img.key)) out.set(g.img.key, g.img); }); });
+    walk(paras);
+    return Array.from(out.values());
+  };
+  // Bir öğenin resimlerini dosyalardan yükler (eksik/okunamayan olursa hata fırlatır)
+  const buildImgMap = async (it) => {
+    const imgMap = new Map();
+    for (const im of (it.imgs || [])) {
+      if (imgMap.has(im.key)) continue;
+      if (bulkImgCache.current.has(im.key)) { imgMap.set(im.key, bulkImgCache.current.get(im.key)); continue; }
+      const f = bulkImgFiles.current.get(im.key);
+      if (!f) throw new Error(`resim dosyası seçilmedi: ${im.name}`);
+      let url;
+      try { url = await fileToPngDataUrl(f, { trim: false }); } catch (e) { throw new Error(`resim okunamadı (${f.name}): ${e.message}`); }
+      bulkImgCache.current.set(im.key, url); imgMap.set(im.key, url);
+    }
+    return imgMap;
+  };
+  const waitImgs = () => Promise.all(Array.from(document.querySelectorAll('.ProseMirror img')).filter((im) => !im.complete).map((im) => new Promise((r) => { im.onload = r; im.onerror = r; })));
+  const handleBulkFiles = async (qFile, sFile, imgFiles) => {
     try {
       const notes = [];
+      // Resim dosyaları (InDesign Links klasöründekilerin PDF/PNG/JPG hâli): ada göre eşleşir, uzantı fark etmez.
+      const fmap = new Map();
+      (imgFiles || []).forEach((f) => { const k = imgKeyOf(f.name); if (!fmap.has(k) || /\.pdf$/i.test(f.name)) fmap.set(k, f); });
+      bulkImgFiles.current = fmap; bulkImgCache.current = new Map();
       const qRes = parseIcml(await qFile.text());
       const qPages = mainPages(qRes);
       const extraStories = qRes.storyPages.filter((x) => x.len > 0).length - 1;
       if (extraStories > 0) notes.push(`${extraStories} küçük metin kutusu (şekil etiketleri: I, II, III gibi) atlandı; şekilli sorulara resmi siz eklersiniz.`);
       let sPages = [];
-      if (sFile) { sPages = mainPages(parseIcml(await sFile.text())); }
+      let sRes = null;
+      if (sFile) { sRes = parseIcml(await sFile.text()); sPages = mainPages(sRes); }
+      const unlinked = (qRes.unlinkedImages || 0) + (sRes ? sRes.unlinkedImages || 0 : 0);
+      if (unlinked) notes.push(`${unlinked} resim çerçevesinin dosya bağlantısı yok (gömülü resim); bunlar aktarılamaz, elle eklemeniz gerekir.`);
       const nTables = qPages.reduce((n, pg) => n + countTables(pg), 0) + sPages.reduce((n, pg) => n + countTables(pg), 0);
       if (nTables > 0) notes.push(`${nTables} tablo gerçek tablo olarak aktarıldı (sütun genişliği, satır yüksekliği ve hücre çizgileriyle). Sorulara göz atıp kontrol edin.`);
       if (sFile && sPages.length !== qPages.length) notes.push(`Soru sayfası ${qPages.length}, çözüm sayfası ${sPages.length}: sayılar eşit değil. Eşleştirme sıraya göredir, kontrol edin.`);
@@ -1020,8 +1080,12 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         const sp = sPages[i];
         const ex = sp ? extractAnswer(sp) : { answer: null, paras: [], found: false };
         const first = (qp.map(paraText).join(' ')).replace(/\s+/g, ' ').trim();
-        return { n: i + 1, q: qp, s: ex.paras, answer: ex.answer, answerLine: ex.found, label: first.slice(0, 100), fig: /harita|grafik|şekil|resim|görsel|piramit|tabloda|diyagram/i.test(first) };
+        const imgs = collectImgs(qp).concat(collectImgs(ex.paras).filter((x) => !collectImgs(qp).some((y) => y.key === x.key)));
+        const missing = imgs.filter((im) => !fmap.has(im.key)).map((im) => im.name);
+        return { n: i + 1, q: qp, s: ex.paras, answer: ex.answer, answerLine: ex.found, label: first.slice(0, 100), imgs, missing, fig: !imgs.length && /harita|grafik|şekil|resim|görsel|piramit|tabloda|diyagram/i.test(first) };
       });
+      const nMissing = items.filter((x) => x.missing.length).length;
+      if (nMissing) notes.push(`${nMissing} soruda resim dosyası bulunamadı (3. alandan ilgili PDF'leri seçin); bu sorular kaydedilmez, listede işaretli.`);
       setBulk({ items, notes, from: 1, to: Math.min(items.length, 50), running: false, done: 0, log: [], finished: false, checking: false, checked: 0, editing: null, onlyBad: false });
       setTimeout(() => runPrecheck(items), 300); // sığmayan soru/çözümleri kaydetmeden önce bul
     } catch (err) { alert('Dosya okunamadı: ' + err.message); }
@@ -1038,9 +1102,11 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       if (bulkStop.current) break;
       const it = items[i];
       try {
-        qEditor.chain().setMeta('addToHistory', false).setContent(itemQDoc(it)).run();
-        sEditor.chain().setMeta('addToHistory', false).setContent(itemHasSol(it) ? itemSDoc(it) : '').run();
+        const imgMap = it.qJson ? null : await buildImgMap(it); // eksik resim varsa bu öğe ölçülmez (listede zaten "eksik" işaretli)
+        qEditor.chain().setMeta('addToHistory', false).setContent(itemQDoc(it, imgMap)).run();
+        sEditor.chain().setMeta('addToHistory', false).setContent(itemHasSol(it) ? itemSDoc(it, imgMap) : '').run();
         await sleep(200);
+        await waitImgs();
         const qh = qPageRef.current.querySelector('.ProseMirror').offsetHeight;
         const sh = sPageRef.current.querySelector('.ProseMirror').offsetHeight;
         items[i] = { ...it, qOver: qh > avail + 1 ? Math.ceil(qh - avail) : 0, sOver: itemHasSol(it) && sh > avail + 1 ? Math.ceil(sh - avail) : 0 };
@@ -1051,10 +1117,12 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     setBulk((b) => (b ? { ...b, items: items.slice(), checking: false } : b));
   };
   // Sorunlu soruyu ana editöre açıp düzeltme
-  const startEdit = (it) => {
+  const startEdit = async (it) => {
     if (!qEditor || !sEditor || bulk.checking || bulk.running) return;
-    qEditor.commands.setContent(itemQDoc(it));
-    sEditor.commands.setContent(itemHasSol(it) ? itemSDoc(it) : '');
+    let imgMap = null;
+    try { imgMap = it.qJson ? null : await buildImgMap(it); } catch (e) { alert(e.message); return; }
+    qEditor.commands.setContent(itemQDoc(it, imgMap));
+    sEditor.commands.setContent(itemHasSol(it) ? itemSDoc(it, imgMap) : '');
     setAnswer(it.answer || '');
     setBulk((b) => ({ ...b, editing: it.n }));
   };
@@ -1062,6 +1130,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     const n = bulk.editing;
     if (save) {
       await sleep(150);
+      await waitImgs();
       const avail = contentPxH - PAD_Y * 2;
       const qh = qPageRef.current.querySelector('.ProseMirror').offsetHeight;
       const sh = sPageRef.current.querySelector('.ProseMirror').offsetHeight;
@@ -1090,11 +1159,13 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       const it = bulk.items[n - 1];
       try {
         if (!it.answer) throw new Error(it.answerLine ? 'doğru cevap okunamadı (kalın harf yok ya da birden fazla)' : 'çözüm dosyasında cevap satırı bulunamadı');
-        qEditor.chain().setMeta('addToHistory', false).setContent(itemQDoc(it)).run(); // geri al geçmişi şişmesin
+        const imgMap = it.qJson ? null : await buildImgMap(it); // eksik/okunamayan resim -> bu soru kaydedilmez
+        qEditor.chain().setMeta('addToHistory', false).setContent(itemQDoc(it, imgMap)).run(); // geri al geçmişi şişmesin
         const hasSol = itemHasSol(it);
-        sEditor.chain().setMeta('addToHistory', false).setContent(hasSol ? itemSDoc(it) : '').run();
+        sEditor.chain().setMeta('addToHistory', false).setContent(hasSol ? itemSDoc(it, imgMap) : '').run();
         setAnswer(it.answer);
         await sleep(420);
+        await waitImgs(); // resimler yüklenmeden yükseklik ölçülmesin
         const qh = qPageRef.current.querySelector('.ProseMirror').offsetHeight;
         const sh = sPageRef.current.querySelector('.ProseMirror').offsetHeight;
         if (qh > avail + 1) throw new Error('soru sayfaya sığmıyor (sayfa boyunu büyütün)');
@@ -1567,12 +1638,15 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                 <input type="file" accept=".icml,.xml" id="bulkQ" />
                 <label style={{ display: 'block', margin: '10px 0 2px', fontWeight: 'bold' }}>2) Çözüm dosyası (.icml)</label>
                 <input type="file" accept=".icml,.xml" id="bulkS" />
+                <label style={{ display: 'block', margin: '10px 0 2px', fontWeight: 'bold' }}>3) Resim dosyaları (soruda resim varsa)</label>
+                <input type="file" accept=".pdf,.png,.jpg,.jpeg,.svg,.ai" id="bulkImg" multiple />
+                <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: '3px' }}>InDesign'daki Links klasöründeki resimlerin PDF (ya da PNG/JPG) hâlini seçin. Eşleştirme dosya adıyla yapılır, uzantı fark etmez: <i>15 cog_2011_7 den gkgy.eps</i> → <i>15 cog_2011_7 den gkgy.pdf</i>. Resim boyutu InDesign'daki çerçeve genişliğinden alınır.</div>
                 <div style={{ marginTop: '14px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                   <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => setBulk(null)}>Vazgeç</button>
                   <button style={{ ...tbBtn(true), height: '34px', backgroundColor: '#2563eb', color: '#fff' }} onClick={() => {
                     const q = document.getElementById('bulkQ').files[0]; const sf = document.getElementById('bulkS').files[0];
                     if (!q) { alert('Soru dosyasını seçin.'); return; }
-                    handleBulkFiles(q, sf);
+                    handleBulkFiles(q, sf, Array.from(document.getElementById('bulkImg').files));
                   }}>Dosyaları oku</button>
                 </div>
               </div>
@@ -1598,6 +1672,9 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                         <span style={{ width: '24px', fontWeight: 'bold', color: it.answer ? '#16a34a' : '#dc2626' }}>{it.answer || '?'}</span>
                         <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.label}</span>
                         {it.fig && <span title="Metinde şekil/harita/grafik geçiyor; resmi eklemeniz gerekebilir">🖼?</span>}
+                        {it.imgs && it.imgs.length > 0 && (it.missing.length
+                          ? <span title={'Eksik resim dosyası: ' + it.missing.join(', ')} style={{ color: '#dc2626' }}>🖼 ⚠ {it.missing.length} eksik</span>
+                          : <span title={it.imgs.map((x) => x.name).join(', ')} style={{ color: '#16a34a' }}>🖼 {it.imgs.length}</span>)}
                         {it.qOver > 0 && <span style={{ color: '#dc2626', fontWeight: 'bold' }} title="Soru sayfadan taşıyor">⚠ soru sığmıyor (+{Math.ceil(it.qOver / MM_PX)} mm)</span>}
                         {it.sOver > 0 && <span style={{ color: '#dc2626', fontWeight: 'bold' }} title="Çözüm sayfadan taşıyor">⚠ çözüm sığmıyor (+{Math.ceil(it.sOver / MM_PX)} mm)</span>}
                         {it.fixed && !(it.qOver > 0 || it.sOver > 0) && <span style={{ color: '#16a34a' }}>✓ düzeltildi</span>}
