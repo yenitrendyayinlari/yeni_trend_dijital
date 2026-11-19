@@ -372,7 +372,7 @@ const baseExtensions = () => [
 
 // Yüklenen şekli (PNG/JPG/SVG ya da PDF/Illustrator-PDF'in ilk sayfası) PNG data URL'ine çevirir.
 const fileToPngDataUrl = async (file, opts) => {
-  const MAX_W = 1100;
+  const MAX_W = (opts && opts.maxW) || 1100;
   const isPdf = file.type === 'application/pdf' || /\.(pdf|ai)$/i.test(file.name);
   const canvas = document.createElement('canvas');
   if (isPdf) {
@@ -950,6 +950,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const [bulk, setBulk] = useState(null); // toplu aktarma penceresi: {items, notes, from, to, running, done, log}
   const bulkStop = useRef(false);
   const bulkImgFiles = useRef(new Map()); // resim anahtarı (uzantısız ad) -> File
+  const bulkTrim = useRef(true); // resimlerin boş beyaz kenarları kırpılsın mı
   const bulkImgCache = useRef(new Map()); // resim anahtarı -> PNG data URL (PDF'ler tekrar tekrar çözülmesin)
   const bulkLogMap = useRef(new Map());
   const cssRef = useRef(null);
@@ -1051,7 +1052,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       const f = bulkImgFiles.current.get(im.key);
       if (!f) throw new Error(`resim dosyası seçilmedi: ${im.name}`);
       let url;
-      try { url = await fileToPngDataUrl(f, { trim: false }); } catch (e) { throw new Error(`resim okunamadı (${f.name}): ${e.message}`); }
+      try { url = await fileToPngDataUrl(f, { trim: bulkTrim.current, maxW: 2600 }); } catch (e) { throw new Error(`resim okunamadı (${f.name}): ${e.message}`); }
       bulkImgCache.current.set(im.key, url); imgMap.set(im.key, url);
     }
     return imgMap;
@@ -1064,6 +1065,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       const fmap = new Map();
       (imgFiles || []).forEach((f) => { const k = imgKeyOf(f.name); if (!fmap.has(k) || /\.pdf$/i.test(f.name)) fmap.set(k, f); });
       bulkImgFiles.current = fmap; bulkImgCache.current = new Map();
+      const tcb = document.getElementById('bulkTrim'); bulkTrim.current = tcb ? tcb.checked : true;
       const qRes = parseIcml(await qFile.text());
       const qPages = mainPages(qRes);
       const extraStories = qRes.storyPages.filter((x) => x.len > 0).length - 1;
@@ -1640,6 +1642,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                 <input type="file" accept=".icml,.xml" id="bulkS" />
                 <label style={{ display: 'block', margin: '10px 0 2px', fontWeight: 'bold' }}>3) Resim dosyaları (soruda resim varsa)</label>
                 <input type="file" accept=".pdf,.png,.jpg,.jpeg,.svg,.ai" id="bulkImg" multiple />
+                <label style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '0.8rem', marginTop: '6px' }}><input type="checkbox" id="bulkTrim" defaultChecked /> Resimlerin etrafındaki boş beyaz alanı kırp (önerilir; PDF sayfası resimden büyükse resim küçük görünmez)</label>
                 <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: '3px' }}>InDesign'daki Links klasöründeki resimlerin PDF (ya da PNG/JPG) hâlini seçin. Eşleştirme dosya adıyla yapılır, uzantı fark etmez: <i>15 cog_2011_7 den gkgy.eps</i> → <i>15 cog_2011_7 den gkgy.pdf</i>. Resim boyutu InDesign'daki çerçeve genişliğinden alınır.</div>
                 <div style={{ marginTop: '14px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                   <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => setBulk(null)}>Vazgeç</button>
