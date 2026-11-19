@@ -1159,6 +1159,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     for (let n = from; n <= to; n++) {
       if (bulkStop.current) break;
       const it = bulk.items[n - 1];
+      if (it.saved) { log.push({ n, ok: true }); done++; setBulk((b) => ({ ...b, done: n - from + 1, log: log.slice() })); continue; } // düzenleyip tek tek kaydedilmişti
       try {
         if (!it.answer) throw new Error(it.answerLine ? 'doğru cevap okunamadı (kalın harf yok ya da birden fazla)' : 'çözüm dosyasında cevap satırı bulunamadı');
         const imgMap = it.qJson ? null : await buildImgMap(it); // eksik/okunamayan resim -> bu soru kaydedilmez
@@ -1364,6 +1365,11 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       qEditor.commands.clearContent(true);
       if (sEditor) sEditor.commands.clearContent(true);
       setAnswer('');
+      // Toplu aktarmadan açılan soru kaydedildiyse: listede "kaydedildi" işaretle ve listeye dön
+      if (bulk && bulk.editing) {
+        const bn = bulk.editing;
+        setBulk((b) => ({ ...b, editing: null, items: b.items.map((x) => (x.n === bn ? { ...x, saved: true, fixed: false, qOver: 0, sOver: 0 } : x)) }));
+      }
       if (onSaved) onSaved();
     } catch (err) {
       alert('Kaydedilemedi: ' + err.message);
@@ -1624,7 +1630,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       )}
       {bulk && bulk.editing && (
         <div style={{ position: 'fixed', left: '50%', bottom: '18px', transform: 'translateX(-50%)', zIndex: 1260, backgroundColor: '#0f172a', color: '#fff', borderRadius: '12px', padding: '10px 14px', display: 'flex', gap: '10px', alignItems: 'center', boxShadow: '0 6px 24px rgba(0,0,0,0.35)', fontSize: '0.85rem' }}>
-          <span>Toplu aktarma · <b>{bulk.editing}. soru</b> düzenleniyor. Sığacak şekilde düzeltin (yazı boyutu, boşluk, kısaltma…).</span>
+          <span>Toplu aktarma · <b>{bulk.editing}. soru</b> düzenleniyor. Sığacak şekilde düzeltin. Yeşil düğme: listeye dön (toplu kayıtta birlikte kaydedilir). “Havuza Kaydet”: yalnız bu soruyu hemen kaydeder ve yine listeye döner.</span>
           <button style={{ ...tbBtn(true), height: '32px', backgroundColor: '#16a34a', color: '#fff' }} onClick={() => finishEdit(true)}>✓ Düzeltmeyi kaydet, listeye dön</button>
           <button style={{ ...tbBtn(false), height: '32px' }} onClick={() => finishEdit(false)}>Vazgeç</button>
         </div>
@@ -1680,8 +1686,9 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                           : <span title={it.imgs.map((x) => x.name).join(', ')} style={{ color: '#16a34a' }}>🖼 {it.imgs.length}</span>)}
                         {it.qOver > 0 && <span style={{ color: '#dc2626', fontWeight: 'bold' }} title="Soru sayfadan taşıyor">⚠ soru sığmıyor (+{Math.ceil(it.qOver / MM_PX)} mm)</span>}
                         {it.sOver > 0 && <span style={{ color: '#dc2626', fontWeight: 'bold' }} title="Çözüm sayfadan taşıyor">⚠ çözüm sığmıyor (+{Math.ceil(it.sOver / MM_PX)} mm)</span>}
-                        {it.fixed && !(it.qOver > 0 || it.sOver > 0) && <span style={{ color: '#16a34a' }}>✓ düzeltildi</span>}
-                        {(it.qOver > 0 || it.sOver > 0 || !it.answer) && !bulk.running && !bulk.checking && <button style={{ ...tbBtn(false), height: '24px', padding: '0 8px' }} onClick={() => startEdit(it)}>✎ Düzenle</button>}
+                        {it.saved && <span style={{ color: '#16a34a', fontWeight: 'bold' }}>✓ havuza kaydedildi</span>}
+                        {it.fixed && !it.saved && !(it.qOver > 0 || it.sOver > 0) && <span style={{ color: '#16a34a' }}>✓ düzeltildi</span>}
+                        {!it.saved && (it.qOver > 0 || it.sOver > 0 || !it.answer) && !bulk.running && !bulk.checking && <button style={{ ...tbBtn(false), height: '24px', padding: '0 8px' }} onClick={() => startEdit(it)}>✎ Düzenle</button>}
                         {lg && <span style={{ color: lg.ok ? '#16a34a' : '#dc2626' }}>{lg.ok ? '✓ kaydedildi' : '✗ ' + lg.msg}</span>}
                       </div>
                     );
