@@ -36,7 +36,7 @@ const SIZE_PRESETS = [
 ];
 const FONT_SIZES_PT = [8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 24];
 const MM_PX = PX_PER_CM / 10; // ekranda 1 mm = 4 px
-const FONTS = ['Arial', 'Times New Roman', 'Verdana', 'Georgia', 'Calibri', 'Courier New'];
+const FONTS = ['Arial', 'Times New Roman', 'Verdana', 'Georgia', 'Calibri', 'Courier New', 'Symbol', 'ZapfDingbats BT'];
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
 
 const ResizableImage = Image.extend({
@@ -53,6 +53,12 @@ const ResizableImage = Image.extend({
         default: null,
         parseHTML: (el) => el.getAttribute('data-src-name'),
         renderHTML: (attrs) => (attrs.srcName ? { 'data-src-name': attrs.srcName } : {}),
+      },
+      // Kaynak dosyanın son değişiklik zamanı (klasörde değişiklik var mı diye karşılaştırmak için).
+      srcMod: {
+        default: null,
+        parseHTML: (el) => { const v = el.getAttribute('data-src-mod'); return v == null ? null : Number(v); },
+        renderHTML: (attrs) => (attrs.srcMod ? { 'data-src-mod': attrs.srcMod } : {}),
       },
       // Mutlak genişlik (mm): sayfa boyutu değişse de resim küçülmez/büyümez.
       widthMm: {
@@ -370,6 +376,23 @@ const baseExtensions = () => [
   ResizableImage,
 ];
 
+// ---- Resim klasörü bağlama (File System Access API: yalnız Chrome/Edge) ----
+const FOLDER_SUPPORTED = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
+const keyOfName = (name) => String(name || '').replace(/\.[^.\\/]+$/, '').normalize('NFC').toLowerCase().trim();
+const idbOpen = () => new Promise((res, rej) => { const r = indexedDB.open('pq-folder', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const idbGet = async (k) => { try { const db = await idbOpen(); return await new Promise((res) => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); } catch (e) { return null; } };
+const idbSet = async (k, v) => { try { const db = await idbOpen(); await new Promise((res) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); } catch (e) { /* önemsiz */ } };
+// Klasörü (alt klasörler dahil) tarar: anahtar -> dosya tutamacı (aynı adda PDF varsa o öncelikli)
+const scanDir = async (dir, out, depth = 0) => {
+  for await (const [name, h] of dir.entries()) {
+    if (h.kind === 'directory') { if (depth < 6 && !name.startsWith('.')) await scanDir(h, out, depth + 1); continue; }
+    if (!/\.(pdf|png|jpe?g|svg|ai)$/i.test(name)) continue;
+    const k = keyOfName(name);
+    if (!out.has(k) || /\.pdf$/i.test(name)) out.set(k, h);
+  }
+  return out;
+};
+
 // Yüklenen şekli (PNG/JPG/SVG ya da PDF/Illustrator-PDF'in ilk sayfası) PNG data URL'ine çevirir.
 const fileToPngDataUrl = async (file, opts) => {
   const MAX_W = (opts && opts.maxW) || 1100;
@@ -668,7 +691,7 @@ function icmlParaToJson(p, imgMap) {
   const content = [];
   p.segs.forEach((g) => {
     if (g.br) { content.push({ type: 'hardBreak' }); return; }
-    if (g.img) { const src = imgMap && imgMap.get(g.img.key); if (src) content.push({ type: 'image', attrs: { src, srcName: g.img.name, widthMm: g.img.wMm } }); return; }
+    if (g.img) { const src = imgMap && imgMap.get(g.img.key); if (src) content.push({ type: 'image', attrs: { src, srcName: g.img.name, srcMod: (imgMap.mods && imgMap.mods.get(g.img.key)) || null, widthMm: g.img.wMm } }); return; }
     const m = g.marks; const marks = [];
     if (m.bold) marks.push({ type: 'bold' });
     if (m.italic) marks.push({ type: 'italic' });
@@ -953,6 +976,54 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   const bulkTrim = useRef(true); // resimlerin boş beyaz kenarları kırpılsın mı
   const bulkImgCache = useRef(new Map()); // resim anahtarı -> PNG data URL (PDF'ler tekrar tekrar çözülmesin)
   const bulkLogMap = useRef(new Map());
+  const bulkImgMods = useRef(new Map()); // resim anahtarı -> dosyanın lastModified
+  const folderIdx = useRef(new Map()); // klasördeki resimler: anahtar -> FileSystemFileHandle
+  const folderHandle = useRef(null);
+  const [folder, setFolder] = useState({ state: FOLDER_SUPPORTED ? 'none' : 'unsupported', name: '', count: 0, busy: false });
+  const [linkStat, setLinkStat] = useState({}); // anahtar -> 'ok' | 'changed' | 'missing' | 'unknown'
+  const checkRef = useRef(null);
+  const editKey = isEdit ? editRow.id : 'new';
+  const bulkEditing = bulk ? bulk.editing : null;
+  useEffect(() => {
+    if (folder.state !== 'ready') return undefined;
+    const t = setTimeout(() => { if (checkRef.current) checkRef.current(true); }, 900);
+    return () => clearTimeout(t);
+  }, [folder.state, editKey, bulkEditing]);
+  const scanFolder = async (h) => {
+    setFolder((f) => ({ ...f, busy: true }));
+    try {
+      const m = await scanDir(h, new Map());
+      folderIdx.current = m; folderHandle.current = h;
+      setFolder({ state: 'ready', name: h.name, count: m.size, busy: false });
+      return true;
+    } catch (e) { setFolder({ state: 'need-perm', name: h.name, count: 0, busy: false }); return false; }
+  };
+  const connectFolder = async () => {
+    try {
+      const h = await window.showDirectoryPicker({ mode: 'read' });
+      await idbSet('dir', h);
+      await scanFolder(h);
+    } catch (e) { /* iptal */ }
+  };
+  const grantFolder = async () => {
+    const h = folderHandle.current; if (!h) return connectFolder();
+    try { if ((await h.requestPermission({ mode: 'read' })) === 'granted') await scanFolder(h); } catch (e) { /* iptal */ }
+  };
+  useEffect(() => {
+    if (!FOLDER_SUPPORTED) return undefined;
+    let dead = false;
+    (async () => {
+      const h = await idbGet('dir');
+      if (!h || dead) return;
+      folderHandle.current = h;
+      let perm = 'prompt';
+      try { perm = await h.queryPermission({ mode: 'read' }); } catch (e) { /* yoksay */ }
+      if (dead) return;
+      if (perm === 'granted') scanFolder(h); else setFolder({ state: 'need-perm', name: h.name, count: 0, busy: false });
+    })();
+    return () => { dead = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const cssRef = useRef(null);
   const [tRows, setTRows] = useState('3');
   const [tCols, setTCols] = useState('3');
@@ -1046,14 +1117,19 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   // Bir öğenin resimlerini dosyalardan yükler (eksik/okunamayan olursa hata fırlatır)
   const buildImgMap = async (it) => {
     const imgMap = new Map();
+    imgMap.mods = new Map();
     for (const im of (it.imgs || [])) {
       if (imgMap.has(im.key)) continue;
-      if (bulkImgCache.current.has(im.key)) { imgMap.set(im.key, bulkImgCache.current.get(im.key)); continue; }
-      const f = bulkImgFiles.current.get(im.key);
-      if (!f) throw new Error(`resim dosyası seçilmedi: ${im.name}`);
+      if (bulkImgCache.current.has(im.key)) { imgMap.set(im.key, bulkImgCache.current.get(im.key)); imgMap.mods.set(im.key, bulkImgMods.current.get(im.key) || null); continue; }
+      let f = bulkImgFiles.current.get(im.key) || folderIdx.current.get(im.key);
+      if (!f) throw new Error(`resim dosyası bulunamadı (ne seçildi ne de bağlı klasörde var): ${im.name}`);
       let url;
-      try { url = await fileToPngDataUrl(f, { trim: bulkTrim.current, maxW: 2600 }); } catch (e) { throw new Error(`resim okunamadı (${f.name}): ${e.message}`); }
-      bulkImgCache.current.set(im.key, url); imgMap.set(im.key, url);
+      try {
+        if (typeof f.getFile === 'function') f = await f.getFile();
+        url = await fileToPngDataUrl(f, { trim: bulkTrim.current, maxW: 2600 });
+      } catch (e) { throw new Error(`resim okunamadı (${im.name}): ${e.message}`); }
+      bulkImgCache.current.set(im.key, url); bulkImgMods.current.set(im.key, f.lastModified || null);
+      imgMap.set(im.key, url); imgMap.mods.set(im.key, f.lastModified || null);
     }
     return imgMap;
   };
@@ -1064,8 +1140,8 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       // Resim dosyaları (InDesign Links klasöründekilerin PDF/PNG/JPG hâli): ada göre eşleşir, uzantı fark etmez.
       const fmap = new Map();
       (imgFiles || []).forEach((f) => { const k = imgKeyOf(f.name); if (!fmap.has(k) || /\.pdf$/i.test(f.name)) fmap.set(k, f); });
-      bulkImgFiles.current = fmap; bulkImgCache.current = new Map();
-      const tcb = document.getElementById('bulkTrim'); bulkTrim.current = tcb ? tcb.checked : true;
+      bulkImgFiles.current = fmap; bulkImgCache.current = new Map(); bulkImgMods.current = new Map();
+      const tcb = document.getElementById('bulkTrim'); bulkTrim.current = tcb ? tcb.checked : true; try { localStorage.setItem('pqTrimImg', bulkTrim.current ? '1' : '0'); } catch (e) { /* önemsiz */ }
       const qRes = parseIcml(await qFile.text());
       const qPages = mainPages(qRes);
       const extraStories = qRes.storyPages.filter((x) => x.len > 0).length - 1;
@@ -1083,11 +1159,11 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         const ex = sp ? extractAnswer(sp) : { answer: null, paras: [], found: false };
         const first = (qp.map(paraText).join(' ')).replace(/\s+/g, ' ').trim();
         const imgs = collectImgs(qp).concat(collectImgs(ex.paras).filter((x) => !collectImgs(qp).some((y) => y.key === x.key)));
-        const missing = imgs.filter((im) => !fmap.has(im.key)).map((im) => im.name);
+        const missing = imgs.filter((im) => !fmap.has(im.key) && !folderIdx.current.has(im.key)).map((im) => im.name);
         return { n: i + 1, q: qp, s: ex.paras, answer: ex.answer, answerLine: ex.found, label: first.slice(0, 100), imgs, missing, fig: !imgs.length && /harita|grafik|şekil|resim|görsel|piramit|tabloda|diyagram/i.test(first) };
       });
       const nMissing = items.filter((x) => x.missing.length).length;
-      if (nMissing) notes.push(`${nMissing} soruda resim dosyası bulunamadı (3. alandan ilgili PDF'leri seçin); bu sorular kaydedilmez, listede işaretli.`);
+      if (nMissing) notes.push(`${nMissing} soruda resim dosyası bulunamadı (resim klasörünü bağlayın ya da 3. alandan ilgili PDF'leri seçin); bu sorular kaydedilmez, listede işaretli.`);
       setBulk({ items, notes, from: 1, to: Math.min(items.length, 50), running: false, done: 0, log: [], finished: false, checking: false, checked: 0, editing: null, onlyBad: false });
       setTimeout(() => runPrecheck(items), 300); // sığmayan soru/çözümleri kaydetmeden önce bul
     } catch (err) { alert('Dosya okunamadı: ' + err.message); }
@@ -1246,7 +1322,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     if (!f || !ed) return;
     try {
       const dataUrl = await fileToPngDataUrl(f);
-      ed.chain().focus().setImage({ src: dataUrl, srcName: f.name, width: 45, widthMm: Math.round(Math.min(60, availMm * 0.45)) }).run();
+      ed.chain().focus().setImage({ src: dataUrl, srcName: f.name, srcMod: f.lastModified || null, width: 45, widthMm: Math.round(Math.min(60, availMm * 0.45)) }).run();
     } catch (err) {
       alert('Şekil eklenemedi: ' + err.message + '\n(Illustrator dosyasını PDF, SVG veya PNG olarak dışa aktarıp deneyin.)');
     }
@@ -1537,6 +1613,64 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     if (!e) return;
     e.state.doc.descendants((node, pos) => { if (node.type.name === 'image') imgLinks.push({ k, e, pos, label, name: node.attrs.srcName }); });
   });
+  // Klasör denetimi: bağlı klasörde her resmin durumu; değişenler için güncelleme
+  const checkLinks = async (ask) => {
+    if (folder.state !== 'ready') return;
+    const stat = {}; const changed = [];
+    for (const l of imgLinks) {
+      if (!l.name) continue;
+      const k = keyOfName(l.name);
+      let h = folderIdx.current.get(k);
+      if (!h) { try { await scanFolder(folderHandle.current); } catch (e) { /* yoksay */ } h = folderIdx.current.get(k); }
+      if (!h) { stat[k] = 'missing'; continue; }
+      try {
+        const f = await h.getFile();
+        if (!l.srcMod) stat[k] = 'unknown';
+        else if (Math.abs(f.lastModified - l.srcMod) > 1000) { stat[k] = 'changed'; changed.push(l.name); }
+        else stat[k] = 'ok';
+      } catch (e) { stat[k] = 'missing'; }
+    }
+    setLinkStat(stat);
+    if (ask && changed.length) {
+      const uniq = Array.from(new Set(changed));
+      if (window.confirm(`Klasörde değişen resimler var:\n\n${uniq.join('\n')}\n\nGüncelleyeyim mi?`)) await updateLinks(true);
+    }
+  };
+  const updateLinks = async (onlyChanged, only) => {
+    if (folder.state !== 'ready') return;
+    let n = 0; const fails = [];
+    for (const l of imgLinks) {
+      if (!l.name || (only && l !== only)) continue;
+      const k = keyOfName(l.name);
+      const h = folderIdx.current.get(k);
+      if (!h) { fails.push(l.name); continue; }
+      try {
+        const f = await h.getFile();
+        if (onlyChanged && l.srcMod && Math.abs(f.lastModified - l.srcMod) <= 1000) continue;
+        const trimOn = (() => { try { return localStorage.getItem('pqTrimImg') !== '0'; } catch (e) { return true; } })();
+        const url = await fileToPngDataUrl(f, { trim: trimOn, maxW: 2600 });
+        const node = l.e.state.doc.nodeAt(l.pos);
+        if (!node || node.type.name !== 'image') continue;
+        l.e.view.dispatch(l.e.state.tr.setNodeMarkup(l.pos, undefined, { ...node.attrs, src: url, srcMod: f.lastModified }));
+        n += 1;
+      } catch (e) { fails.push(l.name); }
+    }
+    bulkImgCache.current = new Map();
+    await new Promise((r) => setTimeout(r, 60));
+    setLinkStat((st) => { const o = { ...st }; imgLinks.forEach((l) => { if (l.name && o[keyOfName(l.name)] === 'changed') o[keyOfName(l.name)] = 'ok'; }); return o; });
+    if (fails.length) alert('Klasörde bulunamadı/okunamadı: ' + Array.from(new Set(fails)).join(', '));
+    else if (!n) alert('Güncellenecek resim yok.');
+  };
+  checkRef.current = checkLinks;
+  const folderBar = (
+    <div style={{ border: '1px solid #cbd5e1', borderRadius: '6px', padding: '8px', fontSize: '0.78rem', background: '#f8fafc', marginBottom: '8px' }}>
+      {folder.state === 'unsupported' && <div style={{ color: '#b45309' }}>Klasör bağlama bu tarayıcıda yok (Chrome veya Edge gerekir).</div>}
+      {folder.state === 'none' && (<div><div style={{ color: '#475569', marginBottom: '6px' }}>Resimlerin durduğu klasörü bir kez gösterin; resimler adıyla oradan bulunur, yüklemeniz gerekmez.</div><button type="button" onClick={connectFolder} style={{ ...tbBtn(true), height: '30px', background: '#2563eb', color: '#fff' }}>📁 Resim klasörünü bağla</button></div>)}
+      {folder.state === 'need-perm' && (<div><div style={{ color: '#475569', marginBottom: '6px' }}>📁 <b>{folder.name}</b> klasörü kayıtlı. Bu oturumda erişim için izin gerekiyor.</div><button type="button" onClick={grantFolder} style={{ ...tbBtn(true), height: '30px', background: '#16a34a', color: '#fff' }}>İzin ver</button> <button type="button" onClick={connectFolder} style={{ ...tbBtn(false), height: '30px' }}>Başka klasör</button></div>)}
+      {folder.state === 'ready' && (<div><div style={{ color: '#166534', marginBottom: '6px' }}>📁 <b>{folder.name}</b> bağlı · {folder.count} resim dosyası {folder.busy ? '(taranıyor…)' : ''}</div>
+        <button type="button" onClick={async () => { await scanFolder(folderHandle.current); await checkLinks(true); }} style={{ ...tbBtn(false), height: '28px' }}>↻ Klasörden yenile</button> <button type="button" onClick={connectFolder} style={{ ...tbBtn(false), height: '28px' }}>Başka klasör</button></div>)}
+    </div>
+  );
   const selectLink = (l) => { setActive(l.k); l.e.chain().focus().setNodeSelection(l.pos).run(); };
 
   // ---- 1) Sayfa boyutu seçimi ----
@@ -1646,7 +1780,9 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                 <input type="file" accept=".icml,.xml" id="bulkQ" />
                 <label style={{ display: 'block', margin: '10px 0 2px', fontWeight: 'bold' }}>2) Çözüm dosyası (.icml)</label>
                 <input type="file" accept=".icml,.xml" id="bulkS" />
-                <label style={{ display: 'block', margin: '10px 0 2px', fontWeight: 'bold' }}>3) Resim dosyaları (soruda resim varsa)</label>
+                <label style={{ display: 'block', margin: '10px 0 2px', fontWeight: 'bold' }}>3) Resimler (soruda resim varsa)</label>
+                {folderBar}
+                <div style={{ fontSize: '0.76rem', color: '#64748b', marginBottom: '4px' }}>Klasör bağlıysa resimler adıyla oradan otomatik bulunur. İsterseniz ayrıca dosya da seçebilirsiniz (seçtikleriniz önceliklidir):</div>
                 <input type="file" accept=".pdf,.png,.jpg,.jpeg,.svg,.ai" id="bulkImg" multiple />
                 <label style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: '0.8rem', marginTop: '6px' }}><input type="checkbox" id="bulkTrim" defaultChecked /> Resimlerin etrafındaki boş beyaz alanı kırp (önerilir; PDF sayfası resimden büyükse resim küçük görünmez)</label>
                 <div style={{ fontSize: '0.76rem', color: '#64748b', marginTop: '3px' }}>InDesign'daki Links klasöründeki resimlerin PDF (ya da PNG/JPG) hâlini seçin. Eşleştirme dosya adıyla yapılır, uzantı fark etmez: <i>15 cog_2011_7 den gkgy.eps</i> → <i>15 cog_2011_7 den gkgy.pdf</i>. Resim boyutu InDesign'daki çerçeve genişliğinden alınır.</div>
@@ -1959,11 +2095,13 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
           </div>
           <div style={{ marginTop: '16px' }}>
             <label style={lbl}>🔗 Bağlantılar (resim dosyaları)</label>
+            {folderBar}
             {imgLinks.length === 0 && <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Henüz resim yok.</div>}
             {imgLinks.map((l, i) => (
               <div key={i} onClick={() => selectLink(l)} title="Resmi seç. Dosya adını kopyalamak için sağdaki düğme" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '6px', marginBottom: '4px', cursor: 'pointer', fontSize: '0.78rem', backgroundColor: '#f8fafc' }}>
                 <span style={{ color: '#64748b', flexShrink: 0 }}>{l.label}</span>
                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 'bold', color: l.name ? '#1d4ed8' : '#94a3b8' }}>{l.name || '(dosya adı kayıtlı değil)'}</span>
+                {l.name && folder.state === 'ready' && (() => { const st = linkStat[keyOfName(l.name)]; if (!st) return null; if (st === 'ok') return <span style={{ color: '#16a34a', flexShrink: 0 }} title="Klasördeki dosyayla aynı">✓ güncel</span>; if (st === 'missing') return <span style={{ color: '#dc2626', flexShrink: 0 }}>klasörde bulunamadı</span>; if (st === 'unknown') return <button onClick={(ev) => { ev.stopPropagation(); updateLinks(false, l); }} style={{ border: '1px solid #cbd5e1', borderRadius: '4px', background: '#fff', cursor: 'pointer', fontSize: '0.7rem', flexShrink: 0 }} title="Eski kayıt: karşılaştırılamadı. Klasördeki dosyayla yenilemek için tıklayın">karşılaştırılamadı · yenile</button>; return <button onClick={(ev) => { ev.stopPropagation(); updateLinks(false, l); }} style={{ border: '1px solid #f59e0b', borderRadius: '4px', background: '#fffbeb', color: '#b45309', cursor: 'pointer', fontSize: '0.7rem', flexShrink: 0 }}>klasörde değişmiş · Güncelle</button>; })()}
                 {l.name && <button onClick={(ev) => { ev.stopPropagation(); try { navigator.clipboard.writeText(l.name); } catch (e2) { /* yoksay */ } }} style={{ border: '1px solid #cbd5e1', borderRadius: '4px', background: '#fff', cursor: 'pointer', fontSize: '0.7rem' }}>Kopyala</button>}
               </div>
             ))}
