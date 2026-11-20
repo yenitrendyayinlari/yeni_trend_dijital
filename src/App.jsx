@@ -2594,39 +2594,20 @@ export default function App() {
     if (cleanBusy) return;
     setCleanBusy(true);
     try {
-      const used = new Set();
-      for (const [tbl, cols] of [['question_pool', ['pdf_file', 'solution_pdf_file']], ['exams', ['pdf_file', 'solution_pdf_file']]]) {
-        for (let from = 0; ; from += 1000) {
-          const { data, error } = await supabase.from(tbl).select(cols.join(',')).order('id').range(from, from + 999);
-          if (error) throw new Error(tbl + ' okunamadı: ' + error.message);
-          (data || []).forEach((r) => cols.forEach((c) => { if (r[c]) used.add(r[c]); }));
-          if (!data || data.length < 1000) break;
-        }
-      }
-      const orphan = []; let total = 0, bytes = 0;
-      const recent = Date.now() - 2 * 3600 * 1000; // son 2 saatte yüklenenlere dokunma
-      for (let off = 0; ; off += 1000) {
-        const { data, error } = await supabase.storage.from('exam-files').list('', { limit: 1000, offset: off, sortBy: { column: 'name', order: 'asc' } });
-        if (error) throw new Error('Depo listelenemedi: ' + error.message);
-        (data || []).forEach((o) => {
-          if (!o.id) return; // klasör
-          total++;
-          if (used.has(o.name)) return;
-          if (o.created_at && new Date(o.created_at).getTime() > recent) return;
-          orphan.push(o.name); bytes += (o.metadata && o.metadata.size) || 0;
-        });
-        if (!data || data.length < 1000) break;
-      }
-      if (!orphan.length) { alert(`Depoda ${total} dosya var, hepsi kullanımda. Silinecek bir şey yok.`); return; }
-      const mb = (bytes / 1048576).toFixed(0);
-      if (!window.confirm(`Depoda ${total} dosya var. Hiçbir soruya ya da sınava bağlı OLMAYAN ${orphan.length} dosya (yaklaşık ${mb} MB) bulundu.\n\nÖrnek: ${orphan.slice(0, 3).join(', ')}\n\nBunlar KALICI olarak silinsin mi?`)) return;
-      let failed = 0;
-      for (let i = 0; i < orphan.length; i += 100) {
-        const chunk = orphan.slice(i, i + 100);
-        const { data, error } = await supabase.storage.from('exam-files').remove(chunk);
-        failed += error ? chunk.length : Math.max(0, chunk.length - (data ? data.length : 0));
-      }
-      alert(`${orphan.length - failed} dosya silindi (~${mb} MB)` + (failed ? `, ${failed} dosya silinemedi.` : '.') + '\nSupabase panelindeki kullanım birkaç saat içinde güncellenir.');
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      const call = async (action) => {
+        const resp = await fetch('/api/clean-storage', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ action }) });
+        const j = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(j.error || 'İstek başarısız');
+        return j;
+      };
+      const r = await call('scan');
+      if (!r.orphanCount) { alert(`Depoda ${r.total} dosya var, hepsi kullanımda. Silinecek bir şey yok.`); return; }
+      const mb = (r.bytes / 1048576).toFixed(0);
+      if (!window.confirm(`Depoda ${r.total} dosya var. Hiçbir soruya ya da sınava bağlı OLMAYAN ${r.orphanCount} dosya (yaklaşık ${mb} MB) bulundu.\n\nÖrnek: ${(r.sample || []).join(', ')}\n\nBunlar KALICI olarak silinsin mi?`)) return;
+      const d = await call('delete');
+      alert(`${d.removed} dosya silindi (~${mb} MB)` + (d.failed ? `, ${d.failed} dosya silinemedi.` : '.') + '\nSupabase panelindeki kullanım birkaç saat içinde güncellenir.');
     } catch (e) { alert('Temizlik yapılamadı: ' + e.message); } finally { setCleanBusy(false); }
   };
 
