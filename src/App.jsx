@@ -2616,6 +2616,20 @@ export default function App() {
     } catch (e) { alert('Temizlik yapılamadı: ' + e.message); } finally { setCleanBusy(false); }
   };
 
+  // Kazanım kontrolü için: listedeki soruları (ders, konu, kazanım, soru metni) CSV olarak indirir.
+  const exportPoolForReview = () => {
+    if (!poolBrowserRows.length) { alert('Önce listenin yüklenmesini bekleyin.'); return; }
+    const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [['id', 'ders', 'konu', 'kazanim', 'cevap', 'metin'].map(esc).join(',')];
+    poolBrowserRows.forEach((r) => {
+      const txt = r.source_json && r.source_json.q ? pqPlainText(r.source_json.q).replace(/\s+/g, ' ').trim().slice(0, 900) : '';
+      lines.push([r.id, poolNm(lessonCategories, r.lesson_category_id, ''), poolNm(topics, r.topic_id, ''), poolNm(learningOutcomes, r.outcome_id, ''), r.correct_answer || '', txt].map(esc).join(','));
+    });
+    const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'havuz_kazanim_kontrol.csv'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
+
   // ---- Bul / Değiştir ----
   const frUpd = (patch) => setFr((f) => ({ ...f, ...patch }));
   const frScopeIds = (f) => {
@@ -5708,6 +5722,7 @@ export default function App() {
                     <button onClick={() => setPoolTreeOpen({})} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini kapat</button>
                     <button onClick={() => setFr({ lesson: '', topic: '', outcome: '', find: '', repl: '', part: 'both', matchCase: false, whole: false, results: null, sel: {}, busy: false, msg: '' })} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#1d4ed8', cursor: 'pointer', fontWeight: 'bold' }} title="Havuzdaki sorularda metin bul ve değiştir">🔎 Bul / Değiştir</button>
                     <button onClick={cleanOrphanFiles} disabled={cleanBusy} title="Hiçbir soruya/sınava bağlı olmayan PDF dosyalarını depodan siler" style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #fca5a5', backgroundColor: '#fef2f2', color: '#b91c1c', cursor: cleanBusy ? 'wait' : 'pointer' }}>{cleanBusy ? 'Taranıyor…' : '🧹 Artık dosyaları temizle'}</button>
+                    <button onClick={exportPoolForReview} title="Soruları ders/konu/kazanım ve metniyle CSV olarak indirir (kazanım kontrolü için)" style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>📄 Kontrol dosyası indir</button>
                     <label style={{ fontSize: '0.78rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Kazanım başlığındaki 🔍 butonuyla yapılan benzer soru kontrolünde bu orandan yüksek benzerlikteki sorular listelenir. Düşürürseniz daha çok (daha az kesin) sonuç gelir.">
                       Benzerlik en az %
                       <input type="number" min="40" max="100" value={dupMin} onChange={(e) => setDupMin(Number(e.target.value) || 85)} style={{ width: '58px', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
