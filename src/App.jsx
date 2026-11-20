@@ -444,6 +444,7 @@ export default function App() {
   // testlerde kullanıldı" bilgisini gösteren bir panel açılır.
   const [showPoolBrowser, setShowPoolBrowser] = useState(false);
   const [showPoolEditor, setShowPoolEditor] = useState(false);
+  const poolLightOk = useRef(true); // hafif liste görünümü (question_pool_light) kullanılabiliyor mu
   const [poolEditorRow, setPoolEditorRow] = useState(null); // null = yeni soru, dolu = düzenlenen havuz satırı
   const [poolBrowserLoading, setPoolBrowserLoading] = useState(false);
   const [poolBrowserRows, setPoolBrowserRows] = useState([]);
@@ -2456,16 +2457,21 @@ export default function App() {
     let failed = null;
     const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir -- sayfalayarak hepsini alıyoruz
     for (let from = 0; from < 10000; from += pageSize) {
-      let query = supabase
-        .from('question_pool')
-        .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, extra_outcome_ids, upload_batch_id, set_key, source_json, used_count, created_at')
-        .order('id', { ascending: false })
-        .range(from, from + pageSize - 1);
-      if (tagFilter === 'tagged') query = query.not('outcome_id', 'is', null);
-      if (tagFilter === 'untagged') query = query.is('outcome_id', null);
-      if (groupFilter === '__none__') query = query.is('upload_batch_id', null);
-      else if (groupFilter) query = query.eq('upload_batch_id', groupFilter);
-      const { data, error } = await query;
+      // Hafif görünüm (resimler çıkarılmış); SQL henüz çalıştırılmadıysa doğrudan tabloya düşer.
+      const build = (tbl) => {
+        let qy = supabase
+          .from(tbl)
+          .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, extra_outcome_ids, upload_batch_id, set_key, source_json, used_count, created_at')
+          .order('id', { ascending: false })
+          .range(from, from + pageSize - 1);
+        if (tagFilter === 'tagged') qy = qy.not('outcome_id', 'is', null);
+        if (tagFilter === 'untagged') qy = qy.is('outcome_id', null);
+        if (groupFilter === '__none__') qy = qy.is('upload_batch_id', null);
+        else if (groupFilter) qy = qy.eq('upload_batch_id', groupFilter);
+        return qy;
+      };
+      let { data, error } = await build(poolLightOk.current ? 'question_pool_light' : 'question_pool');
+      if (error && poolLightOk.current) { poolLightOk.current = false; ({ data, error } = await build('question_pool')); }
       if (error) { failed = error; break; }
       rows.push(...(data || []));
       if (!data || data.length < pageSize) break;
@@ -2475,6 +2481,15 @@ export default function App() {
     else setPoolBrowserRows(sortPoolRowsByTree(rows));
   };
 
+  // Listede resimsiz (hafif) kayıt var; düzenlemeye tam kaydı çekip açıyoruz.
+  const openPoolEditor = async (row) => {
+    let full = row;
+    if (row && row.source_json) {
+      const { data } = await supabase.from('question_pool').select('*').eq('id', row.id).single();
+      if (data) full = { ...row, ...data };
+    }
+    setPoolEditorRow(full); setShowPoolEditor(true);
+  };
   // Soru Havuzu ağacı sırası: Ders -> Konu -> Kazanım -> soru no. Önceki/Sonraki soru da bu sırayı izler.
   const poolNm = (list, id, fb) => { const x = list.find((e) => e.id === id); return x ? x.name : fb; };
   const sortPoolRowsByTree = (rows) => {
@@ -2835,7 +2850,7 @@ export default function App() {
                         </div>
                       )}
                       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
-                        <button onClick={() => { setPoolEditorRow(row); setShowPoolEditor(true); }} style={{ ...btn(false), backgroundColor: '#eef2ff', borderColor: '#c7d2fe' }}>✏️ Düzenle</button>
+                        <button onClick={() => openPoolEditor(row)} style={{ ...btn(false), backgroundColor: '#eef2ff', borderColor: '#c7d2fe' }}>✏️ Düzenle</button>
                         <button onClick={() => deleteDupRow({ id: row.id, pdf: row.pdf_file, sol: row.solution_pdf_file })} style={{ ...btn(false), color: '#dc2626', borderColor: '#dc2626' }}>🗑 Sil</button>
                         <button onClick={() => upd({ idx: Math.min(idx + 1, list.length - 1) })} style={{ ...btn(false), backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }}>✓ Tamam, sonraki</button>
                       </div>
@@ -5906,7 +5921,7 @@ export default function App() {
 
                         {row.source_json ? (
                           <button
-                            onClick={() => { setPoolEditorRow(row); setShowPoolEditor(true); }}
+                            onClick={() => openPoolEditor(row)}
                             style={{ width: '100%', marginBottom: '14px', padding: '9px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer' }}
                           >
                             ✏️ Soruyu Düzenle (metin, şık, şekil)
