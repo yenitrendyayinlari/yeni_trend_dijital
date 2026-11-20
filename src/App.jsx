@@ -2456,7 +2456,7 @@ export default function App() {
     const rows = [];
     let failed = null;
     const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir -- sayfalayarak hepsini alıyoruz
-    for (let from = 0; from < 10000; from += pageSize) {
+    for (let from = 0; from < 40000; from += pageSize) {
       // Hazır resimsiz kopya (source_light); SQL henüz çalıştırılmadıysa tam kayda düşer.
       const build = (tbl) => {
         let qy = supabase
