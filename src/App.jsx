@@ -2457,11 +2457,11 @@ export default function App() {
     let failed = null;
     const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir -- sayfalayarak hepsini alıyoruz
     for (let from = 0; from < 10000; from += pageSize) {
-      // Hafif görünüm (resimler çıkarılmış); SQL henüz çalıştırılmadıysa doğrudan tabloya düşer.
+      // Hazır resimsiz kopya (source_light); SQL henüz çalıştırılmadıysa tam kayda düşer.
       const build = (tbl) => {
         let qy = supabase
-          .from(tbl)
-          .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, extra_outcome_ids, upload_batch_id, set_key, source_json, used_count, created_at')
+          .from('question_pool')
+          .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, extra_outcome_ids, upload_batch_id, set_key, source_json:' + (tbl === 'light' ? 'source_light' : 'source_json') + ', used_count, created_at')
           .order('id', { ascending: false })
           .range(from, from + pageSize - 1);
         if (tagFilter === 'tagged') qy = qy.not('outcome_id', 'is', null);
@@ -2470,8 +2470,8 @@ export default function App() {
         else if (groupFilter) qy = qy.eq('upload_batch_id', groupFilter);
         return qy;
       };
-      let { data, error } = await build(poolLightOk.current ? 'question_pool_light' : 'question_pool');
-      if (error && poolLightOk.current) { poolLightOk.current = false; ({ data, error } = await build('question_pool')); }
+      let { data, error } = await build(poolLightOk.current ? 'light' : 'full');
+      if (error && poolLightOk.current) { poolLightOk.current = false; ({ data, error } = await build('full')); }
       if (error) { failed = error; break; }
       rows.push(...(data || []));
       if (!data || data.length < pageSize) break;
