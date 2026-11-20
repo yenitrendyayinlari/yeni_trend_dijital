@@ -59,13 +59,15 @@ export default async function handler(req, res) {
     }
     // Güvenlik: bağlı dosya sayısı 0 görünüyorsa (okuma hatası olasılığı) hiçbir şey silme.
     if (r.usedCount === 0) return res.status(409).json({ error: 'Kayıtlara bağlı dosya bulunamadı; güvenlik için silinmedi.' });
+    // Zaman aşımına düşmemek için her istekte en fazla 1000 dosya silinir; ekran kalan kalmayana dek tekrar çağırır.
+    const batch = r.orphan.slice(0, 1000);
     let removed = 0, failed = 0;
-    for (let i = 0; i < r.orphan.length; i += 100) {
-      const chunk = r.orphan.slice(i, i + 100);
+    for (let i = 0; i < batch.length; i += 100) {
+      const chunk = batch.slice(i, i + 100);
       const { data, error } = await supabaseAdmin.storage.from(BUCKET).remove(chunk);
       if (error) failed += chunk.length; else { removed += (data || []).length; failed += chunk.length - (data || []).length; }
     }
-    return res.status(200).json({ removed, failed, bytes: r.bytes });
+    return res.status(200).json({ removed, failed, remaining: r.orphan.length - batch.length });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }
