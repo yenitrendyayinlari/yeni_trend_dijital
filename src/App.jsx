@@ -2588,6 +2588,48 @@ export default function App() {
       document.body.removeChild(ta); return ok;
     }
   };
+  // ---- Depo temizliği: hiçbir kayda bağlı olmayan PDF'leri siler ----
+  const [cleanBusy, setCleanBusy] = useState(false);
+  const cleanOrphanFiles = async () => {
+    if (cleanBusy) return;
+    setCleanBusy(true);
+    try {
+      const used = new Set();
+      for (const [tbl, cols] of [['question_pool', ['pdf_file', 'solution_pdf_file']], ['exams', ['pdf_file', 'solution_pdf_file']]]) {
+        for (let from = 0; ; from += 1000) {
+          const { data, error } = await supabase.from(tbl).select(cols.join(',')).order('id').range(from, from + 999);
+          if (error) throw new Error(tbl + ' okunamadı: ' + error.message);
+          (data || []).forEach((r) => cols.forEach((c) => { if (r[c]) used.add(r[c]); }));
+          if (!data || data.length < 1000) break;
+        }
+      }
+      const orphan = []; let total = 0, bytes = 0;
+      const recent = Date.now() - 2 * 3600 * 1000; // son 2 saatte yüklenenlere dokunma
+      for (let off = 0; ; off += 1000) {
+        const { data, error } = await supabase.storage.from('exam-files').list('', { limit: 1000, offset: off, sortBy: { column: 'name', order: 'asc' } });
+        if (error) throw new Error('Depo listelenemedi: ' + error.message);
+        (data || []).forEach((o) => {
+          if (!o.id) return; // klasör
+          total++;
+          if (used.has(o.name)) return;
+          if (o.created_at && new Date(o.created_at).getTime() > recent) return;
+          orphan.push(o.name); bytes += (o.metadata && o.metadata.size) || 0;
+        });
+        if (!data || data.length < 1000) break;
+      }
+      if (!orphan.length) { alert(`Depoda ${total} dosya var, hepsi kullanımda. Silinecek bir şey yok.`); return; }
+      const mb = (bytes / 1048576).toFixed(0);
+      if (!window.confirm(`Depoda ${total} dosya var. Hiçbir soruya ya da sınava bağlı OLMAYAN ${orphan.length} dosya (yaklaşık ${mb} MB) bulundu.\n\nÖrnek: ${orphan.slice(0, 3).join(', ')}\n\nBunlar KALICI olarak silinsin mi?`)) return;
+      let failed = 0;
+      for (let i = 0; i < orphan.length; i += 100) {
+        const chunk = orphan.slice(i, i + 100);
+        const { data, error } = await supabase.storage.from('exam-files').remove(chunk);
+        failed += error ? chunk.length : Math.max(0, chunk.length - (data ? data.length : 0));
+      }
+      alert(`${orphan.length - failed} dosya silindi (~${mb} MB)` + (failed ? `, ${failed} dosya silinemedi.` : '.') + '\nSupabase panelindeki kullanım birkaç saat içinde güncellenir.');
+    } catch (e) { alert('Temizlik yapılamadı: ' + e.message); } finally { setCleanBusy(false); }
+  };
+
   // ---- Bul / Değiştir ----
   const frUpd = (patch) => setFr((f) => ({ ...f, ...patch }));
   const frScopeIds = (f) => {
@@ -5679,6 +5721,7 @@ export default function App() {
                     <button onClick={() => { const o = {}; poolBrowserRows.forEach((r) => { const dn = poolNm(lessonCategories, r.lesson_category_id, 'Dersi belirsiz'), tn = poolNm(topics, r.topic_id, 'Konusuz'), on = poolNm(learningOutcomes, r.outcome_id, 'Kazanımsız'); o[`d:${dn}`] = true; o[`t:${dn}:${tn}`] = true; o[`o:${dn}:${tn}:${on}`] = true; }); setPoolTreeOpen(o); }} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini aç</button>
                     <button onClick={() => setPoolTreeOpen({})} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini kapat</button>
                     <button onClick={() => setFr({ lesson: '', topic: '', outcome: '', find: '', repl: '', part: 'both', matchCase: false, whole: false, results: null, sel: {}, busy: false, msg: '' })} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#1d4ed8', cursor: 'pointer', fontWeight: 'bold' }} title="Havuzdaki sorularda metin bul ve değiştir">🔎 Bul / Değiştir</button>
+                    <button onClick={cleanOrphanFiles} disabled={cleanBusy} title="Hiçbir soruya/sınava bağlı olmayan PDF dosyalarını depodan siler" style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #fca5a5', backgroundColor: '#fef2f2', color: '#b91c1c', cursor: cleanBusy ? 'wait' : 'pointer' }}>{cleanBusy ? 'Taranıyor…' : '🧹 Artık dosyaları temizle'}</button>
                     <label style={{ fontSize: '0.78rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Kazanım başlığındaki 🔍 butonuyla yapılan benzer soru kontrolünde bu orandan yüksek benzerlikteki sorular listelenir. Düşürürseniz daha çok (daha az kesin) sonuç gelir.">
                       Benzerlik en az %
                       <input type="number" min="40" max="100" value={dupMin} onChange={(e) => setDupMin(Number(e.target.value) || 85)} style={{ width: '58px', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
