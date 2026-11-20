@@ -2606,8 +2606,13 @@ export default function App() {
       if (!r.orphanCount) { alert(`Depoda ${r.total} dosya var, hepsi kullanımda. Silinecek bir şey yok.`); return; }
       const mb = (r.bytes / 1048576).toFixed(0);
       if (!window.confirm(`Depoda ${r.total} dosya var. Hiçbir soruya ya da sınava bağlı OLMAYAN ${r.orphanCount} dosya (yaklaşık ${mb} MB) bulundu.\n\nÖrnek: ${(r.sample || []).join(', ')}\n\nBunlar KALICI olarak silinsin mi?`)) return;
-      const d = await call('delete');
-      alert(`${d.removed} dosya silindi (~${mb} MB)` + (d.failed ? `, ${d.failed} dosya silinemedi.` : '.') + '\nSupabase panelindeki kullanım birkaç saat içinde güncellenir.');
+      let removed = 0, failed = 0;
+      for (let round = 0; round < 40; round++) {
+        const d = await call('delete');
+        removed += d.removed; failed += d.failed;
+        if (!d.remaining || (!d.removed && d.failed)) break;
+      }
+      alert(`${removed} dosya silindi (~${mb} MB)` + (failed ? `, ${failed} dosya silinemedi.` : '.') + '\nSupabase panelindeki kullanım birkaç saat içinde güncellenir.');
     } catch (e) { alert('Temizlik yapılamadı: ' + e.message); } finally { setCleanBusy(false); }
   };
 
