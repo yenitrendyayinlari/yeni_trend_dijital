@@ -2482,6 +2482,22 @@ export default function App() {
   };
 
   // Listede resimsiz (hafif) kayıt var; düzenlemeye tam kaydı çekip açıyoruz.
+  // Soru numarasıyla doğrudan soruya git / düzenleme ekranını aç
+  const [poolGoId, setPoolGoId] = useState('');
+  const goPoolId = async (edit) => {
+    const id = Number(String(poolGoId).replace(/\D/g, ''));
+    if (!id) { alert('Bir soru numarası yazın.'); return; }
+    const inList = poolBrowserRows.some((r) => r.id === id);
+    if (edit) {
+      const { data } = await supabase.from('question_pool').select('*').eq('id', id).single();
+      if (!data) { alert(`#${id} numaralı soru bulunamadı.`); return; }
+      setPoolEditorRow(data); setShowPoolEditor(true);
+      return;
+    }
+    if (!inList) { alert(`#${id} numaralı soru listede yok (kazanımı atanmamış ya da silinmiş olabilir). "Düzenle" ile açmayı deneyin.`); return; }
+    poolNavRef.current = null;
+    openPoolQuestionDetail(id);
+  };
   const openPoolEditor = async (row) => {
     let full = row;
     if (row && row.source_json) {
@@ -2774,7 +2790,7 @@ export default function App() {
                   <input type="checkbox" checked={!!f.sel[x.row.id]} onChange={(e) => frUpd({ sel: { ...f.sel, [x.row.id]: e.target.checked } })} style={{ marginTop: '3px' }} />
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: '0.76rem', color: '#64748b' }}>
-                      <b>#{x.row.id}</b> · {poolNm(lessonCategories, x.row.lesson_category_id, 'Dersi belirsiz')} › {poolNm(learningOutcomes, x.row.outcome_id, 'Kazanımsız')} · {x.nQ > 0 && `soruda ${x.nQ}`}{x.nQ > 0 && x.nS > 0 && ', '}{x.nS > 0 && `çözümde ${x.nS}`}
+                      <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); openPoolEditor(x.row); }} title="Bu soruyu düzenleme ekranında aç" style={{ marginRight: '6px', fontSize: '0.72rem', padding: '2px 8px', borderRadius: '5px', border: '1px solid #c7d2fe', backgroundColor: '#eef2ff', color: '#3730a3', cursor: 'pointer' }}>✏️ Düzenle</button><b>#{x.row.id}</b> · {poolNm(lessonCategories, x.row.lesson_category_id, 'Dersi belirsiz')} › {poolNm(learningOutcomes, x.row.outcome_id, 'Kazanımsız')} · {x.nQ > 0 && `soruda ${x.nQ}`}{x.nQ > 0 && x.nS > 0 && ', '}{x.nS > 0 && `çözümde ${x.nS}`}
                     </div>
                     {x.snip && (
                       <div style={{ fontSize: '0.88rem', marginTop: '2px', wordBreak: 'break-word' }}>
@@ -5740,6 +5756,11 @@ export default function App() {
                     <button onClick={() => setFr({ lesson: '', topic: '', outcome: '', find: '', repl: '', part: 'both', matchCase: false, whole: false, results: null, sel: {}, busy: false, msg: '' })} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#1d4ed8', cursor: 'pointer', fontWeight: 'bold' }} title="Havuzdaki sorularda metin bul ve değiştir">🔎 Bul / Değiştir</button>
                     <button onClick={cleanOrphanFiles} disabled={cleanBusy} title="Hiçbir soruya/sınava bağlı olmayan PDF dosyalarını depodan siler" style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #fca5a5', backgroundColor: '#fef2f2', color: '#b91c1c', cursor: cleanBusy ? 'wait' : 'pointer' }}>{cleanBusy ? 'Taranıyor…' : '🧹 Artık dosyaları temizle'}</button>
                     <button onClick={exportPoolForReview} title="Soruları ders/konu/kazanım ve metniyle CSV olarak indirir (kazanım kontrolü için)" style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>📄 Kontrol dosyası indir</button>
+                    <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+                      <input value={poolGoId} onChange={(e) => setPoolGoId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') goPoolId(false); }} placeholder="Soru no" inputMode="numeric" style={{ width: '82px', padding: '7px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }} />
+                      <button onClick={() => goPoolId(false)} title="Soru numarasıyla soruya git" style={{ fontSize: '0.8rem', padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Git</button>
+                      <button onClick={() => goPoolId(true)} title="Soru numarasıyla doğrudan düzenleme ekranını aç" style={{ fontSize: '0.8rem', padding: '7px 10px', borderRadius: '6px', border: '1px solid #c7d2fe', backgroundColor: '#eef2ff', cursor: 'pointer' }}>✏️ Düzenle</button>
+                    </span>
                     <label style={{ fontSize: '0.78rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Kazanım başlığındaki 🔍 butonuyla yapılan benzer soru kontrolünde bu orandan yüksek benzerlikteki sorular listelenir. Düşürürseniz daha çok (daha az kesin) sonuç gelir.">
                       Benzerlik en az %
                       <input type="number" min="40" max="100" value={dupMin} onChange={(e) => setDupMin(Number(e.target.value) || 85)} style={{ width: '58px', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
