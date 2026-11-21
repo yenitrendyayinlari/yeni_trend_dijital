@@ -558,6 +558,7 @@ export default function App() {
         checkUserRoleAndSetMode(session.user);
       } else {
         fetchPublicExams();
+        fetchCategoryLists(); // misafir de Sınav/Ders listesini görsün
       }
     });
 
@@ -579,6 +580,7 @@ export default function App() {
         loadedUserIdRef.current = null;
         setAppMode('student');
         fetchPublicExams();
+        fetchCategoryLists();
       }
     });
 
@@ -1846,6 +1848,7 @@ export default function App() {
     setStudentPurchases({});
     setStudentBalance(null);
     fetchPublicExams();
+    fetchCategoryLists();
   };
 
   const updateExamInDb = async (id, updates) => {
