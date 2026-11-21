@@ -39,7 +39,32 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { examId, poolId, type } = req.body || {};
+  const { examId, poolId, poolIds, type } = req.body || {};
+
+  // --- SORU HAVUZU TOPLU ADRES DALI (admin): gezinirken sıradaki soruların adreslerini tek istekte hazırlamak için ---
+  if (Array.isArray(poolIds)) {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) return res.status(401).json({ error: 'Giriş gerekli' });
+    const { data: userData, error: userError } = await supabaseAdmin.auth.getUser(token);
+    if (userError || !userData?.user?.email || userData.user.email !== 'admin@yayinevi.com') {
+      return res.status(403).json({ error: 'Bu içeriğe erişim yetkiniz yok.' });
+    }
+    const ids = poolIds.map(Number).filter((n) => Number.isFinite(n)).slice(0, 30);
+    if (!ids.length) return res.status(200).json({ urls: {} });
+    const { data: rows, error: rowsErr } = await supabaseAdmin.from('question_pool').select('id, pdf_file, solution_pdf_file').in('id', ids);
+    if (rowsErr) return res.status(500).json({ error: 'Okunamadı' });
+    const paths = [];
+    (rows || []).forEach((r) => { const a = extractStoragePath(r.pdf_file); const b = extractStoragePath(r.solution_pdf_file); if (a) paths.push(a); if (b) paths.push(b); });
+    const { data: signed, error: signErr } = await supabaseAdmin.storage.from(BUCKET).createSignedUrls(paths, SIGNED_URL_TTL);
+    if (signErr) return res.status(500).json({ error: 'Adresler oluşturulamadı' });
+    const byPath = new Map((signed || []).map((x) => [x.path, x.signedUrl]));
+    const urls = {};
+    (rows || []).forEach((r) => {
+      urls[r.id] = { q: byPath.get(extractStoragePath(r.pdf_file)) || null, s: byPath.get(extractStoragePath(r.solution_pdf_file)) || null };
+    });
+    return res.status(200).json({ urls });
+  }
 
   // --- SORU HAVUZU (question_pool) DALI ---
   // Bu tamamen ayrı bir dal: Soru Havuzu SADECE admin panelinden (İçerik
