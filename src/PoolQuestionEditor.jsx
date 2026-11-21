@@ -1357,6 +1357,36 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       const clone = node.cloneNode(true);
       clone.style.boxShadow = 'none';
       idoc.body.appendChild(clone);
+      // html2canvas, birden fazla satıra yayılan satır-içi öğenin (altı çizili metin) kenarlığını tüm satırlara yayılan tek
+      // bir kutu gibi çiziyor: satır sonuna gelen altı çizili kelime, alt satırda sayfa genişliğinde çizgi çıkarıyordu.
+      // Çözüm: altı çizili metni kelime kelime (her biri tek satırlık) parçalara bölüp çizgiyi parçalara vermek.
+      clone.querySelectorAll('u').forEach((u) => {
+        const st = u.getAttribute('style') || '';
+        if (!/border-bottom/.test(st)) return;
+        const walker = idoc.createTreeWalker(u, 4 /* SHOW_TEXT */);
+        const texts = [];
+        while (walker.nextNode()) texts.push(walker.currentNode);
+        texts.forEach((tn) => {
+          const parts = tn.data.match(/\S+\s*|\s+/g);
+          if (!parts) return;
+          const frag = idoc.createDocumentFragment();
+          parts.forEach((pt) => { const sp = idoc.createElement('span'); sp.setAttribute('style', st); sp.textContent = pt; frag.appendChild(sp); });
+          tn.parentNode.replaceChild(frag, tn);
+        });
+        u.style.borderBottom = 'none';
+        u.style.paddingBottom = '0';
+        // Satır sonuna denk gelen boşluğun altı çizilmesin (çizgi satırın kenarına taşmasın)
+        const sps = Array.from(u.querySelectorAll('span')).filter((x) => x.getAttribute('style') === st);
+        sps.forEach((sp, i) => {
+          const nx = sps[i + 1];
+          const m = /^(\S+)(\s+)$/.exec(sp.textContent);
+          if (!m || !nx) return;
+          if (Math.abs(nx.getBoundingClientRect().top - sp.getBoundingClientRect().top) > 3) {
+            sp.textContent = m[1];
+            sp.after(idoc.createTextNode(m[2]));
+          }
+        });
+      });
       return await html2canvas(clone, { scale: 3, backgroundColor: '#ffffff', logging: false });
     } finally {
       iframe.remove();
