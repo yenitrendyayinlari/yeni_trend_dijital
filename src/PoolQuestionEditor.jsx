@@ -1352,7 +1352,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     try {
       const idoc = iframe.contentDocument;
       idoc.open();
-      idoc.write(`<!doctype html><html lang="tr"><head><meta charset="utf-8"><style>${cssRef.current ? cssRef.current.textContent : ''}\nbody{margin:0;background:#fff}</style></head><body></body></html>`);
+      idoc.write(`<!doctype html><html lang="tr"><head><meta charset="utf-8"><style>${cssRef.current ? cssRef.current.textContent : ''}\nbody{margin:0;background:#fff}.ProseMirror{white-space:pre-wrap;word-wrap:break-word;font-variant-ligatures:none}</style></head><body></body></html>`);
       idoc.close();
       const clone = node.cloneNode(true);
       clone.style.boxShadow = 'none';
@@ -1363,12 +1363,19 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       clone.querySelectorAll('u').forEach((u) => {
         const st = u.getAttribute('style') || '';
         if (!/border-bottom/.test(st)) return;
+        // Yalnızca birden fazla satıra yayılan altı çizili metinler bölünür; tek satırlık olanlara (sekmeli/boşluklu tablo
+        // başlıkları dahil) dokunulmaz, yoksa sekmeler/boşluklar kayar.
+        if (new Set(Array.from(u.getClientRects()).map((r) => Math.round(r.top))).size < 2) return;
         const walker = idoc.createTreeWalker(u, 4 /* SHOW_TEXT */);
         const texts = [];
         while (walker.nextNode()) texts.push(walker.currentNode);
         texts.forEach((tn) => {
-          const parts = tn.data.match(/\S+\s*|\s+/g);
-          if (!parts) return;
+          const raw = tn.data.match(/\S+\s*|\s+/g);
+          if (!raw) return;
+          // yalnız boşluktan oluşan parçaları komşu kelimeye kat (boşluk-only parça çizimde kayboluyor)
+          const parts = [];
+          raw.forEach((pt) => { if (/^\s+$/.test(pt) && parts.length) parts[parts.length - 1] += pt; else parts.push(pt); });
+          if (parts.length > 1 && /^\s+$/.test(parts[0])) { parts[1] = parts[0] + parts[1]; parts.shift(); }
           const frag = idoc.createDocumentFragment();
           parts.forEach((pt) => { const sp = idoc.createElement('span'); sp.setAttribute('style', st); sp.textContent = pt; frag.appendChild(sp); });
           tn.parentNode.replaceChild(frag, tn);
