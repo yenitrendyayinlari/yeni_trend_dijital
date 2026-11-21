@@ -9,6 +9,28 @@ import { supabase } from './supabase';
 // sayfa değiştirmede tekrar tekrar istek atılmasını engeller.
 const urlCache = {};
 
+// Havuz sorularında gezinirken sıradaki soruların PDF adreslerini tek istekle önceden hazırlar (Önceki/Sonraki hızlansın).
+export async function prefetchPoolPdfs(ids) {
+  try {
+    const need = (ids || []).filter((id) => {
+      const a = urlCache[`pool-question:${id}:0`]; const b = urlCache[`pool-solution:${id}:0`];
+      return !(a && a.expiresAt > Date.now());
+    });
+    if (!need.length) return;
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if (!token) return;
+    const resp = await fetch('/api/get-pdf-url', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ poolIds: need }) });
+    if (!resp.ok) return;
+    const { urls } = await resp.json();
+    const exp = Date.now() + 3.5 * 60 * 60 * 1000;
+    Object.entries(urls || {}).forEach(([id, u]) => {
+      if (u.q) urlCache[`pool-question:${id}:0`] = { url: u.q, expiresAt: exp };
+      if (u.s) urlCache[`pool-solution:${id}:0`] = { url: u.s, expiresAt: exp };
+    });
+  } catch (e) { /* önemsiz: normal yol zaten çalışır */ }
+}
+
 export default function SecurePdfViewer({ examId, poolId, type, pageNumber, version, onDocumentLoadSuccess }) {
   const [signedUrl, setSignedUrl] = useState(null);
   const [error, setError] = useState(null);

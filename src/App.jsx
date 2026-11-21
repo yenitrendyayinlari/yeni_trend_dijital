@@ -4,7 +4,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
 import PoolQuestionEditor from './PoolQuestionEditor';
 import CategoryPicker from './CategoryPicker';
-import SecurePdfViewer from './SecurePdfViewer';
+import SecurePdfViewer, { prefetchPoolPdfs } from './SecurePdfViewer';
 import { supabase } from './supabase';
 import { initializePayment } from './iyzipayService';
 import sualinkLogo from './sualinklogo.png';
@@ -2505,7 +2505,21 @@ export default function App() {
   // önce kurduğumuz question_pool_usage tablosu -- şu an henüz hiçbir yerden
   // buraya kayıt düşürülmüyor, "Havuzdan Oluştur" adımında dolduracağız,
   // ama tablo ve bu sorgu şimdiden hazır).
+  // Bir soru açılınca çevresindeki soruların PDF adreslerini tek istekle önceden hazırla (gezinme hızlansın)
+  useEffect(() => {
+    if (!selectedPoolQuestionId || !poolBrowserRows.length) return;
+    const navIds = poolNavRef.current || poolBrowserRows.map((r) => r.id);
+    const idx = navIds.indexOf(selectedPoolQuestionId);
+    if (idx < 0) return;
+    prefetchPoolPdfs(navIds.slice(Math.max(0, idx - 2), idx + 12));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPoolQuestionId, poolBrowserRows.length]);
+  // Gezinme sırası: detay açıldığı andaki liste sırası SABİT tutulur. Bir sorunun kazanımı değişse bile
+  // Önceki/Sonraki aynı sırada devam eder (soru yeni kazanımın listesine atlamaz).
+  const poolNavRef = useRef(null);
+  useEffect(() => { if (!selectedPoolQuestionId) poolNavRef.current = null; }, [selectedPoolQuestionId]);
   const openPoolQuestionDetail = async (id) => {
+    if (!poolNavRef.current) poolNavRef.current = poolBrowserRows.map((r) => r.id);
     setSelectedPoolQuestionId(id);
     setPoolDetailUsageLoading(true);
     const { data, error } = await supabase
@@ -3093,9 +3107,10 @@ export default function App() {
   // ardından listedeki bir sonraki (yoksa bir önceki) soruya geçer.
   const deletePoolQuestion = async () => {
     const id = selectedPoolQuestionId;
-    const idx = poolBrowserRows.findIndex((r) => r.id === id);
-    const row = poolBrowserRows[idx];
+    const row = poolBrowserRows.find((r) => r.id === id);
     if (!row) return;
+    const navBefore = poolNavRef.current || poolBrowserRows.map((r) => r.id);
+    const nIdx = navBefore.indexOf(id);
     const usedNote = poolDetailUsage.length > 0
       ? `\n\nDikkat: Bu soru ${poolDetailUsage.length} testte kullanılmış. O testlerdeki kopyalar etkilenmez, ama kullanım kaydı silinir.`
       : '';
@@ -3108,10 +3123,12 @@ export default function App() {
 
     const remaining = poolBrowserRows.filter((r) => r.id !== id);
     setPoolBrowserRows(remaining);
-    if (remaining.length === 0) {
+    const navAfter = navBefore.filter((x) => x !== id);
+    poolNavRef.current = navAfter;
+    if (navAfter.length === 0) {
       setSelectedPoolQuestionId(null);
     } else {
-      openPoolQuestionDetail(remaining[Math.min(idx, remaining.length - 1)].id);
+      openPoolQuestionDetail(navAfter[Math.min(Math.max(nIdx, 0), navAfter.length - 1)]);
     }
     fetchPoolBrowserGroups();
   };
@@ -5831,14 +5848,15 @@ export default function App() {
                 </>
               ) : (
                 (() => {
-                  const idx = poolBrowserRows.findIndex((r) => r.id === selectedPoolQuestionId);
-                  const row = poolBrowserRows[idx];
+                  const navIds = poolNavRef.current || poolBrowserRows.map((r) => r.id);
+                  const idx = navIds.indexOf(selectedPoolQuestionId);
+                  const row = poolBrowserRows.find((r) => r.id === selectedPoolQuestionId);
                   if (!row) return <p style={{ color: '#64748b' }}>Soru bulunamadı.</p>;
                   const ders = lessonCategories.find((lc) => lc.id === row.lesson_category_id);
                   const konu = topics.find((t) => t.id === row.topic_id);
                   const goTo = (newIdx) => {
-                    if (newIdx < 0 || newIdx >= poolBrowserRows.length) return;
-                    openPoolQuestionDetail(poolBrowserRows[newIdx].id);
+                    if (newIdx < 0 || newIdx >= navIds.length) return;
+                    openPoolQuestionDetail(navIds[newIdx]);
                   };
                   return (
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: '20px', alignItems: 'start' }}>
@@ -5861,12 +5879,12 @@ export default function App() {
                             >
                               ◀ Önceki Soru
                             </button>
-                            <span style={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#334155' }}>{idx + 1} / {poolBrowserRows.length}</span>
+                            <span style={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#334155' }}>{idx + 1} / {navIds.length}</span>
                             <button
                               type="button"
                               onClick={() => goTo(idx + 1)}
-                              disabled={idx >= poolBrowserRows.length - 1}
-                              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: idx >= poolBrowserRows.length - 1 ? 'not-allowed' : 'pointer', opacity: idx >= poolBrowserRows.length - 1 ? 0.4 : 1, fontWeight: 'bold' }}
+                              disabled={idx >= navIds.length - 1}
+                              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: idx >= navIds.length - 1 ? 'not-allowed' : 'pointer', opacity: idx >= navIds.length - 1 ? 0.4 : 1, fontWeight: 'bold' }}
                             >
                               Sonraki Soru ▶
                             </button>
@@ -6208,6 +6226,9 @@ export default function App() {
                 // Düzenlenen sorunun önizleme önbelleğini atlat
                 const t = Date.now();
                 setPoolPdfVersions((prev) => ({ ...prev, [`pdf_file:${editedId}`]: t, [`solution_pdf_file:${editedId}`]: t }));
+                // Kazanım vb. yeni değerleri hemen göster (tüm liste yenilenene kadar eski görünmesin)
+                supabase.from('question_pool').select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, extra_outcome_ids, upload_batch_id, set_key, used_count, created_at').eq('id', editedId).single()
+                  .then(({ data }) => { if (data) setPoolBrowserRows((prev) => prev.map((r) => (r.id === editedId ? { ...r, ...data } : r))); });
               }
               fetchPoolBrowserRows(); fetchPoolBrowserGroups(); if (showPoolImport) fetchPoolBatches();
             }}
