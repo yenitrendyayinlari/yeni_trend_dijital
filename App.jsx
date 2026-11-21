@@ -1,0 +1,9456 @@
+import { useState, useEffect, useRef } from 'react';
+import * as XLSX from 'xlsx';
+import * as pdfjsLib from 'pdfjs-dist';
+import { PDFDocument } from 'pdf-lib';
+import PoolQuestionEditor from './PoolQuestionEditor';
+import CategoryPicker from './CategoryPicker';
+import SecurePdfViewer, { prefetchPoolPdfs } from './SecurePdfViewer';
+import { supabase } from './supabase';
+import { initializePayment } from './iyzipayService';
+import sualinkLogo from './sualinklogo.png';
+import sualinkLogoYeni from './sualink-logo-yeni.png';
+import TopBanner, { TopBannerManageButton } from './TopBanner';
+import { SignupBonusManageButton } from './SignupBonus';
+import BalanceGiftModal from './BalanceGiftModal';
+import Footer from './Footer';
+import ExamBlueprintEditor from './ExamBlueprintEditor';
+import KonuTesti from './KonuTesti';
+
+// --- Meta (Facebook/Instagram) Pixel ---
+// Temel kod ve otomatik PageView, index.html'de. Burada sadece sitedeki
+// standart olayları (ViewContent, AddToCart, Purchase) tetikliyoruz.
+// `window.fbq` bulunmuyorsa (reklam engelleyici, pixel kodu henüz
+// yüklenmemiş vb.) sessizce hiçbir şey yapmaz -- siteyi asla bozmaz.
+const trackPixelEvent = (eventName, params) => {
+  try {
+    if (typeof window !== 'undefined' && typeof window.fbq === 'function') {
+      window.fbq('track', eventName, params);
+    }
+  } catch (e) {
+    // Pixel hatası kullanıcı deneyimini asla etkilememeli.
+  }
+};
+
+// Admin panelinde PDF yüklendiğinde sayfa sayısını (= soru sayısı, sistemde
+// her PDF sayfası bir soruya karşılık geliyor) tarayıcıda otomatik okumak
+// için PdfViewer.jsx'teki aynı kararlı CDN worker kurulumu kullanılıyor.
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+// Bir PDF File nesnesinden (henüz storage'a yüklenmeden, tarayıcıda) sayfa
+// sayısını okur. Okunamazsa (bozuk dosya vb.) null döner -- çağıran taraf bu
+// durumda eski manuel "Soru / Sayfa Sayısı" değerini korumalı.
+// sharedWorker (opsiyonel): toplu içe aktarımda her PDF
+// için ayrı bir PDF.js worker açıp bunu asla kapatmamak, tarayıcı sekmesinde
+// worker/bellek sızıntısına yol açıyordu -- 10+ test arka arkaya işlenince
+// kaynaklar tükenip Supabase'e giden fetch istekleri "Failed to fetch" ile
+// çökmeye başlıyordu. Çözüm iki parçalı: (1) burada pdfDoc.destroy() ile o
+// dokümanın kaynaklarını her zaman serbest bırakıyoruz, (2) çağıran taraf
+// tüm döngü boyunca TEK bir worker'ı paylaşabilsin diye sharedWorker kabul
+// ediyoruz (her PDF için CDN'den yeniden worker script indirmemek için).
+async function readPdfPageCount(file, sharedWorker) {
+  let pdfDoc = null;
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer, worker: sharedWorker });
+    pdfDoc = await loadingTask.promise;
+    return pdfDoc.numPages;
+  } catch (err) {
+    console.error('PDF sayfa sayısı okunamadı:', err);
+    return null;
+  } finally {
+    if (pdfDoc) {
+      try { await pdfDoc.destroy(); } catch (_) { /* zaten kapanmışsa yoksay */ }
+    }
+  }
+}
+
+// İyzico'nun checkoutFormContent alanı içindeki <script> etiketi,
+// innerHTML ile DOM'a eklendiğinde tarayıcı tarafından ÇALIŞTIRILMAZ
+// (bu bilinen bir DOM kısıtlamasıdır). Bu yüzden script'i manuel olarak
+// yeni bir <script> elementi olarak yeniden oluşturup DOM'a ekliyoruz,
+// böylece iyzico'nun ödeme formu gerçekten render edilip görünür hale gelir.
+function renderIyzicoCheckoutForm(container, htmlContent) {
+  if (!container) return;
+  container.innerHTML = htmlContent;
+  const oldScripts = container.querySelectorAll('script');
+  oldScripts.forEach((oldScript) => {
+    const newScript = document.createElement('script');
+    Array.from(oldScript.attributes).forEach((attr) => {
+      newScript.setAttribute(attr.name, attr.value);
+    });
+    newScript.textContent = oldScript.textContent;
+    oldScript.parentNode.replaceChild(newScript, oldScript);
+  });
+}
+
+// ---- Benzer soru kontrolü (yükleme bittikten sonra, seçilen grup içinde) ----
+// Soru metni source_json.q (TipTap JSON) içinden alınır; karakter 4'lü parçalarıyla Dice benzerliği hesaplanır.
+const pqPlainText = (node) => {
+  if (!node) return '';
+  if (node.type === 'text') return node.text || '';
+  const inner = (node.content || []).map(pqPlainText).join(node.type === 'paragraph' || node.type === 'tableRow' ? '' : ' ');
+  return ['paragraph', 'tableRow', 'tableCell', 'tableHeader'].includes(node.type) ? inner + '\n' : inner;
+};
+const pqNorm = (t) => t.toLocaleLowerCase('tr').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+const pqGrams = (t) => { const s2 = ` ${t} `; const g = new Set(); for (let i = 0; i + 4 <= s2.length; i++) g.add(s2.slice(i, i + 4)); return g; };
+// Konu kelimelerine göre benzerlik (TF-IDF kosinüs): her soruda geçen kalıp sözler ("hangisidir", "yukarıdakilerden", "Yalnız I"...)
+// havuzda çok geçtiği için düşük ağırlık alır; soruyu ayıran kelimeler (Şaman, Kağan, toygun...) öne çıkar.
+const PQ_STOP = new Set('ile ve veya ama fakat için gibi göre daha çok bir bu şu bazı her hiç ise değil değildir olan olarak olarak ancak yalnız yalniz hangisi hangileri hangisidir hangileridir hangisinde hangisine hangisini aşağıdakilerden aşağıdakilerin aşağıdakiler yukarıdakilerden yukarıdakiler yukarıdaki yukarıda aşağıdaki aşağıda verilenlerden verilen kadar sonra önce arasında içinde biri hangi nedir nelerdir hangileri'.split(' '));
+const PQ_ROMAN = new Set(['i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x']);
+const pqTokens = (raw) => {
+  const cut = raw.search(/(^|\s)A\)\s/);
+  const stem = cut >= 0 ? raw.slice(0, cut) : raw;
+  const opts = cut >= 0 ? raw.slice(cut) : '';
+  const tk = (t, w) => pqNorm(t).split(' ').filter((x) => x && !PQ_ROMAN.has(x) && !PQ_STOP.has(x) && (x.length >= 3 || /^\d+$/.test(x)) && !/^[a-e]$/.test(x)).map((x) => [/^\d+$/.test(x) ? x : x.slice(0, 5), w]);
+  return [...tk(stem, 1), ...tk(opts, 0.4)];
+};
+const pqNums = (t) => (t.match(/\d+(?:[.,]\d+)?/g) || []).join('|');
+
+// ---- Soru İnceleme (Gemini/Claude web sayfasıyla kopyala-yapıştır köprüsü) ----
+const pqReviewPrompt = (items) => `Sen deneyimli bir KPSS/AGS soru editörüsün. Aşağıdaki ${items.length} soruyu TEK TEK incele.
+Her soru için şunları kontrol et:
+1) Bilgi doğruluğu (tarih, isim, kavram, olay-tarih eşleşmesi).
+2) Verilen doğru cevap harfi gerçekten doğru mu? Birden fazla doğru şık ya da hiç doğru şık var mı?
+3) Kök ile şıkların uyumu ve dil/format tutarlılığı (ör. kökte "savaşlardan" denip şıklarda savaş olmayan seçenek bulunması, "yanlıştır" kökünde çeldirici düzeni, şık biçimi tutarsızlığı).
+4) Yazım ve noktalama hataları.
+Gerekçelerin kısa ve Türkçe olsun. Sorun yoksa "tamam" de, gereksiz eleştiri yazma.
+
+CEVABINI SADECE aşağıdaki biçimde, tek bir JSON dizisi olarak ve bir kod bloğu içinde ver:
+[{"id":<soru numarası>,"durum":"tamam" | "duzeltme" | "hatali","cevap_dogru":true | false | null,"onerilen_cevap":"<harf ya da boş>","sorunlar":["..."],"onerilen_metin":"<düzeltilmiş soru metni (şıklarıyla) ya da boş>"}]
+durum: "tamam" = sorun yok; "duzeltme" = küçük dil/format/yazım düzeltmesi gerekiyor; "hatali" = bilgi/cevap hatası var.
+
+SORULAR:
+${items.map((q) => `[#${q.id}] (verilen doğru cevap: ${q.ans || '?'})\n${q.text}`).join('\n\n')}`;
+const pqParseReview = (txt) => {
+  let t = String(txt || '').replace(/```(?:json)?/gi, '');
+  const a = t.indexOf('['), b = t.lastIndexOf(']');
+  if (a < 0 || b <= a) throw new Error('Cevapta JSON listesi bulunamadı. Gemini\'nin ürettiği kod bloğunun tamamını yapıştırdığınızdan emin olun.');
+  let arr;
+  try { arr = JSON.parse(t.slice(a, b + 1)); } catch (e) { throw new Error('JSON okunamadı (' + e.message + '). Cevap yarım kalmış olabilir; Gemini\'ye "devam et" deyip tamamını yapıştırın.'); }
+  const out = {};
+  (Array.isArray(arr) ? arr : []).forEach((x) => {
+    const id = Number(x && x.id); if (!id) return;
+    out[id] = {
+      durum: ['tamam', 'duzeltme', 'hatali'].includes(x.durum) ? x.durum : ((x.sorunlar || []).length ? 'duzeltme' : 'tamam'),
+      cevapDogru: x.cevap_dogru === true ? true : x.cevap_dogru === false ? false : null,
+      onerilenCevap: String(x.onerilen_cevap || '').trim().toUpperCase().slice(0, 1),
+      sorunlar: (Array.isArray(x.sorunlar) ? x.sorunlar : []).map(String).filter(Boolean),
+      onerilenMetin: String(x.onerilen_metin || '').trim(),
+    };
+  });
+  return out;
+};
+
+// ---- Bul / Değiştir (Soru Havuzu) ----
+// TipTap JSON'unda metin bul-değiştir. Eşleşme, aynı paragraftaki metin parçalarını (kalın/italik vb. dahil) birleştirerek aranır;
+// değiştirilen metin eşleşmenin ilk harfinin biçimini alır, resim/satır sonu gibi düğümler eşleşmeyi böler.
+function pqFrRegex(find, matchCase, whole) {
+  const esc = find.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const body = whole ? `(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])` : esc;
+  return new RegExp(body, 'gu');
+}
+function pqFrPara(par, find, repl, matchCase, whole, snips) {
+  const kids = par.content || [];
+  const units = [];
+  kids.forEach((k, i) => {
+    if (k.type === 'text') { for (const ch of (k.text || '')) units.push({ c: ch, i }); }
+    else units.push({ c: '\n', i, raw: true });
+  });
+  const str = units.map((u) => u.c).join('');
+  const hay = matchCase ? str : str.toLocaleLowerCase('tr');
+  const needle = matchCase ? find : find.toLocaleLowerCase('tr');
+  if (hay.length !== str.length) return { par, n: 0 };
+  const re = pqFrRegex(needle, matchCase, whole);
+  const ms = [...hay.matchAll(re)].filter((m) => m[0].length > 0);
+  if (!ms.length) return { par, n: 0 };
+  // units dizisi UTF-16 karakter değil kod noktası bazlı; indeksleri de aynı bazda hesaplamak için string'i diziye çevirip eşleştiriyoruz.
+  const cps = Array.from(str);
+  const cpHay = Array.from(hay);
+  const out = [];
+  let pos = 0, n = 0;
+  // eşleşme indekslerini kod noktası indeksine çevir
+  const cpIndex = (u16) => Array.from(hay.slice(0, u16)).length;
+  ms.forEach((m) => {
+    const st = cpIndex(m.index), len = Array.from(m[0]).length;
+    for (; pos < st; pos++) out.push(units[pos]);
+    if (snips && snips.length < 1) {
+      const b = cps.slice(Math.max(0, st - 28), st).join(''), e = cps.slice(st + len, st + len + 28).join('');
+      snips.push({ before: b, hit: cps.slice(st, st + len).join(''), after: e, to: repl });
+    }
+    Array.from(repl).forEach((ch) => out.push({ c: ch, i: units[st].i }));
+    pos = st + len; n++;
+  });
+  for (; pos < units.length; pos++) out.push(units[pos]);
+  const newKids = [];
+  out.forEach((u) => {
+    if (u.raw) { newKids.push(kids[u.i]); return; }
+    const last = newKids[newKids.length - 1];
+    if (last && last.__i === u.i) { last.text += u.c; return; }
+    const src = kids[u.i];
+    const node = { ...src, text: u.c };
+    Object.defineProperty(node, '__i', { value: u.i, enumerable: false, writable: true });
+    newKids.push(node);
+  });
+  return { par: { ...par, content: newKids }, n };
+}
+function pqFrDoc(doc, find, repl, matchCase, whole, snips) {
+  let total = 0;
+  const walk = (node) => {
+    if (!node || !Array.isArray(node.content)) return node;
+    const hasInline = node.content.some((k) => k.type === 'text');
+    if (hasInline) { const r = pqFrPara(node, find, repl, matchCase, whole, snips); total += r.n; return r.par; }
+    return { ...node, content: node.content.map(walk) };
+  };
+  const out = walk(doc);
+  return { doc: out, n: total };
+}
+
+export default function App() {
+  const [appMode, setAppMode] = useState('student'); 
+  const [authMode, setAuthMode] = useState('login'); 
+  const [showAuthModal, setShowAuthModal] = useState(false); 
+  const [user, setUser] = useState(null);
+  const [denemeBusy, setDenemeBusy] = useState(false); // anlık deneme hazırlanıyor
+  const [solveCount, setSolveCount] = useState(10); // konu testi soru sayısı (10/20/30)
+  const [solve, setSolve] = useState(null); // öğrenci konu testi {title, lessonIds, topicIds, outcomeIds}
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
+  const [exams, setExams] = useState([]);
+  const [activeAdminExamId, setActiveAdminExamId] = useState(null);
+  const [activeSubExamId, setActiveSubExamId] = useState(null);
+  // Yönetici panelinde sınav PDF önizlemesinde ileri/geri gezinmek için.
+  // { examId, page } tutuyoruz; currentPreviewExam değiştiğinde (examId
+  // eşleşmezse) otomatik olarak 1'e döner, ayrı bir useEffect gerekmez.
+  const [adminPreviewPage, setAdminPreviewPage] = useState({ examId: null, page: 1 });
+  const [newKazanimSoruNo, setNewKazanimSoruNo] = useState('');
+  // Kazanım Haritası panelindeki üç araç kutusu (Excel/Tek Kazanım/Kopyala)
+  // varsayılan KAPALI başlar -- böylece soru görüntüleyiciye bakarken kazanım
+  // listesi ekrana daha yakın durur, araçlara ihtiyaç oldukça açılır.
+  const [isCreatingExam, setIsCreatingExam] = useState(false);
+  // Sınav Türü / Ders Türü artık serbest metin değil, sabit bir listeden
+  // seçiliyor (bkz. Yeni İçerik Ayarları formu). Bu iki state, o listeleri
+  // Supabase'den çekip tutuyor; newExamForm.categoryExamType /
+  // categoryLesson yine düz metin olarak saklanıyor (exams tablosunda
+  // hiçbir şema değişikliği gerekmiyor), sadece artık bu metin SADECE bu
+  // listeden seçilerek geliyor, elle yazılmıyor.
+  const [examCategories, setExamCategories] = useState([]); // [{id, name}]
+  const [lessonCategories, setLessonCategories] = useState([]); // [{id, name}] -- dersler ortak liste (sınava bağlı değil)
+  const [catTab, setCatTab] = useState('ders'); // Tanımla penceresi sekmesi: 'ders' | 'sinav'
+  // Aynı adlı birden fazla ders türü olabilir (ör. farklı sınav kategorilerinde "Tarih"). Havuz ekranlarında
+  // dersler adla eşleştirildiği için ilkine düşüyordu; bu yüzden tekrarlayan adlara sınav kategorisi eklenir.
+  // Aynı adlı dersler (ör. KPSS ve MEB-AGS'deki 'Tarih') listelerde TEK ders olarak gösterilir; havuz soruları ad üzerinden ortak kullanılır.
+  const lcKey = (lc) => (lc ? lc.name : '');
+  const lessonUniq = lessonCategories.filter((lc, i, a) => a.findIndex((x) => x.name === lc.name) === i);
+  const lcByKey = (key) => lessonCategories.find((lc) => lcKey(lc) === key);
+  // Ders ADIYLA (Kazanım Haritası, Excel, hızlı atama gibi ad bazlı ekranlar): aynı adlı birden fazla ders türü varsa
+  // verilen konuyu içereni seçer (ilk bulunana değil), böylece "Tarih" iki kategoride olsa da konu/kazanım listeleri boş gelmez.
+  const lcForEntry = (dersName, konuName) => {
+    const c = lessonCategories.filter((lc) => lc.name === dersName);
+    if (c.length <= 1) return c[0];
+    const withKonu = konuName ? c.find((lc) => topics.some((t) => t.lesson_category_id === lc.id && t.name === konuName)) : null;
+    return withKonu || c.find((lc) => topics.some((t) => t.lesson_category_id === lc.id)) || c[0];
+  };
+  const [topics, setTopics] = useState([]); // [{id, name, lesson_category_id}]
+  const [learningOutcomes, setLearningOutcomes] = useState([]); // [{id, name, lesson_category_id, topic_id}]
+  // Kazanım bazlı ders notu (PDF) / video kaynakları. Anahtar: learning_outcome_id.
+  const [learningOutcomeResources, setLearningOutcomeResources] = useState({});
+  // Admin "Kaynaklar" ekranı: hangi Ders Türü seçili, ve hangi kazanımın
+  // video linki şu an düzenleniyor (kaydetmeden önce serbestçe yazabilsin diye).
+  const [showResourceManager, setShowResourceManager] = useState(false);
+  // Excel'den toplu test yükleme (bir üst ürüne onlarca test tek seferde
+  // eklemek için). Kazanım haritası bu akışa dahil değil -- admin onu
+  // sonradan tek tek/mevcut ekranlardan elle girecek.
+  const [resourceManagerDersId, setResourceManagerDersId] = useState(null);
+  const [resourceVideoDrafts, setResourceVideoDrafts] = useState({}); // { [learning_outcome_id]: taslak metin }
+  // Öğrenci sonuç ekranında hangi kazanımın video oynatıcısı açık (anahtar: learning_outcome_id ya da kazanım adı).
+  const [expandedVideoKazanim, setExpandedVideoKazanim] = useState({});
+  const [showNewExamCategoryInput, setShowNewExamCategoryInput] = useState(false);
+  const [newExamCategoryName, setNewExamCategoryName] = useState('');
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  // Soru başı fiyat: admin panelinde ayarlanan, "Soru / Sayfa Sayısı"
+  // değiştiğinde Fiyat/Eski Fiyat'ı otomatik hesaplamak için kullanılan
+  // tek (global) katsayı. `pricing_settings` tablosunun TEK satırında
+  // (id=1) tutulur.
+  const [pricePerQuestion, setPricePerQuestion] = useState(0);
+  // pricePerQuestion'ın kendisi 0 olabilir -- hem "hiç ayarlanmadı" (varsayılan
+  // başlangıç durumu) hem de "admin BİLEREK 0 yazıp kaydetti" (örn. bugün tüm
+  // ürünleri ücretsiz yapmak istiyor) AYNI sayısal değere denk düşer. Bu ikisini
+  // ayırt etmek için ayrı bir bayrak tutuyoruz: veritabanında pricing_settings
+  // satırı gerçekten VARSA (fetchPricingSettings) ya da admin panelden az önce
+  // KAYDETTİYSE (savePricePerQuestion) true olur. Otomatik fiyat hesaplayan
+  // her yer artık "pricePerQuestion > 0" yerine bunu kontrol ediyor -- böylece
+  // 0 girip kaydetmek gerçekten "tüm fiyatları 0 yap" anlamına geliyor.
+  const [pricePerQuestionConfigured, setPricePerQuestionConfigured] = useState(false);
+  const [showPricingSettings, setShowPricingSettings] = useState(false);
+  const [pricingDraft, setPricingDraft] = useState('0');
+  // Tüm ürünlere tek seferde toplu indirim uygulamak için (bkz.
+  // applyDiscountToAllExams) -- kalıcı bir ayar değil, sadece o an
+  // girilen yüzdeyi tutan geçici bir alan.
+  const [discountDraft, setDiscountDraft] = useState('');
+  // Kategori Yönetimi artık sekmeler yerine iç içe (Sınav Türü > Ders Türü >
+  // Konu > Kazanım) açılır/kapanır bir akordiyon ağacı olarak gösteriliyor.
+  // Her seviyenin kendi "hangi kayıtlar açık" haritası var (id -> boolean).
+  const [expandedLessonIds, setExpandedLessonIds] = useState({});
+  const [expandedTopicIds, setExpandedTopicIds] = useState({});
+  const [newExamForm, setNewExamForm] = useState({
+    name: '',
+    duration: '',
+    examType: 'deneme',
+    categoryExamType: '',
+    categoryLesson: '',
+    price: 0,
+    originalPrice: 0,
+    isParent: true,
+    answerKey: {},
+    sections: [],
+    numPages: 0,
+    description: ''
+  });
+  const [activeStudentExamId, setActiveStudentExamId] = useState(null);
+  const [inspectingExamId, setInspectingExamId] = useState(null);
+  // Paylaşılan bir ürün linkiyle (?exam=<id>) açıldıysak, id'yi mount anında
+  // bir kere okuyup burada saklıyoruz. exams listesi Supabase'ten async
+  // geldiği için birkaç render/efekt arada çalışabiliyor; window.location'ı
+  // tekrar tekrar okumak yerine bu ref'e güveniyoruz.
+  const pendingSharedExamIdRef = useRef(
+    typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('exam') : null
+  );
+
+  // ÖNEMLİ (bug fix): Supabase istemcisi, sekme arka plandan öne alındığında
+  // (visibilitychange) oturumu kontrol etmek için onAuthStateChange olayını
+  // YENİDEN tetikleyebiliyor -- aynı kullanıcı için bile. Bu ref, o an için
+  // "exams" listesinin hangi kullanıcı için zaten yüklendiğini tutar; aynı
+  // kullanıcı için tekrar gelen olaylarda gereksiz/zararlı yeniden yüklemeyi
+  // atlamak için kullanılır (bkz. aşağıdaki onAuthStateChange).
+  const loadedUserIdRef = useRef(null);
+
+  const [studentCurrentPage, setStudentCurrentPage] = useState(1);
+  const [studentAnswers, setStudentAnswers] = useState({});
+  const [timeLeft, setTimeLeft] = useState(0); 
+  const [isPaused, setIsPaused] = useState(false);
+  const [examStarted, setExamStarted] = useState(false); // Öğrenci "Başla"ya basana kadar süre işlemeye başlamaz
+  // Odak Modu: soru çözüm ekranında site header'ını (logo/menü) gizleyip
+  // soru alanına daha fazla yer açar. Sadece CSS/state ile çalışır --
+  // native tarayıcı Fullscreen API'si kasıtlı olarak kullanılmıyor (bkz.
+  // toggleFocusMode tanımındaki not).
+  const [focusMode, setFocusMode] = useState(false);
+  const [isExamFinished, setIsExamFinished] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  // Sonuç ekranındaki Kazanım Analizi'nde hangi Konu kartlarının açık
+  // (kazanım detayı görünür) olduğunu tutar. Anahtar: "ders::konu".
+  const [expandedKonular, setExpandedKonular] = useState({});
+  
+  const [viewingSolutionQ, setViewingSolutionQ] = useState(false);
+  const solutionRef = useRef(null);
+  const [studentResultsMap, setStudentResultsMap] = useState({});
+  const [studentPurchases, setStudentPurchases] = useState({}); 
+  const [studentBalance, setStudentBalance] = useState(null); // null: henüz yüklenmedi, number: yüklendi
+
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportText, setReportText] = useState('');
+  const [reportSubmitting, setReportSubmitting] = useState(false);
+  const [reportedQuestions, setReportedQuestions] = useState({}); 
+
+  const [showReportsAdmin, setShowReportsAdmin] = useState(false);
+  const [adminReports, setAdminReports] = useState([]);
+  const [adminReportsLoading, setAdminReportsLoading] = useState(false);
+  const [adminReportsFilter, setAdminReportsFilter] = useState('open');
+  const [openReportsCount, setOpenReportsCount] = useState(0);
+  const [replyDrafts, setReplyDrafts] = useState({});
+
+  // Fatura Bilgileri: öğrenci kendi TC Kimlik No / fatura e-postası / adres
+  // bilgisini "Sınavlarım" sayfasından girip kaydediyor (billing_info
+  // tablosu, RLS ile sadece kendi satırını okur/yazar). Admin panelinde
+  // ise "Faturalar" bölümünden TÜM öğrencilerin girdiği bilgileri (yine RLS
+  // ile, admin@yayinevi.com için ayrı bir SELECT politikasıyla) görüp
+  // e-posta üzerinden arayabiliyor.
+  const [myBillingInfo, setMyBillingInfo] = useState(null);
+  const [billingDraft, setBillingDraft] = useState({ fullName: '', tcKimlikNo: '', invoiceEmail: '', address: '' });
+  const [savingBillingInfo, setSavingBillingInfo] = useState(false);
+  const [showBillingAdmin, setShowBillingAdmin] = useState(false);
+  const [billingRecords, setBillingRecords] = useState([]);
+  const [billingRecordsLoading, setBillingRecordsLoading] = useState(false);
+  const [billingSearch, setBillingSearch] = useState('');
+
+  // Soru Havuzu -- Excel'den Toplu Test Yükle'nin sadeleştirilmiş hali:
+  // hedefi bir sınav/paket DEĞİL, bağımsız question_pool tablosu. Excel'de
+  // BİLEREK Ders/Konu/Kazanım YOK (metin eşleştirmesi yazım hatasına açık,
+  // "karmaşaya sebep olur") -- sadece dosya eşleştirmesi + doğru cevap var.
+  // Ders/Konu/Kazanım, yükledikten sonra dropdown'la (Tek Kazanım Uygula ya
+  // da satır satır) atanıyor -- tıpkı mevcut Kazanım Haritası ekranınızdaki
+  // gibi, metne değil ID'ye bağlı.
+  const [showPoolImport, setShowPoolImport] = useState(false);
+  const [dupMin, setDupMin] = useState(85);
+  const [dupIdx, setDupIdx] = useState(0);
+  // Yeni ana sayfa (Google tarzı seçim ekranı): sınav / ders / mod / konu / kazanım seçimleri tarayıcıda hatırlanır.
+  const [hs, setHs] = useState(() => { try { return JSON.parse(localStorage.getItem('slHome') || '{}') || {}; } catch (e) { return {}; } });
+  const setHsP = (patch) => setHs((prev) => { const n = { ...prev, ...patch }; try { localStorage.setItem('slHome', JSON.stringify(n)); } catch (e) { /* önemsiz */ } return n; });
+  const [distRows, setDistRows] = useState([]); // exam_distribution: konu/kazanım sırası (ve soru dağılımı)
+  const [eclRows, setEclRows] = useState([]); // exam_category_lessons: sınav <-> ders bağlantısı
+  const [bpExam, setBpExam] = useState(null); // Sınav içeriği / soru dağılımı penceresi (açık sınav kaydı)
+  const [mgrNewExam, setMgrNewExam] = useState(''); // Tanımla > Sınavlar: yeni sınav adı
+  const [fr, setFr] = useState(null); // Bul/Değiştir penceresi
+  const [frJob, setFrJob] = useState(null); // PDF'leri yeniden çizdirilecek sorular {rows, undoRows, isUndo}
+  const [frUndo, setFrUndo] = useState(null); // son değişikliğin geri alma bilgisi (yalnız bu oturumda)
+  const [rev, setRev] = useState(null); // Soru İnceleme: {name, ids, part, size, paste, parsed:{id:{...}}, idx, onlyIssues, showSol, error}
+  const [dupAi, setDupAi] = useState({ provider: 'gemini', running: false, done: 0, total: 0, error: '', results: {}, hideDifferent: false }); // results: { 'gemini:3100-3172': {clusters} }
+  const [dupSkip, setDupSkip] = useState(() => new Set());
+  const [dupState, setDupState] = useState({ key: null, pairs: null, noText: 0 }); // key: sonucun ait olduğu kazanım düğümü
+  const [poolExcelRows, setPoolExcelRows] = useState([]); // [{soruPdfName, cozumPdfName, cevap}]
+  const [poolGroupName, setPoolGroupName] = useState(''); // Kullanıcının verdiği yükleme grubu adı (ör. "Biyoloji Kitabı 1")
+
+  // --- Havuzdan Oluştur (Test/Deneme Üretme) ---
+  const [showPoolGenerate, setShowPoolGenerate] = useState(false);
+  const [poolGenParentId, setPoolGenParentId] = useState(null);
+  const [poolGenMode, setPoolGenMode] = useState('test'); // 'test' (çoklu, aynı kazanım) | 'deneme' (tekli, karma)
+  const [poolGenIncludeUsed, setPoolGenIncludeUsed] = useState(false);
+  const [poolGenNamePrefix, setPoolGenNamePrefix] = useState('');
+  const [poolGenDuration, setPoolGenDuration] = useState(60);
+  const [poolGenTestDers, setPoolGenTestDers] = useState('');
+  const [poolGenTestKonu, setPoolGenTestKonu] = useState('');
+  const [poolGenTestKazanim, setPoolGenTestKazanim] = useState('');
+  const [poolGenTestCount, setPoolGenTestCount] = useState(10);
+  const [poolGenTestSize, setPoolGenTestSize] = useState(16);
+  const [poolGenDenemeRows, setPoolGenDenemeRows] = useState([{ ders: '', konu: '', kazanim: '', count: 10, bolum: '' }]);
+  const [poolGenLoading, setPoolGenLoading] = useState(false);
+  const [poolGenProgress, setPoolGenProgress] = useState({ current: 0, total: 0 });
+  const [poolPdfFiles, setPoolPdfFiles] = useState(new Map()); // dosya adı (küçük harf) -> File
+  const [poolImporting, setPoolImporting] = useState(false);
+  const [poolImportProgress, setPoolImportProgress] = useState({ current: 0, total: 0 });
+  const [poolImportErrors, setPoolImportErrors] = useState([]);
+
+  // Havuz Kazanım Ataması: outcome_id'si NULL olan (henüz etiketlenmemiş)
+  // havuz soruları ve bunları etiketlemek için kullanılan "Tek Kazanım
+  // Uygula" alanları.
+  // ÖNEMLİ: Farklı yükleme oturumlarındaki (ör. 492 soruluk bir grup + daha
+  // sonra ayrı bir günde yüklenen 100 soruluk başka bir grup) etiketsiz
+  // sorular birbirine KARIŞMASIN diye, her yükleme kendi upload_batch_id'siyle
+  // etiketleniyor. Etiketleme ekranı artık TÜM etiketsiz soruları tek listede
+  // göstermek yerine, önce "hangi yükleme grubu" diye soruyor -- "Tümüne
+  // Uygula" sadece SEÇİLİ gruba uygulanıyor, başka gruplara asla dokunmuyor.
+  const [poolUntagged, setPoolUntagged] = useState([]);
+  const [poolBatches, setPoolBatches] = useState([]); // [{batch_id, count, created_at}]
+  const [selectedPoolBatch, setSelectedPoolBatch] = useState(null);
+  const [poolTaggingLoading, setPoolTaggingLoading] = useState(false);
+  const [quickPoolIds, setQuickPoolIds] = useState({ dersId: '', konuId: '', kazanimId: '' }); // Etiketlenmemiş Sorular > Tek Kazanım Uygula seçimi
+
+  // --- Havuz Listesi + Detay Paneli ---
+  // Ayrı bir ekran: havuzdaki (etiketli/etiketsiz FARK ETMEKSİZİN) TÜM
+  // soruları listeleyip, bir soruya tıklayınca -- İçerik Ayarları
+  // ekranınızdaki gibi -- solda gerçek PDF önizlemesi, sağda düzenlenebilir
+  // alanlar (Ders/Konu/Kazanım, Doğru Cevap, PDF değiştirme) ve "hangi
+  // testlerde kullanıldı" bilgisini gösteren bir panel açılır.
+  const [showPoolBrowser, setShowPoolBrowser] = useState(false);
+  const [showPoolEditor, setShowPoolEditor] = useState(false);
+  const poolLightOk = useRef(true); // hafif liste görünümü (question_pool_light) kullanılabiliyor mu
+  const [poolEditorRow, setPoolEditorRow] = useState(null); // null = yeni soru, dolu = düzenlenen havuz satırı
+  const [poolBrowserLoading, setPoolBrowserLoading] = useState(false);
+  const [poolBrowserRows, setPoolBrowserRows] = useState([]);
+  const [poolTreeOpen, setPoolTreeOpen] = useState({}); // Soru Havuzu ağacında açık düğümler
+  const [poolBrowserFilterTag] = useState('tagged'); // Soru Havuzu yalnızca etiketli soruları gösterir
+  const [poolBrowserGroups, setPoolBrowserGroups] = useState([]); // [{key, count}] -- key: grup adı ya da '__none__' (isimsiz)
+  const [poolBrowserGroup, setPoolBrowserGroup] = useState(''); // '' = tüm gruplar
+  const [poolPdfVersions, setPoolPdfVersions] = useState({}); // PDF değiştirilince önizleme önbelleğini atlatmak için
+  const [selectedPoolQuestionId, setSelectedPoolQuestionId] = useState(null);
+  const [poolDetailUsage, setPoolDetailUsage] = useState([]);
+  const [poolDetailUsageLoading, setPoolDetailUsageLoading] = useState(false);
+  const [poolDetailUploading, setPoolDetailUploading] = useState(false);
+
+  // Ödeme öncesi ZORUNLU fatura bilgisi adımı: öğrenci fatura bilgisini
+  // henüz girmemişse, ödemeye (iyzico'ya veya bakiye ile ücretsiz karşılamaya)
+  // geçmeden ÖNCE bu bilgiyi istiyoruz -- aksi halde ödeme tamamlanıp fatura
+  // kesilemeyen bir öğrenci ortaya çıkıyordu. pendingPaymentAction, fatura
+  // bilgisi kaydedildikten HEMEN SONRA hangi ödeme işleminin devam edeceğini
+  // tutar: { type: 'single', exam } ya da { type: 'cart' }.
+  const [showBillingGateModal, setShowBillingGateModal] = useState(false);
+  const [pendingPaymentAction, setPendingPaymentAction] = useState(null);
+
+  // Giriş yapmadan (ücretsiz deneme sınavı için, bkz. FREE_TRIAL_EXAM_IDS)
+  // sınava başlayan bir ziyaretçi, sonucu görebilmek için sınavı BİTİRMEDEN
+  // ÖNCE hesap oluşturmak zorunda -- sunucudaki /api/finish-exam çağrısı zaten
+  // bir oturum (token) gerektiriyor. Bu bayrak, "hesap oluştur/giriş yap"
+  // modalı açıldıktan sonra kullanıcı GERÇEKTEN giriş yapınca sınavı otomatik
+  // olarak (elle tekrar "Bitir"e basmasına gerek kalmadan) bitirmemizi
+  // sağlıyor -- cevapları zaten yerel state'te (studentAnswers) durduğu için
+  // hiçbir şey kaybolmuyor.
+  const [pendingFinishAfterLogin, setPendingFinishAfterLogin] = useState(false);
+
+  const [showAnnounceModal, setShowAnnounceModal] = useState(false);
+  const [announceTitle, setAnnounceTitle] = useState('');
+  const [announceMessage, setAnnounceMessage] = useState('');
+  const [announceAudience, setAnnounceAudience] = useState('all');
+  const [announceExamId, setAnnounceExamId] = useState('');
+  const [announceExamType, setAnnounceExamType] = useState('');
+  const [announceStudentEmail, setAnnounceStudentEmail] = useState('');
+  const [announceSending, setAnnounceSending] = useState(false);
+
+  const [showStudentNotifs, setShowStudentNotifs] = useState(false);
+  const [studentNotifItems, setStudentNotifItems] = useState([]);
+  const [studentNotifLoading, setStudentNotifLoading] = useState(false);
+  const [studentUnreadCount, setStudentUnreadCount] = useState(0);
+  
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('Tümü');
+
+  const [examRatingsMap, setExamRatingsMap] = useState({});
+  const [examRatingBreakdownMap, setExamRatingBreakdownMap] = useState({});
+  const [solvedCountMap, setSolvedCountMap] = useState({});
+  const [sortOption, setSortOption] = useState('populer');
+  const [cartItems, setCartItems] = useState(() => {
+    try {
+      const saved = localStorage.getItem('yt_cart_items');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [showCart, setShowCart] = useState(false);
+  // İyzico ödeme penceresinin açık olup olmadığını React'in kendi kontrolünde
+  // tutuyoruz -- bu sayede kapatma butonu, iyzico'nun kendi DOM içeriğinden
+  // tamamen bağımsız, her zaman en üstte ve tıklanabilir kalıyor.
+  const [showPaymentOverlay, setShowPaymentOverlay] = useState(false);
+  const closePaymentOverlay = () => {
+    const checkoutDiv = document.getElementById('iyzipay-checkout-form');
+    if (checkoutDiv) checkoutDiv.innerHTML = '';
+    setShowPaymentOverlay(false);
+  };
+  const [productReviews, setProductReviews] = useState([]);
+  const [reviewTextInput, setReviewTextInput] = useState('');
+  const [previewTestIndex, setPreviewTestIndex] = useState(0);
+
+  const [showAccountPage, setShowAccountPage] = useState(false);
+  const [accountTab, setAccountTab] = useState('exams');
+  const [showAccountMenu, setShowAccountMenu] = useState(false);
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState('');
+  const [passwordChangeLoading, setPasswordChangeLoading] = useState(false);
+  const [passwordChangeMessage, setPasswordChangeMessage] = useState(null);
+
+  useEffect(() => {
+    // Sepet değiştikçe tarayıcıya kaydediyoruz ki oturum kapatılıp açılsa
+    // ya da sayfa yenilense bile sepet içeriği kalıcı olsun.
+    try {
+      localStorage.setItem('yt_cart_items', JSON.stringify(cartItems));
+    } catch {
+      // localStorage kullanılamıyorsa (gizli sekme vb.) sessizce geç
+    }
+  }, [cartItems]);
+
+  useEffect(() => {
+    // Sınav listesi yüklendiğinde, localStorage'da kalmış ama artık mevcut
+    // olmayan (silinmiş/değişmiş) sınav ID'lerini sepetten temizle. Bu,
+    // sepet rozetinin gerçek içerikle tutarsız kalmasını önler.
+    if (exams.length === 0) return;
+    setCartItems((prev) => {
+      const validIds = new Set(exams.map(e => e.id));
+      const cleaned = prev.filter(id => validIds.has(id));
+      return cleaned.length === prev.length ? prev : cleaned;
+    });
+  }, [exams]);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        loadedUserIdRef.current = session.user.id;
+        checkUserRoleAndSetMode(session.user);
+      } else {
+        fetchPublicExams();
+        fetchCategoryLists(); // misafir de Sınav/Ders listesini görsün
+      }
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+
+      if (session?.user) {
+        // Aynı kullanıcı için tekrar gelen olayda (ör. sekmeye geri dönüldüğünde
+        // Supabase'in tetiklediği oturum kontrolü) exams listesini yeniden
+        // ÇEKMİYORUZ -- aksi halde veritabanındaki eski (henüz "Kaydet"
+        // butonuna basılmamış) sürüm, o an ekranda doldurulmakta olan
+        // kazanım/cevap gibi kaydedilmemiş yerel değişikliklerin üzerine
+        // yazardı. Gerçek bir giriş (farklı kullanıcı ya da ilk yükleme)
+        // olduğunda id değişeceği için normal şekilde yeniden yüklenir.
+        if (loadedUserIdRef.current === session.user.id) return;
+        loadedUserIdRef.current = session.user.id;
+        checkUserRoleAndSetMode(session.user);
+      } else {
+        loadedUserIdRef.current = null;
+        setAppMode('student');
+        fetchPublicExams();
+        fetchCategoryLists();
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    // exams listesi (parent/child id eşleşmesi için) yüklendikten sonra puanları ve
+    // çözülme sayılarını hesapla.
+    if (exams.length > 0) {
+      fetchAllRatings();
+      fetchSolvedCounts();
+    }
+  }, [exams.length]);
+
+  useEffect(() => {
+    // Sayfa "?exam=<id>" parametresiyle açıldıysa (örn. paylaşılan bir ürün linki),
+    // exams listesi yüklendikten sonra ilgili sınavın detay ekranını otomatik aç.
+    // Not: examParam'ı window.location.search'ten HER seferinde yeniden okumuyoruz;
+    // aşağıdaki URL-senkron efekti, exams henüz yüklenmeden "exam" parametresini
+    // adres çubuğundan silebiliyordu (inspectingExamId henüz null olduğu için).
+    // Bu yüzden paylaşılan id'yi mount anında bir kere yakalayıp pendingSharedExamIdRef'te tutuyoruz.
+    if (pendingSharedExamIdRef.current === null) return;
+    if (exams.length === 0) return;
+
+    const examParam = pendingSharedExamIdRef.current;
+    pendingSharedExamIdRef.current = null; // artık çözümlendi (bulunsun ya da bulunmasın), bir daha bekleme
+
+    const found = exams.find(e => String(e.id) === examParam);
+    if (found) {
+      if (isFreeTrialExam(found)) {
+        // Ücretsiz deneme sınavı paylaşım linki (?exam=81 vb.): ana
+        // sayfadaki "KPSS Denemesi / Hemen Katıl!" butonuyla BİREBİR AYNI
+        // çözümleme ve davranış -- ürün özet sayfasına hiç uğramadan,
+        // giriş istemeden doğrudan sınav çözme ekranını açıyoruz. Sosyal
+        // medyada paylaşılan linkin tıklama sonrası deneyimi, ana
+        // sayfadaki butonla tutarlı olsun diye (ekstra bir "Teste Başla"
+        // tıklaması istemeden) böyle kuruldu.
+        const children = exams.filter(e => e.parentId === found.id);
+        const playableExam = children.length > 0 ? children[0] : found;
+        startExam(playableExam);
+      } else {
+        setInspectingExamId(found.id);
+      }
+    } else {
+      // Geçersiz/silinmiş bir exam id'si paylaşılmışsa adres çubuğundaki
+      // "exam" parametresini temizleyelim.
+      const params = new URLSearchParams(window.location.search);
+      params.delete('exam');
+      const newSearch = params.toString();
+      window.history.replaceState({}, '', window.location.pathname + (newSearch ? `?${newSearch}` : ''));
+    }
+  }, [exams.length]);
+
+  useEffect(() => {
+    // Detay ekranı açık/kapalıyken adres çubuğunu senkron tutuyoruz ki
+    // ürün sayfası paylaşılabilir bir link olsun (?exam=<id>).
+    // Paylaşılan bir link henüz çözümlenmeyi bekliyorsa (exams yüklenmedi),
+    // "exam" parametresini silmiyoruz - yoksa yukarıdaki efekt exams
+    // yüklendiğinde artık URL'de parametreyi bulamaz.
+    if (inspectingExamId === null && pendingSharedExamIdRef.current !== null) {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    if (inspectingExamId) {
+      params.set('exam', inspectingExamId);
+    } else {
+      params.delete('exam');
+    }
+    const newSearch = params.toString();
+    const newUrl = window.location.pathname + (newSearch ? `?${newSearch}` : '');
+    if (newUrl !== window.location.pathname + window.location.search) {
+      window.history.replaceState({}, '', newUrl);
+    }
+  }, [inspectingExamId]);
+
+  useEffect(() => {
+    if (viewingSolutionQ && solutionRef.current) {
+      solutionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [viewingSolutionQ]);
+
+  useEffect(() => {
+    if (!inspectingExamId) {
+      setProductReviews([]);
+      return;
+    }
+    setPreviewTestIndex(0);
+    const childIds = exams.filter(e => e.parentId === inspectingExamId).map(e => e.id);
+    fetchProductReviews(inspectingExamId, childIds);
+
+    const viewedExam = exams.find(e => e.id === inspectingExamId);
+    if (viewedExam) {
+      trackPixelEvent('ViewContent', {
+        content_ids: [viewedExam.id],
+        content_name: viewedExam.name,
+        content_type: 'product',
+        value: viewedExam.price || 0,
+        currency: 'TRY'
+      });
+    }
+  }, [inspectingExamId, exams.length]);
+
+  useEffect(() => {
+    // İyzico ödeme formundan siteye "?payment=success" gibi bir parametreyle
+    // geri dönüldüğünde kullanıcıyı bilgilendirip satın alma listesini tazeliyoruz.
+    const params = new URLSearchParams(window.location.search);
+    const paymentStatus = params.get('payment');
+    if (!paymentStatus) return;
+
+    if (paymentStatus === 'success') {
+      alert('✓ Ödemeniz başarıyla tamamlandı! Satın aldığınız içeriklere artık erişebilirsiniz.');
+
+      // İyzico'nun ödeme sayfasına gitmeden hemen önce sessionStorage'a
+      // yazdığımız bilgiyi burada okuyup Meta Pixel'in "Purchase" olayını
+      // SADECE ödeme gerçekten onaylanıp buraya geri dönüldüğünde ateşliyoruz
+      // (yönlendirme anında değil) -- böylece iptal edilen/başarısız olan
+      // ödemeler asla "satış" olarak sayılmaz. Bir kere okuyup hemen
+      // temizliyoruz ki sayfa yenilendiğinde tekrar tetiklenmesin.
+      try {
+        const pendingRaw = sessionStorage.getItem('yt_pending_pixel_purchase');
+        if (pendingRaw) {
+          sessionStorage.removeItem('yt_pending_pixel_purchase');
+          const pending = JSON.parse(pendingRaw);
+          trackPixelEvent('Purchase', {
+            content_ids: pending.content_ids,
+            content_name: pending.content_name,
+            content_type: 'product',
+            value: pending.value,
+            currency: pending.currency || 'TRY'
+          });
+        }
+      } catch (e) { /* sessionStorage/JSON hatası -- pixel olayı atlanır, sitenin akışı etkilenmez */ }
+
+      if (user) {
+        fetchUserPurchases(user.email).then((freshPurchases) => {
+          // Az önce satın alınan içerikleri sepetten temizliyoruz (ödeme
+          // başarıyla tamamlandıktan SONRA, önceden değil). fetchUserPurchases'ın
+          // döndürdüğü TAZE veriyi kullanıyoruz -- state henüz güncellenmemiş
+          // olabileceği için eski (stale) studentPurchases'a güvenmiyoruz.
+          setCartItems((prev) => prev.filter((id) => !freshPurchases[id]));
+        });
+      }
+    } else if (paymentStatus === 'cancelled') {
+      // Kullanıcı iyzico'nun ödeme sayfasından vazgeçti -- sepeti olduğu gibi bırakıyoruz.
+      try { sessionStorage.removeItem('yt_pending_pixel_purchase'); } catch (e) {}
+    } else if (paymentStatus === 'failed') {
+      alert('Ödeme tamamlanamadı ya da iptal edildi.');
+      try { sessionStorage.removeItem('yt_pending_pixel_purchase'); } catch (e) {}
+    } else {
+      alert('Ödeme sırasında bir sorun oluştu. Lütfen tekrar deneyin ya da bizimle iletişime geçin.');
+      try { sessionStorage.removeItem('yt_pending_pixel_purchase'); } catch (e) {}
+    }
+
+    // "payment" parametresini temizleyip sayfa yenilendiğinde tekrar tetiklenmesini
+    // önlüyoruz; ancak "exam" gibi diğer parametreleri (paylaşılan ürün linki) koruyoruz.
+    params.delete('payment');
+    const remaining = params.toString();
+    const cleanUrl = window.location.origin + window.location.pathname + (remaining ? `?${remaining}` : '');
+    window.history.replaceState({}, '', cleanUrl);
+  }, [user]);
+
+  useEffect(() => {
+    if (appMode === 'admin' && user) {
+      fetchAdminReports('open');
+      fetchOpenReportsCount();
+    }
+  }, [appMode, user]);
+
+  useEffect(() => {
+    if (appMode === 'student' && user) {
+      fetchStudentUnreadCount();
+    }
+  }, [appMode, user]);
+
+  const fetchOpenReportsCount = async () => {
+    const { count, error } = await supabase
+      .from('question_reports')
+      .select('*', { count: 'exact', head: true })
+      .eq('status', 'open');
+
+    if (!error && typeof count === 'number') {
+      setOpenReportsCount(count);
+    }
+  };
+
+  const fetchAdminReports = async (filter) => {
+    setAdminReportsLoading(true);
+    let query = supabase
+      .from('question_reports')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (filter && filter !== 'all') {
+      query = query.eq('status', filter);
+    }
+
+    const { data, error } = await query;
+    setAdminReportsLoading(false);
+
+    if (!error && data) {
+      setAdminReports(data);
+    } else if (error) {
+      console.error("Bildirimler alınamadı:", error);
+    }
+  };
+
+  const markReportStatus = async (reportId, status) => {
+    const { error } = await supabase
+      .from('question_reports')
+      .update({ status })
+      .eq('id', reportId);
+
+    if (!error) {
+      setAdminReports(prev => prev.filter(r => r.id !== reportId));
+      fetchOpenReportsCount();
+    } else {
+      alert("İşlem başarısız oldu.");
+    }
+  };
+
+  const deleteAdminReport = async (reportId) => {
+    if (!window.confirm("Bu bildirimi kalıcı olarak silmek istiyor musunuz?")) return;
+    const { error } = await supabase
+      .from('question_reports')
+      .delete()
+      .eq('id', reportId);
+
+    if (!error) {
+      setAdminReports(prev => prev.filter(r => r.id !== reportId));
+      fetchOpenReportsCount();
+    } else {
+      alert("Silme işlemi başarısız oldu.");
+    }
+  };
+
+  const submitReportReply = async (reportId) => {
+    const replyText = (replyDrafts[reportId] || '').trim();
+    if (!replyText) return;
+
+    const { error } = await supabase
+      .from('question_reports')
+      .update({
+        admin_reply: replyText,
+        replied_at: new Date().toISOString(),
+        reply_seen: false,
+        status: 'resolved'
+      })
+      .eq('id', reportId);
+
+    if (!error) {
+      setReplyDrafts(prev => { const next = { ...prev }; delete next[reportId]; return next; });
+      setAdminReports(prev => prev.filter(r => r.id !== reportId));
+      fetchOpenReportsCount();
+    } else {
+      alert("Yanıt gönderilemedi.");
+    }
+  };
+
+  const sendAnnouncement = async () => {
+    if (!announceTitle.trim() || !announceMessage.trim() || announceSending) return;
+    if (announceAudience === 'buyers' && !announceExamId) { alert("Lütfen bir ürün/paket seçin."); return; }
+    if (announceAudience === 'exam_type' && !announceExamType) { alert("Lütfen bir sınav türü seçin."); return; }
+    if (announceAudience === 'single' && !announceStudentEmail.trim()) { alert("Lütfen öğrenci e-postasını girin."); return; }
+
+    setAnnounceSending(true);
+    const { error } = await supabase
+      .from('notifications')
+      .insert([{
+        title: announceTitle.trim(),
+        message: announceMessage.trim(),
+        audience_type: announceAudience,
+        audience_exam_id: announceAudience === 'buyers' ? announceExamId : null,
+        audience_category_exam_type: announceAudience === 'exam_type' ? announceExamType : null,
+        target_student_email: announceAudience === 'single' ? announceStudentEmail.trim() : null
+      }]);
+    setAnnounceSending(false);
+
+    if (error) {
+      console.error(error);
+      alert("Duyuru gönderilemedi.");
+      return;
+    }
+
+    setShowAnnounceModal(false);
+    setAnnounceTitle('');
+    setAnnounceMessage('');
+    setAnnounceAudience('all');
+    setAnnounceExamId('');
+    setAnnounceExamType('');
+    setAnnounceStudentEmail('');
+    alert("✓ Duyuru gönderildi.");
+  };
+
+  const fetchStudentUnreadCount = async () => {
+    if (!user) return;
+    const lastSeen = localStorage.getItem('yt_notif_last_seen') || '1970-01-01T00:00:00.000Z';
+
+    const [{ count: replyCount }, { count: notifCount }] = await Promise.all([
+      supabase.from('question_reports').select('*', { count: 'exact', head: true }).eq('student_email', user.email).eq('reply_seen', false),
+      supabase.from('notifications').select('*', { count: 'exact', head: true }).gt('created_at', lastSeen)
+    ]);
+
+    setStudentUnreadCount((replyCount || 0) + (notifCount || 0));
+  };
+
+  const fetchStudentNotifications = async () => {
+    if (!user) return;
+    setStudentNotifLoading(true);
+
+    const [{ data: replies }, { data: notifs }] = await Promise.all([
+      supabase.from('question_reports').select('*').eq('student_email', user.email).not('admin_reply', 'is', null).order('replied_at', { ascending: false }),
+      supabase.from('notifications').select('*').order('created_at', { ascending: false })
+    ]);
+
+    const replyItems = (replies || []).map(r => ({
+      kind: 'reply',
+      id: `reply_${r.id}`,
+      title: `${r.question_number}. Soru hakkındaki bildiriminize yanıt geldi`,
+      message: r.admin_reply,
+      originalMessage: r.message,
+      date: r.replied_at || r.created_at
+    }));
+    const notifItems = (notifs || []).map(n => ({
+      kind: 'announcement',
+      id: `notif_${n.id}`,
+      title: n.title,
+      message: n.message,
+      date: n.created_at
+    }));
+
+    const combined = [...replyItems, ...notifItems].sort((a, b) => new Date(b.date) - new Date(a.date));
+    setStudentNotifItems(combined);
+    setStudentNotifLoading(false);
+  };
+
+  const openStudentNotifs = async () => {
+    setShowStudentNotifs(true);
+    await fetchStudentNotifications();
+
+    if (user) {
+      await supabase.from('question_reports').update({ reply_seen: true }).eq('student_email', user.email).eq('reply_seen', false);
+      localStorage.setItem('yt_notif_last_seen', new Date().toISOString());
+    }
+    setStudentUnreadCount(0);
+  };
+
+  const fetchAllRatings = async () => {
+    const { data, error } = await supabase
+      .from('public_exam_stats')
+      .select('exam_id, rating')
+      .gt('rating', 0);
+
+    if (!error && data) {
+      const map = {};
+      const breakdown = {};
+      data.forEach(item => {
+        // Puan çoğu zaman alt sınava (child) ait olur, ama kartlarda üst paketin (parent)
+        // puanı gösteriliyor. Bu yüzden alt sınav puanını üst paketin id'sine topluyoruz.
+        const examInfo = exams.find(e => e.id === item.exam_id);
+        const targetId = examInfo?.parentId || item.exam_id;
+
+        if (!map[targetId]) {
+          map[targetId] = { total: 0, count: 0 };
+        }
+        map[targetId].total += item.rating;
+        map[targetId].count += 1;
+
+        if (!breakdown[targetId]) {
+          breakdown[targetId] = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+        }
+        const star = Math.min(5, Math.max(1, Math.round(item.rating)));
+        breakdown[targetId][star] += 1;
+      });
+
+      const formattedMap = {};
+      Object.keys(map).forEach(id => {
+        const avg = map[id].total / map[id].count;
+        formattedMap[id] = {
+          average: avg.toFixed(1).replace('.', ','),
+          count: map[id].count.toLocaleString('tr-TR')
+        };
+      });
+      setExamRatingsMap(formattedMap);
+      setExamRatingBreakdownMap(breakdown);
+    }
+  };
+
+  // Kaç öğrencinin bir içeriği tamamladığını (sosyal kanıt için) hesaplar.
+  const fetchSolvedCounts = async () => {
+    const { data, error } = await supabase
+      .from('public_exam_stats')
+      .select('exam_id, is_finished')
+      .eq('is_finished', true);
+
+    if (!error && data) {
+      const map = {};
+      data.forEach(item => {
+        const examInfo = exams.find(e => e.id === item.exam_id);
+        const targetId = examInfo?.parentId || item.exam_id;
+        map[targetId] = (map[targetId] || 0) + 1;
+      });
+      setSolvedCountMap(map);
+    }
+  };
+
+  // --- Kazanım Kaynakları (Ders Notu PDF + Video) ---
+  // Bir YouTube URL'sini (izle/kısa/paylaş linki, hangi biçimde olursa
+  // olsun) gömülebilir bir embed URL'ine çevirir. Tanınmayan bir video
+  // servisi linkiyse null döner -- o durumda öğrenci tarafında "yeni
+  // sekmede aç" davranışına düşülür.
+  const getYoutubeEmbedUrl = (url) => {
+    if (!url) return null;
+    try {
+      const u = new URL(url.trim());
+      let videoId = null;
+      if (u.hostname.includes('youtu.be')) {
+        videoId = u.pathname.slice(1);
+      } else if (u.hostname.includes('youtube.com')) {
+        if (u.pathname === '/watch') videoId = u.searchParams.get('v');
+        else if (u.pathname.startsWith('/shorts/')) videoId = u.pathname.split('/')[2];
+        else if (u.pathname.startsWith('/embed/')) videoId = u.pathname.split('/')[2];
+      }
+      return videoId ? `https://www.youtube.com/embed/${videoId}` : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const uploadKazanimPdf = async (learningOutcomeId, file) => {
+    if (!file || !learningOutcomeId) return;
+    setAuthLoading(true);
+    const fileExt = file.name.split('.').pop();
+    const fileName = `konu_${learningOutcomeId}_${Date.now()}.${fileExt}`;
+
+    const { error: storageError } = await supabase.storage
+      .from('kazanim-kaynaklari')
+      .upload(fileName, file);
+
+    if (storageError) {
+      alert('Ders notu yüklenemedi: ' + storageError.message);
+      setAuthLoading(false);
+      return;
+    }
+
+    const { data: publicUrlData } = supabase.storage
+      .from('kazanim-kaynaklari')
+      .getPublicUrl(fileName);
+
+    const { error: upsertError } = await supabase
+      .from('learning_outcome_resources')
+      .upsert([{
+        learning_outcome_id: learningOutcomeId,
+        pdf_url: publicUrlData.publicUrl,
+        pdf_filename: file.name,
+        updated_at: new Date().toISOString()
+      }], { onConflict: 'learning_outcome_id' });
+
+    setAuthLoading(false);
+    if (upsertError) {
+      alert('Ders notu kaydedilemedi: ' + upsertError.message);
+      return;
+    }
+
+    setLearningOutcomeResources((prev) => ({
+      ...prev,
+      [learningOutcomeId]: { ...(prev[learningOutcomeId] || {}), learning_outcome_id: learningOutcomeId, pdf_url: publicUrlData.publicUrl, pdf_filename: file.name }
+    }));
+  };
+
+  const removeKazanimPdf = async (learningOutcomeId) => {
+    if (!window.confirm('Bu kazanımın ders notunu kaldırmak istediğinize emin misiniz?')) return;
+    const { error } = await supabase
+      .from('learning_outcome_resources')
+      .upsert([{ learning_outcome_id: learningOutcomeId, pdf_url: null, pdf_filename: null, updated_at: new Date().toISOString() }], { onConflict: 'learning_outcome_id' });
+    if (error) { alert('Kaldırılamadı: ' + error.message); return; }
+    setLearningOutcomeResources((prev) => ({
+      ...prev,
+      [learningOutcomeId]: { ...(prev[learningOutcomeId] || {}), pdf_url: null, pdf_filename: null }
+    }));
+  };
+
+  const saveKazanimVideoUrl = async (learningOutcomeId, url) => {
+    const trimmed = (url || '').trim();
+    const { error } = await supabase
+      .from('learning_outcome_resources')
+      .upsert([{ learning_outcome_id: learningOutcomeId, video_url: trimmed || null, updated_at: new Date().toISOString() }], { onConflict: 'learning_outcome_id' });
+    if (error) { alert('Video linki kaydedilemedi: ' + error.message); return; }
+    setLearningOutcomeResources((prev) => ({
+      ...prev,
+      [learningOutcomeId]: { ...(prev[learningOutcomeId] || {}), learning_outcome_id: learningOutcomeId, video_url: trimmed || null }
+    }));
+  };
+
+  // "+ Yeni Kazanım Ekle" -- seçili Ders Türü'ne bağlı yeni bir kazanım oluşturur.
+  // Bir kazanım artık doğrudan Ders Türü'ne değil, bir Konu'ya bağlanıyor.
+  // lesson_category_id kolonunu da (geriye dönük uyumluluk ve "ders türü
+  // sil" kademeli silme mantığı bozulmasın diye) topic üzerinden otomatik
+  // dolduruyoruz.
+  const handleAddLearningOutcome = async (topicId, name, onCreated) => {
+    const trimmed = (name || '').trim();
+    const topic = topics.find((t) => t.id === topicId);
+    if (!trimmed || !topic) return;
+    const { data, error } = await supabase
+      .from('learning_outcomes')
+      .insert([{ name: trimmed, topic_id: topicId, lesson_category_id: topic.lesson_category_id }])
+      .select();
+    if (error) {
+      alert('Kazanım eklenemedi: ' + error.message);
+      return;
+    }
+    const created = data[0];
+    setLearningOutcomes((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    if (onCreated) onCreated(created);
+  };
+
+  // "+ Yeni Konu Ekle" -- seçili Ders Türü'ne bağlı yeni bir konu oluşturur.
+  const addTopicForLessonCategoryId = async (lessonCategoryId, name, onCreated) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed || !lessonCategoryId) {
+      alert('Önce Ders Türü seçin.');
+      return;
+    }
+    const { data, error } = await supabase
+      .from('topics')
+      .insert([{ name: trimmed, lesson_category_id: lessonCategoryId }])
+      .select();
+    if (error) {
+      alert('Konu eklenemedi: ' + error.message);
+      return;
+    }
+    const created = data[0];
+    setTopics((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    if (onCreated) onCreated(created);
+  };
+
+  // Kazanım Haritası bölümünde "bu sınavın sınav türüne bağlı yeni bir ders
+  // türü ekle" için kullanılan genel amaçlı yardımcı (exam oluşturma
+  // formundaki handleAddLessonCategory'den bağımsız, çünkü orada
+  // newExamForm state'i kullanılıyor, burada editingExam bağlamındayız).
+  const addLessonCategoryForExamType = async (examTypeName, name, onCreated) => {
+    const trimmed = (name || '').trim();
+    const selectedExamCategory = examCategories.find((c) => c.name === examTypeName);
+    if (!trimmed || !selectedExamCategory) {
+      alert('Önce sınavın bir Sınav Türü kategorisi olmalı.');
+      return;
+    }
+    const { data, error } = await supabase
+      .from('lesson_categories')
+      .insert([{ name: trimmed, exam_category_id: selectedExamCategory.id }])
+      .select();
+    if (error) {
+      alert('Ders türü eklenemedi: ' + error.message);
+      return;
+    }
+    const created = data[0];
+    setLessonCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    if (onCreated) onCreated(created);
+  };
+
+  // --- Kategori/Ders Türü/Kazanım listelerinden SİLME ---
+  // ÖNEMLİ: Bu üç tablo (exam_categories, lesson_categories,
+  // learning_outcomes) sadece dropdown'ları besleyen "ana liste"lerdir.
+  // Sınavlarda (exams.category_exam_type / category_lesson) ve kazanım
+  // haritasında (topicMap içindeki ders/kazanim) bu bilgi DÜZ METİN olarak
+  // saklanıyor, foreign key ile bağlı değil. Yani buradan bir kayıt silmek,
+  // daha önce o adla kaydedilmiş sınavları/kazanımları BOZMAZ -- sadece o
+  // seçenek yeni seçimler için dropdown'dan kalkar. Alt kayıtları da (ders
+  // türlerini ve kazanımları) elle sırayla siliyoruz ki veritabanındaki
+  // foreign key kısıtı hataya sebep olmasın.
+  const deleteLearningOutcome = async (id) => {
+    const { error } = await supabase.from('learning_outcomes').delete().eq('id', id);
+    if (error) { alert('Kazanım silinemedi: ' + error.message); return; }
+    setLearningOutcomes((prev) => prev.filter((o) => o.id !== id));
+  };
+
+  const deleteTopic = async (id) => {
+    const childOutcomeIds = learningOutcomes.filter((o) => o.topic_id === id).map((o) => o.id);
+    if (childOutcomeIds.length > 0) {
+      const { error: outcomeErr } = await supabase.from('learning_outcomes').delete().in('id', childOutcomeIds);
+      if (outcomeErr) { alert('Konu silinemedi: ' + outcomeErr.message); return; }
+    }
+    const { error } = await supabase.from('topics').delete().eq('id', id);
+    if (error) { alert('Konu silinemedi: ' + error.message); return; }
+    setLearningOutcomes((prev) => prev.filter((o) => o.topic_id !== id));
+    setTopics((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  const deleteLessonCategory = async (id) => {
+    const childOutcomeIds = learningOutcomes.filter((o) => o.lesson_category_id === id).map((o) => o.id);
+    if (childOutcomeIds.length > 0) {
+      const { error: outcomeErr } = await supabase.from('learning_outcomes').delete().in('id', childOutcomeIds);
+      if (outcomeErr) { alert('Ders türü silinemedi: ' + outcomeErr.message); return; }
+    }
+    const { error } = await supabase.from('lesson_categories').delete().eq('id', id);
+    if (error) { alert('Ders türü silinemedi: ' + error.message); return; }
+    setLearningOutcomes((prev) => prev.filter((o) => o.lesson_category_id !== id));
+    setTopics((prev) => prev.filter((t) => t.lesson_category_id !== id));
+    setLessonCategories((prev) => prev.filter((lc) => lc.id !== id));
+  };
+
+  // Sınav silinince dersler SİLİNMEZ -- sadece bu sınavın ders bağlantıları (cascade) kalkar.
+  const deleteExamCategory = async (id) => {
+    const { error } = await supabase.from('exam_categories').delete().eq('id', id);
+    if (error) { alert('Sınav türü silinemedi: ' + error.message); return; }
+    setExamCategories((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  // --- Ders / Konu / Kazanım: ihtiyaç anında ekleme (Soru Yaz ve Etiketlenmemiş Sorular'daki ortak seçici) ---
+  // Birebir aynı ad (büyük/küçük harf farkı olmadan) varsa yeni kayıt açılmaz, uyarı verilir; null döner.
+  const sameNm = (a, b) => (a || '').trim().toLocaleLowerCase('tr') === (b || '').trim().toLocaleLowerCase('tr');
+  const createLessonForPicker = async (name) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return null;
+    const ex = lessonCategories.find((lc) => sameNm(lc.name, trimmed));
+    if (ex) { alert(`"${ex.name}" dersi zaten var. Listeden seçin.`); return null; }
+    const { data, error } = await supabase.from('lesson_categories').insert([{ name: trimmed }]).select();
+    if (error) { alert('Ders eklenemedi: ' + error.message); return null; }
+    setLessonCategories((prev) => [...prev, data[0]].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    return data[0];
+  };
+  const createTopicForPicker = async (lessonId, name) => {
+    const trimmed = (name || '').trim();
+    if (!trimmed || !lessonId) return null;
+    const ex = topics.find((t) => String(t.lesson_category_id) === String(lessonId) && sameNm(t.name, trimmed));
+    if (ex) { alert(`"${ex.name}" konusu bu derste zaten var. Listeden seçin.`); return null; }
+    const { data, error } = await supabase.from('topics').insert([{ name: trimmed, lesson_category_id: Number(lessonId) }]).select();
+    if (error) { alert('Konu eklenemedi: ' + error.message); return null; }
+    setTopics((prev) => [...prev, data[0]].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    return data[0];
+  };
+  const createOutcomeForPicker = async (topicId, name) => {
+    const trimmed = (name || '').trim();
+    const topic = topics.find((t) => String(t.id) === String(topicId));
+    if (!trimmed || !topic) return null;
+    const ex = learningOutcomes.find((o) => String(o.topic_id) === String(topicId) && sameNm(o.name, trimmed));
+    if (ex) { alert(`"${ex.name}" kazanımı bu konuda zaten var. Listeden seçin.`); return null; }
+    const { data, error } = await supabase.from('learning_outcomes').insert([{ name: trimmed, topic_id: topic.id, lesson_category_id: topic.lesson_category_id }]).select();
+    if (error) { alert('Kazanım eklenemedi: ' + error.message); return null; }
+    setLearningOutcomes((prev) => [...prev, data[0]].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    return data[0];
+  };
+
+  // --- Kategori Yönetimi: ADI DÜZENLEME ---
+  // ÖNEMLİ (bug fix): Bir Ders/Konu/Kazanım adı değiştirildiğinde, o adı
+  // daha önce kullanan sorulardaki (topicMap içindeki düz metin) kayıt
+  // GÜNCELLENMEZSE, o sorunun ilgili dropdown'ı artık hiçbir seçenekle
+  // eşleşmediği için BOŞ görünür -- yani kazanım seçimi "kaybolmuş" gibi
+  // olur (ve "Kaydet"e basılırsa gerçekten kaybolur). Bu yüzden bir isim
+  // değiştirildiğinde, o ismi kullanan TÜM sınavlardaki TÜM sorularda
+  // ilgili alanı da otomatik olarak yeni isme güncelliyoruz.
+  const propagateCategoryRename = (field, oldName, newName) => {
+    if (!oldName || oldName === newName) return;
+    exams.forEach((ex) => {
+      if (!ex.topicMap) return;
+      const hasMatch = Object.values(ex.topicMap).some((entry) => entry[field] === oldName);
+      if (!hasMatch) return;
+      const newTopicMap = {};
+      Object.entries(ex.topicMap).forEach(([soruNo, entry]) => {
+        newTopicMap[soruNo] = entry[field] === oldName ? { ...entry, [field]: newName } : entry;
+      });
+      setExams((prev) => prev.map((e) => e.id === ex.id ? { ...e, topicMap: newTopicMap } : e));
+      supabase.from('exams').update({ topic_map: newTopicMap }).eq('id', ex.id).then(({ error }) => {
+        if (error) console.error(`"${ex.name}" sınavının kazanım haritası güncellenemedi:`, error);
+      });
+    });
+  };
+
+  // Sınav Türü adı, soru bazlı topicMap'te değil, doğrudan sınav paketinin
+  // kendi "category_exam_type" alanında tutuluyor -- bu yüzden ayrı ele
+  // alınıyor (üst düzey/parent sınavlar).
+  const propagateExamTypeRename = (oldName, newName) => {
+    if (!oldName || oldName === newName) return;
+    exams.forEach((ex) => {
+      if (ex.parentId || ex.categoryExamType !== oldName) return;
+      setExams((prev) => prev.map((e) => e.id === ex.id ? { ...e, categoryExamType: newName } : e));
+      supabase.from('exams').update({ category_exam_type: newName }).eq('id', ex.id).then(({ error }) => {
+        if (error) console.error(`"${ex.name}" sınavının sınav türü güncellenemedi:`, error);
+      });
+    });
+  };
+
+  const renameExamCategory = async (id, currentName) => {
+    const name = window.prompt('Sınav Türü adını düzenle:', currentName);
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === currentName) return;
+    const { error } = await supabase.from('exam_categories').update({ name: trimmed }).eq('id', id);
+    if (error) { alert('Güncellenemedi: ' + error.message); return; }
+    setExamCategories((prev) => prev.map((c) => c.id === id ? { ...c, name: trimmed } : c).sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    propagateExamTypeRename(currentName, trimmed);
+  };
+
+  const renameLessonCategory = async (id, currentName) => {
+    const name = window.prompt('Ders Türü adını düzenle:', currentName);
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === currentName) return;
+    const { error } = await supabase.from('lesson_categories').update({ name: trimmed }).eq('id', id);
+    if (error) { alert('Güncellenemedi: ' + error.message); return; }
+    setLessonCategories((prev) => prev.map((lc) => lc.id === id ? { ...lc, name: trimmed } : lc).sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    propagateCategoryRename('ders', currentName, trimmed);
+  };
+
+  const renameTopic = async (id, currentName) => {
+    const name = window.prompt('Konu adını düzenle:', currentName);
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === currentName) return;
+    const { error } = await supabase.from('topics').update({ name: trimmed }).eq('id', id);
+    if (error) { alert('Güncellenemedi: ' + error.message); return; }
+    setTopics((prev) => prev.map((t) => t.id === id ? { ...t, name: trimmed } : t).sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    propagateCategoryRename('konu', currentName, trimmed);
+  };
+
+  const renameLearningOutcome = async (id, currentName) => {
+    const name = window.prompt('Kazanım adını düzenle:', currentName);
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === currentName) return;
+    const { error } = await supabase.from('learning_outcomes').update({ name: trimmed }).eq('id', id);
+    if (error) { alert('Güncellenemedi: ' + error.message); return; }
+    setLearningOutcomes((prev) => prev.map((o) => o.id === id ? { ...o, name: trimmed } : o).sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    propagateCategoryRename('kazanim', currentName, trimmed);
+  };
+
+  // --- Kategori Yönetimi: SİLMEDEN ÖNCE "kullanımda mı" KONTROLÜ ---
+  // Bir Sınav Türü / Ders Türü / Konu / Kazanım, herhangi bir sınavın
+  // Kazanım Haritası'nda (topicMap) bir SORUYA atanmışsa -- ya da (sadece
+  // Sınav Türü için) doğrudan bir sınavın "Sınav Türü" alanına atanmışsa --
+  // silinmesine İZİN VERMİYORUZ. Aksi halde o soru dersiz/konusuz/kazanımsız
+  // kalırdı. "level" silinecek şeyin türünü belirtir; alt kademedeki (Ders
+  // silinirken ona bağlı Konu/Kazanım'lar da; Konu silinirken ona bağlı
+  // Kazanım'lar da) kullanım kontrolü otomatik olarak dahil edilir, çünkü bu
+  // kayıtlar zaten kademeli olarak birlikte silinecek.
+  const getCategoryUsageHits = (level, item) => {
+    let dersNames = [];
+    let konuNames = [];
+    let kazanimNames = [];
+
+    if (level === 'exam') {
+      // Sınav silinince dersler silinmez; sadece sınav türü olarak atanmış paketler kontrol edilir (aşağıda).
+    } else if (level === 'lesson') {
+      dersNames = [item.name];
+      konuNames = topics.filter((t) => t.lesson_category_id === item.id).map((t) => t.name);
+      kazanimNames = learningOutcomes.filter((o) => o.lesson_category_id === item.id).map((o) => o.name);
+    } else if (level === 'topic') {
+      konuNames = [item.name];
+      kazanimNames = learningOutcomes.filter((o) => o.topic_id === item.id).map((o) => o.name);
+    } else if (level === 'outcome') {
+      kazanimNames = [item.name];
+    }
+
+    const hits = [];
+    exams.forEach((ex) => {
+      if (ex.topicMap) {
+        Object.entries(ex.topicMap).forEach(([soruNo, entry]) => {
+          const usesDers = dersNames.length > 0 && dersNames.includes(entry.ders);
+          const usesKonu = konuNames.length > 0 && konuNames.includes(entry.konu);
+          const usesKazanim = kazanimNames.length > 0 && kazanimNames.includes(entry.kazanim);
+          if (usesDers || usesKonu || usesKazanim) {
+            hits.push({ examName: ex.name || 'İsimsiz test', soruNo, type: 'soru' });
+          }
+        });
+      }
+      if (level === 'exam' && !ex.parentId && ex.categoryExamType === item.name) {
+        hits.push({ examName: ex.name || 'İsimsiz içerik', soruNo: null, type: 'sinav' });
+      }
+    });
+    return hits;
+  };
+
+  // Kullanım varsa açıklayıcı bir uyarı gösterip true döner (silme işlemi bu
+  // durumda İPTAL edilmeli); kullanım yoksa false döner (silmeye devam
+  // edilebilir).
+  const blockDeleteIfInUse = (level, item, label) => {
+    const hits = getCategoryUsageHits(level, item);
+    if (hits.length === 0) return false;
+    const preview = hits.slice(0, 6).map((h) =>
+      h.type === 'sinav' ? `• ${h.examName} (sınav türü olarak atanmış)` : `• ${h.examName} — Soru ${h.soruNo}`
+    ).join('\n');
+    const more = hits.length > 6 ? `\n...ve ${hits.length - 6} kayıt daha` : '';
+    alert(
+      `"${label}" şu anda kullanımda olduğu için silinemez:\n\n${preview}${more}\n\n` +
+      `Önce Kazanım Haritası'ndan bu soru(ları) düzenleyip başka bir kazanıma taşıyın ` +
+      `(ya da soruyu haritadan kaldırın), sonra tekrar deneyin.`
+    );
+    return true;
+  };
+
+  const fetchPricingSettings = async () => {
+    const { data, error } = await supabase
+      .from('pricing_settings')
+      .select('price_per_question')
+      .eq('id', 1)
+      .maybeSingle();
+    if (!error && data) {
+      setPricePerQuestion(Number(data.price_per_question) || 0);
+      setPricePerQuestionConfigured(true);
+    } else if (error) {
+      console.error('Soru başı fiyat ayarı okunamadı:', error);
+    }
+  };
+
+  const savePricePerQuestion = async (newValue) => {
+    const parsed = Number(newValue);
+    if (Number.isNaN(parsed) || parsed < 0) {
+      alert('Geçerli bir tutar girin (0 veya üzeri).');
+      return;
+    }
+    const { error } = await supabase
+      .from('pricing_settings')
+      .upsert({ id: 1, price_per_question: parsed });
+    if (error) {
+      alert(
+        'Kaydedilemedi: ' + error.message +
+        '\n\n"pricing_settings" tablosu veritabanında henüz yoksa, önce onu oluşturmak gerekir (id int8 PK, price_per_question numeric).'
+      );
+      return;
+    }
+    setPricePerQuestion(parsed);
+    setPricePerQuestionConfigured(true);
+    setShowPricingSettings(false);
+  };
+
+  // Soru sayısı her değiştiğinde (elle ya da PDF'ten otomatik algılanarak),
+  // Fiyat VE Eski Fiyat'ı "soru sayısı x soru başı fiyat" olarak YENİDEN
+  // hesaplayıp üzerine yazar -- daha önce girilmiş manuel bir indirim varsa
+  // bile (admin ile konuşulup onaylanan davranış budur). Soru başı fiyat
+  // HİÇ AYARLANMAMIŞSA (pricePerQuestionConfigured false), fiyatlara hiç
+  // dokunmuyoruz -- aksi halde daha admin panelden hiçbir katsayı
+  // girilmemişken tüm fiyatlar sessizce 0'a düşerdi. Ama admin BİLEREK 0
+  // girip kaydettiyse (pricePerQuestionConfigured true, pricePerQuestion 0),
+  // bunu geçerli bir hesaplama olarak uyguluyoruz -- yani "bugün her şeyi
+  // ücretsiz yap" isteniyorsa gerçekten 0'a çekiyoruz.
+
+  // "Soru Başı Fiyat" penceresindeki "Tüm Testleri Yeniden Hesapla" butonu
+  // için: mevcut TÜM testlerin/paketlerin Fiyat ve Eski Fiyat'ını, güncel
+  // soru başı tutara göre yeniden hesaplar. Sadece yeni oluşturulan/soru
+  // sayısı değiştirilen testler için değil, sistemde zaten var olan ve hiç
+  // dokunulmamış testler için de -- hem bu özelliği ilk kurarken hem de
+  // birim fiyatı SONRADAN artırdığınızda tekrar tekrar kullanılabilir.
+  // Daha önce elle girilmiş fiyatlar (₺0 bırakılmış "pakete bağlı" alt
+  // testler dahil) üzerine yazılır.
+  const recalculateAllExamPrices = async () => {
+    if (!pricePerQuestionConfigured) {
+      alert('Önce soru başı bir tutar girip kaydedin.');
+      return;
+    }
+    // Alt testler: kendi soru sayılarına göre.
+    const childTargets = exams.filter((e) => e.parentId && (e.numPages || 0) > 0);
+
+    // Üst ürünler (paketler): kendi numPages'i genelde 0'dır (paketin
+    // "soru sayısı" kavramı yoktur) -- bu yüzden paket fiyatı, ALTINDAKİ
+    // TÜM testlerin soru sayısı TOPLAMINA göre hesaplanır. Hiç alt testi
+    // olmayan (tek başına/standalone) bir üst ürün varsa, o zaman kendi
+    // numPages'i kullanılır.
+    const parentExams = exams.filter((e) => !e.parentId);
+    const parentTargets = parentExams
+      .map((p) => {
+        const children = exams.filter((c) => c.parentId === p.id);
+        const totalQuestions = children.length > 0
+          ? children.reduce((sum, c) => sum + (c.numPages || 0), 0)
+          : (p.numPages || 0);
+        return { exam: p, totalQuestions };
+      })
+      .filter((x) => x.totalQuestions > 0);
+
+    const totalCount = childTargets.length + parentTargets.length;
+    if (totalCount === 0) {
+      alert('Soru sayısı girilmiş hiçbir test/paket bulunamadı.');
+      return;
+    }
+    const confirmed = window.confirm(
+      `${totalCount} test/paketin (paketler, altındaki testlerin TOPLAM soru sayısına göre) Fiyat ve Eski Fiyat'ı, güncel soru başı tutar (₺${pricePerQuestion}) ile yeniden hesaplanacak -- daha önce elle girilmiş fiyatlar (indirimler ve ₺0 bırakılmış pakete-bağlı alt testler dahil) üzerine yazılacak. Devam edilsin mi?`
+    );
+    if (!confirmed) return;
+    for (const ex of childTargets) {
+      const computedPrice = Math.round((ex.numPages || 0) * pricePerQuestion);
+      await updateExamInDb(ex.id, { price: computedPrice, originalPrice: computedPrice });
+    }
+    for (const { exam, totalQuestions } of parentTargets) {
+      const computedPrice = Math.round(totalQuestions * pricePerQuestion);
+      await updateExamInDb(exam.id, { price: computedPrice, originalPrice: computedPrice });
+    }
+    alert(`✓ ${totalCount} test/paketin fiyatı güncellendi.`);
+  };
+
+  // "Soru Başı Fiyat" penceresindeki indirim bölümü için: sistemdeki TÜM
+  // test/paketlerin Fiyat'ını, kendi Eski Fiyat'ı (originalPrice, yani
+  // referans/indirimsiz fiyat) üzerinden girilen yüzde kadar düşürür.
+  // Eski Fiyat'a hiç dokunmuyoruz -- o listede üstü çizili görünen
+  // referans fiyat olarak kalmaya devam eder, sadece satış fiyatı
+  // (Fiyat) iner. İndirimi kaldırmak/sıfırlamak isterseniz %0 girip
+  // tekrar uygulamanız yeterli (Fiyat, Eski Fiyat'a eşitlenir).
+  const applyDiscountToAllExams = async () => {
+    const pct = Number(discountDraft);
+    if (Number.isNaN(pct) || pct < 0 || pct > 100) {
+      alert('Geçerli bir indirim yüzdesi girin (0-100 arası).');
+      return;
+    }
+    const targets = exams.filter((e) => (e.originalPrice || 0) > 0);
+    if (targets.length === 0) {
+      alert('Eski Fiyat (referans fiyat) girilmiş hiçbir test/paket bulunamadı.');
+      return;
+    }
+    const confirmed = window.confirm(
+      `${targets.length} test/paketin Fiyat'ı, kendi Eski Fiyat'ı üzerinden %${pct} indirimle yeniden hesaplanacak (Eski Fiyat değişmeyecek). Devam edilsin mi?`
+    );
+    if (!confirmed) return;
+    for (const ex of targets) {
+      const discountedPrice = Math.round(ex.originalPrice * (1 - pct / 100));
+      await updateExamInDb(ex.id, { price: discountedPrice });
+    }
+    alert(`✓ ${targets.length} test/paketin fiyatına %${pct} indirim uygulandı.`);
+  };
+
+  const checkUserRoleAndSetMode = (currentUser) => {
+    if (currentUser.email === 'admin@yayinevi.com') {
+      setAppMode('admin');
+      fetchPricingSettings();
+    } else {
+      setAppMode('student');
+      ensureAndFetchStudentBalance();
+      // Fatura bilgisini giriş anında çekiyoruz (sadece "Sınavlarım"
+      // sayfasını açtığında değil) -- ödeme akışındaki zorunlu fatura
+      // bilgisi kontrolü (bkz. handleIyzicoPayment/handleCartCheckout),
+      // öğrenci daha o sayfayı hiç açmadan direkt ödemeye geçse bile
+      // doğru çalışsın diye.
+      fetchMyBillingInfo(currentUser.email);
+    }
+    // ÖNEMLİ: Bu listeler (Ders/Konu/Kazanım adları) sadece admin panelinde
+    // DEĞİL, öğrenci sonuç ekranındaki Kazanım Analizi'nde de kullanılıyor
+    // (bkz. resolveLiveKonuForEntry / getKazanimReport) -- bir kazanımın
+    // Konu'su Kategori Yönetimi'nden değiştirildiğinde bunun öğrenci
+    // tarafında da güncel görünmesi için bu listelerin öğrenci girişinde de
+    // yüklenmesi şart. Eskiden sadece admin girişinde çağrılıyordu, bu
+    // yüzden öğrenci tarafında hep boş kalıp donmuş/eski metne (ör. "Genel")
+    // düşülüyordu.
+    fetchCategoryLists();
+    fetchExams(currentUser);
+    fetchUserPurchases(currentUser.email);
+  };
+
+  // Sınav Türü ve Ders Türü'nün sabit (master) listelerini çeker.
+  // Ders Türü, hangi Sınav Türü'ne ait olduğunu bilsin diye exam_categories
+  // ile join'lenerek çekiliyor -- böylece "KPSS · Tarih" ile "TYT · Tarih"
+  // ayrı, birbirinden bağımsız kayıtlar olarak kalıyor.
+  const fetchCategoryLists = async () => {
+    const { data: examCats, error: examCatsError } = await supabase
+      .from('exam_categories')
+      .select('id, name')
+      .order('name');
+    if (!examCatsError && examCats) setExamCategories(examCats);
+    else if (examCatsError) console.error('exam_categories okunamadı:', examCatsError);
+
+    const { data: lessonCats, error: lessonCatsError } = await supabase
+      .from('lesson_categories')
+      .select('id, name, exam_category_id')
+      .order('name');
+    if (!lessonCatsError && lessonCats) setLessonCategories(lessonCats);
+    else if (lessonCatsError) console.error('lesson_categories okunamadı:', lessonCatsError);
+
+    const { data: topicRows, error: topicRowsError } = await supabase
+      .from('topics')
+      .select('id, name, lesson_category_id')
+      .order('name');
+    if (!topicRowsError && topicRows) setTopics(topicRows);
+    else if (topicRowsError) console.error('topics okunamadı:', topicRowsError);
+
+    const { data: outcomes, error: outcomesError } = await supabase
+      .from('learning_outcomes')
+      .select('id, name, lesson_category_id, topic_id')
+      .order('name');
+    if (!outcomesError && outcomes) setLearningOutcomes(outcomes);
+    else if (outcomesError) console.error('learning_outcomes okunamadı:', outcomesError);
+
+    let eclRes = await supabase.from('exam_category_lessons').select('exam_category_id, lesson_category_id, sort_order, question_count');
+    if (eclRes.error) eclRes = await supabase.from('exam_category_lessons').select('exam_category_id, lesson_category_id'); // sinav_dagilimi.sql henüz çalıştırılmadıysa
+    if (eclRes.data) setEclRows(eclRes.data);
+    const distRes = await supabase.from('exam_distribution').select('exam_category_id, level, ref_id, sort_order, excluded, parent_lesson_id');
+    if (distRes.data) setDistRows(distRes.data);
+
+    // Riskli kazanımların altında gösterilen ders notu (PDF) / video kaynakları.
+    const { data: resourceRows, error: resourcesError } = await supabase
+      .from('learning_outcome_resources')
+      .select('learning_outcome_id, pdf_url, pdf_filename, video_url');
+    if (!resourcesError && resourceRows) {
+      const map = {};
+      resourceRows.forEach((r) => { map[r.learning_outcome_id] = r; });
+      setLearningOutcomeResources(map);
+    } else if (resourcesError) console.error('learning_outcome_resources okunamadı:', resourcesError);
+  };
+
+  // "+ Yeni Sınav Türü Ekle" -- yeni bir kayıt oluşturur, listeye ekler ve
+  // formda otomatik seçili hale getirir.
+  const handleAddExamCategory = async () => {
+    const trimmed = newExamCategoryName.trim();
+    if (!trimmed) return;
+    const dupExam = examCategories.find((c) => c.name.trim().toLocaleLowerCase('tr') === trimmed.toLocaleLowerCase('tr'));
+    if (dupExam) { alert(`"${dupExam.name}" sınav türü zaten var. Listeden seçin.`); return; }
+    const { data, error } = await supabase
+      .from('exam_categories')
+      .insert([{ name: trimmed }])
+      .select();
+    if (error) {
+      alert('Sınav türü eklenemedi: ' + error.message);
+      return;
+    }
+    const created = data[0];
+    setExamCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'tr')));
+    setNewExamForm((prev) => ({ ...prev, categoryExamType: created.name }));
+    setNewExamCategoryName('');
+    setShowNewExamCategoryInput(false);
+  };
+
+  // Tanımla > Sınavlar sekmesindeki "+ Yeni sınav ekle" (Yeni Sınav/Paket Oluştur ekranındaki ile aynı exam_categories tablosu)
+  const addExamFromManager = async () => {
+    const trimmed = mgrNewExam.trim();
+    if (!trimmed) return;
+    const dup = examCategories.find((c) => c.name.trim().toLocaleLowerCase('tr') === trimmed.toLocaleLowerCase('tr'));
+    if (dup) { alert(`"${dup.name}" sınavı zaten var.`); return; }
+    const { data, error } = await supabase.from('exam_categories').insert([{ name: trimmed }]).select();
+    if (error) { alert('Sınav eklenemedi: ' + error.message); return; }
+    setExamCategories((prev) => [...prev, data[0]].sort((x, y) => x.name.localeCompare(y.name, 'tr')));
+    setMgrNewExam('');
+  };
+
+  const fetchUserPurchases = async (userEmail) => {
+    const { data, error } = await supabase
+      .from('student_purchases')
+      .select('exam_id')
+      .eq('student_email', userEmail);
+
+    if (!error && data) {
+      const purchasedMap = {};
+      data.forEach(p => {
+        purchasedMap[p.exam_id] = true;
+      });
+      setStudentPurchases(purchasedMap);
+      return purchasedMap;
+    }
+    return {};
+  };
+
+  // Öğrencinin bakiyesini (hediye bakiye dahil) çeker. İlk kez giriş
+  // yapıyorsa (henüz hiç bakiye kaydı yoksa), sunucu tarafındaki endpoint
+  // admin panelinde ayarlanmış tutarı OTOMATİK olarak bir kereliğine
+  // tanımlar -- bu yüzden bu fonksiyon her girişte çağrılsa bile güvenli
+  // (idempotent). Tutar asla client'ta hesaplanmıyor/varsayılmıyor, her
+  // zaman sunucudan geldiği gibi gösteriliyor.
+  const ensureAndFetchStudentBalance = async () => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) return;
+      const resp = await fetch('/api/ensure-signup-bonus', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      });
+      const result = await resp.json();
+      if (resp.ok) {
+        setStudentBalance(Number(result.balance) || 0);
+      } else {
+        console.error('Bakiye alınamadı:', result.error);
+      }
+    } catch (err) {
+      console.error('Bakiye alınamadı:', err);
+    }
+  };
+
+  const formatExamData = (item) => ({
+    id: item.id,
+    name: item.name,
+    duration: item.duration,
+    examType: item.exam_type || 'deneme',
+    categoryExamType: item.category_exam_type || 'Genel',
+    categoryLesson: item.category_lesson || 'Genel',
+    pdfFile: item.pdf_file,
+    solutionPdfFile: item.solution_pdf_file,
+    // Güvenlik: answer_key artık genel sınav sorgusuyla hiç çekilmiyor
+    // (bkz. EXAM_PUBLIC_COLUMNS), o yüzden burada her zaman boş başlıyor.
+    // Sadece admin (kendi RLS yetkisiyle, fetchAndMergeAnswerKeys) veya
+    // sınavı bitirmiş/erişimi olan öğrenci (sunucu API'si üzerinden,
+    // saveAndFinishExam / fetchAnswerKeyForReview) bu alanı sonradan doldurur.
+    answerKey: {},
+    sections: item.sections || [],
+    isPublished: item.is_published,
+    numPages: item.num_pages || 0,
+    price: item.price || 0,
+    originalPrice: item.original_price || 0,
+    isParent: item.is_parent || false,
+    parentId: item.parent_id || null,
+    sortOrder: item.sort_order ?? 0,
+    topicMap: item.topic_map || {},
+    description: item.description || '',
+    campaignEndsAt: item.campaign_ends_at || null
+  });
+
+  // Güvenlik: answer_key sütununu KASITLI olarak bu listeye eklemiyoruz.
+  // select('*') kullanırsak cevap anahtarı, sınavı satın almayan/bitirmeyen
+  // herkesin tarayıcısına (Network sekmesinden okunabilir şekilde) gider.
+  const EXAM_PUBLIC_COLUMNS = 'id,name,duration,exam_type,category_exam_type,category_lesson,pdf_file,solution_pdf_file,sections,is_published,num_pages,price,original_price,is_parent,parent_id,sort_order,topic_map,campaign_ends_at,description,created_at';
+
+  // Hiç giriş yapmamış (anonim) ziyaretçiye gösterilen liste için ayrı bir
+  // sütun seti: solution_pdf_file burada YOK. Anonim bir ziyaretçinin zaten
+  // bitirdiği bir sınav olamaz, bu yüzden çözüm dosyasının yolunun ona
+  // gönderilmesinin hiçbir işlevsel faydası yok -- gereksiz bilgi sızıntısı.
+  // Giriş yapmış kullanıcı akışı ("Çözümü Gör" butonu solutionPdfFile'ın
+  // varlığına bakıyor) yukarıdaki EXAM_PUBLIC_COLUMNS'u kullanmaya devam
+  // ediyor, ona dokunmuyoruz.
+  const EXAM_ANONYMOUS_COLUMNS = 'id,name,duration,exam_type,category_exam_type,category_lesson,pdf_file,sections,is_published,num_pages,price,original_price,is_parent,parent_id,sort_order,topic_map,campaign_ends_at,description,created_at';
+
+  const fetchPublicExams = async () => {
+    // owner_email dolu olanlar öğrenciye özel anlık denemelerdir; genel listelerde görünmez.
+    let { data, error } = await supabase
+      .from('exams')
+      .select(EXAM_ANONYMOUS_COLUMNS)
+      .eq('is_published', true)
+      .is('owner_email', null)
+      .order('created_at', { ascending: false });
+    if (error) ({ data, error } = await supabase.from('exams').select(EXAM_ANONYMOUS_COLUMNS).eq('is_published', true).order('created_at', { ascending: false })); // owner_email sütunu henüz yoksa
+
+    if (error) {
+      console.error("Sınavlar yüklenirken hata oluştu:", error);
+    } else {
+      setExams(data.map(formatExamData));
+    }
+  };
+
+  const fetchExams = async (currentUser = user) => {
+    const buildQ = (noOwner) => {
+      const query = supabase.from('exams').select(EXAM_PUBLIC_COLUMNS).order('created_at', { ascending: false });
+      if (!currentUser || currentUser.email !== 'admin@yayinevi.com') {
+        query.eq('is_published', true);
+      }
+      if (noOwner) query.is('owner_email', null); // öğrenciye özel anlık denemeler genel listelerde görünmez
+      return query;
+    };
+    let { data, error } = await buildQ(true);
+    if (error) ({ data, error } = await buildQ(false)); // owner_email sütunu henüz yoksa
+
+    if (error) {
+      console.error("Sınavlar yüklenirken hata oluştu:", error);
+    } else {
+      setExams(data.map(formatExamData));
+    }
+
+    if (currentUser && currentUser.email !== 'admin@yayinevi.com') {
+      const { data: resultsData, error: resError } = await supabase
+        .from('student_exams')
+        .select('*')
+        .eq('student_email', currentUser.email);
+
+      if (resError) {
+        console.error("Öğrenci sonuçları çekilemedi:", resError);
+      } else if (resultsData) {
+        const resultMap = {};
+        resultsData.forEach(res => {
+          resultMap[res.exam_id] = {
+            is_finished: res.is_finished,
+            answers: res.answers || {},
+            correct: res.correct_count,
+            wrong: res.wrong_count,
+            empty: res.empty_count,
+            net: res.net,
+            rating: res.rating || 0,
+            reviewText: res.review_text || '',
+            timeLeft: res.time_left ?? null,
+            currentPage: res.current_page ?? null,
+            reset_count: res.reset_count || 0
+          };
+        });
+        setStudentResultsMap(resultMap);
+      }
+    }
+  };
+
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    if (authMode === 'register' && password.length < 6) {
+      alert("Şifre en az 6 haneli olmalıdır.");
+      return;
+    }
+    setAuthLoading(true);
+
+    if (authMode === 'register') {
+      const { error } = await supabase.auth.signUp({ email, password });
+      if (error) {
+        alert("Kayıt hatası: " + error.message);
+      } else {
+        alert("Kayıt başarılı! Lütfen e-postanızı kontrol edin veya giriş yapın.");
+        setAuthMode('login');
+      }
+    } else if (authMode === 'login') {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        alert("Giriş hatası: " + error.message);
+      } else {
+        setUser(data.user);
+        checkUserRoleAndSetMode(data.user);
+        setShowAuthModal(false);
+      }
+    } else if (authMode === 'forgot') {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      });
+      if (error) {
+        alert("Şifre sıfırlama hatası: " + error.message);
+      } else {
+        alert("Şifre sıfırlama bağlantısı e-posta adresinize gönderildi.");
+        setAuthMode('login');
+      }
+    }
+    setAuthLoading(false);
+  };
+
+  const handleGoogleSignIn = async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.origin }
+    });
+    if (error) {
+      alert("Google ile giriş başlatılamadı: " + error.message);
+    }
+  };
+
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    setPasswordChangeMessage(null);
+
+    if (newPasswordInput.length < 6) {
+      setPasswordChangeMessage({ type: 'error', text: 'Şifre en az 6 karakter olmalı.' });
+      return;
+    }
+    if (newPasswordInput !== confirmPasswordInput) {
+      setPasswordChangeMessage({ type: 'error', text: 'Şifreler birbiriyle eşleşmiyor.' });
+      return;
+    }
+
+    setPasswordChangeLoading(true);
+    const { error } = await supabase.auth.updateUser({ password: newPasswordInput });
+    setPasswordChangeLoading(false);
+
+    if (error) {
+      setPasswordChangeMessage({ type: 'error', text: error.message });
+    } else {
+      setPasswordChangeMessage({ type: 'success', text: '✓ Şifreniz başarıyla güncellendi.' });
+      setNewPasswordInput('');
+      setConfirmPasswordInput('');
+    }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setAppMode('student');
+    setActiveAdminExamId(null);
+    setActiveSubExamId(null);
+    setIsCreatingExam(false);
+    setActiveStudentExamId(null);
+    setInspectingExamId(null);
+    setShowAccountPage(false);
+    setStudentResultsMap({});
+    setStudentPurchases({});
+    setStudentBalance(null);
+    fetchPublicExams();
+    fetchCategoryLists();
+  };
+
+  const updateExamInDb = async (id, updates) => {
+    setExams((prev) => prev.map(ex => ex.id === id ? { ...ex, ...updates } : ex));
+
+    const dbUpdates = {};
+    if (updates.name !== undefined) dbUpdates.name = updates.name;
+    if (updates.duration !== undefined) dbUpdates.duration = updates.duration;
+    if (updates.examType !== undefined) dbUpdates.exam_type = updates.examType;
+    if (updates.categoryExamType !== undefined) dbUpdates.category_exam_type = updates.categoryExamType;
+    if (updates.categoryLesson !== undefined) dbUpdates.category_lesson = updates.categoryLesson;
+    if (updates.pdfFile !== undefined) dbUpdates.pdf_file = updates.pdfFile;
+    if (updates.solutionPdfFile !== undefined) dbUpdates.solution_pdf_file = updates.solutionPdfFile;
+    if (updates.sections !== undefined) dbUpdates.sections = updates.sections;
+    if (updates.isPublished !== undefined) dbUpdates.is_published = updates.isPublished;
+    if (updates.numPages !== undefined) dbUpdates.num_pages = updates.numPages;
+    if (updates.price !== undefined) dbUpdates.price = updates.price;
+    if (updates.originalPrice !== undefined) dbUpdates.original_price = updates.originalPrice;
+    if (updates.description !== undefined) dbUpdates.description = updates.description;
+
+    const { error } = await supabase
+      .from('exams')
+      .update(dbUpdates)
+      .eq('id', id);
+
+    if (error) {
+      console.error("Güncelleme hatası:", error);
+    }
+  };
+
+  // Cevap anahtarını artık ayrı bir tabloya (exam_answer_keys) yazıyoruz,
+  // exams tablosuna değil — bu sayede genel sınav sorgusu hiçbir zaman
+  // cevap anahtarını içermiyor.
+  const updateAnswerKeyInDb = async (examId, newKey) => {
+    setExams((prev) => prev.map(ex => ex.id === examId ? { ...ex, answerKey: newKey } : ex));
+    const { error } = await supabase
+      .from('exam_answer_keys')
+      .upsert([{ exam_id: examId, answer_key: newKey }], { onConflict: 'exam_id' });
+    if (error) {
+      console.error("Cevap anahtarı kaydedilemedi:", error);
+      alert("Cevap anahtarı kaydedilemedi: " + error.message);
+    }
+  };
+
+  // Kazanım haritası güncellemesini ayrı tutuyoruz ki topic_map kolonu
+  // henüz eklenmemişse diğer alanların kaydedilmesini etkilemesin.
+
+  // ÖNEMLİ (bug fix): Kazanım tablosundaki tek bir satırı güncellerken
+  // ("Ders"/"Kazanım" seç, "+ Yeni Kazanım Ekle" vb.) topicMap'i doğrudan
+  // o anki `editingExam.topicMap` üzerinden (closure ile) alıp spread
+  // etmek yerine, React'in FONKSİYONEL state güncellemesini kullanıyoruz.
+  // Neden: "+ Yeni Kazanım Ekle" / "+ Yeni Ders Türü Ekle" sunucuya istek
+  // atıp cevap bekliyor (async). Kullanıcı bu bekleme sırasında başka
+  // satırları doldurmaya devam ederse, closure'daki topicMap ARTIK BAYAT
+  // (stale) olur; istek sonuçlandığında o eski haritanın üzerine tek
+  // alanı ekleyip yazmak, aradaki tüm yeni girdileri SİLERDİ. Fonksiyonel
+  // güncelleme her zaman state'in O ANKİ en güncel halini (`prev`) kullanır,
+  // bu yüzden hiçbir girdi kaybolmaz.
+  const applyTopicMapPatch = (examId, patchFn, { persist = false } = {}) => {
+    let previousTopicMap;
+    setExams((prev) => {
+      const next = prev.map((ex) => {
+        if (ex.id !== examId) return ex;
+        previousTopicMap = ex.topicMap || {};
+        return { ...ex, topicMap: patchFn(ex.topicMap || {}) };
+      });
+      if (persist) {
+        const updatedExam = next.find((ex) => ex.id === examId);
+        if (updatedExam) {
+          supabase
+            .from('exams')
+            .update({ topic_map: updatedExam.topicMap })
+            .eq('id', examId)
+            .then(({ error }) => {
+              if (error) {
+                console.error("Kazanım haritası kaydedilemedi (topic_map kolonu eksik olabilir):", error);
+                // ÖNEMLİ (bug fix): Kayıt başarısız olduysa ekranı bu
+                // değişiklikten ÖNCEKİ haline geri döndürüyoruz -- aksi halde
+                // ekranda "girilmiş" görünen ama veritabanına hiç yazılmamış
+                // bir satır kalır, bu da listede yanlışlıkla "✓ Kazanım" gibi
+                // görünmesine sebep olur.
+                setExams((p2) => p2.map((ex) => ex.id === examId ? { ...ex, topicMap: previousTopicMap } : ex));
+                alert("Kazanım haritası kaydedilemedi, bu değişiklik geri alındı. Lütfen tekrar deneyin.");
+              }
+            });
+        }
+      }
+      return next;
+    });
+  };
+
+  // Sıralama güncellemesini ayrı tutuyoruz ki sort_order kolonu
+  // henüz eklenmemişse diğer alanların kaydedilmesini etkilemesin.
+  const updateSortOrderInDb = async (id, newOrder) => {
+    setExams((prev) => prev.map(ex => ex.id === id ? { ...ex, sortOrder: newOrder } : ex));
+    const { error } = await supabase
+      .from('exams')
+      .update({ sort_order: newOrder })
+      .eq('id', id);
+    if (error) {
+      console.error("Sıralama güncellenemedi (sort_order kolonu eksik olabilir):", error);
+    }
+  };
+
+  const handleMoveSubTest = (childExamsSorted, examId, direction) => {
+    const currentIndex = childExamsSorted.findIndex(e => e.id === examId);
+    if (currentIndex === -1) return;
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= childExamsSorted.length) return;
+
+    const reordered = [...childExamsSorted];
+    [reordered[currentIndex], reordered[targetIndex]] = [reordered[targetIndex], reordered[currentIndex]];
+
+    reordered.forEach((ex, i) => {
+      updateSortOrderInDb(ex.id, i);
+    });
+  };
+
+  const activeStudentExam = exams.find(e => e.id === activeStudentExamId);
+
+  // PDF'te 1'den başlayan mutlak sayfa numarasını, sınavın Bölümler
+  // ayarına göre öğrencinin GÖRDÜĞÜ soru numarasına çevirir (ör. mutlak
+  // sayfa 120 ama "Genel Kültür" bölümünde 61-120 aralığındaysa -> 60.
+  // Soru paletinde/başlıkta ne yazıyorsa, çözüm ekranında da AYNI numara
+  // görünmeli -- bu yüzden ikisi de bu tek fonksiyonu kullanıyor.
+  const getDisplayQuestionLabel = (exam, absolutePage) => {
+    const secs = (exam && exam.sections) || [];
+    const sec = secs.find(s => absolutePage >= s.start && absolutePage <= s.end);
+    if (sec) {
+      return { number: absolutePage - sec.start + 1, sectionName: sec.name };
+    }
+    return { number: absolutePage, sectionName: null };
+  };
+
+  
+  useEffect(() => {
+    // ÖNEMLİ (bug fix): Bu koşul eskiden "user && ..." ile başlıyordu -- yani
+    // giriş yapmamış bir ziyaretçi (ücretsiz deneme sınavı, bkz.
+    // FREE_TRIAL_EXAM_IDS) sınava girdiğinde SÜRE HİÇ İŞLEMİYORDU, çünkü bu
+    // efekt tamamen atlanıyordu. Artık `user` şartı kaldırıldı ki anonim
+    // ziyaretçi de gerçek bir "deneme" (zamanlı) sınav deneyimi yaşasın.
+    if (appMode === 'student' && activeStudentExam && !isExamFinished && !showResults && !isPaused) {
+      const timer = setInterval(() => {
+        if (activeStudentExam.examType === 'deneme') {
+          setTimeLeft((prev) => {
+            if (prev <= 1) {
+              clearInterval(timer);
+              if (!user) {
+                // Giriş yapmadan süresi dolan bir ziyaretçi -- doğrudan
+                // saveAndFinishExam çağırmıyoruz (sunucuda oturum token'ı
+                // olmadığı için "Oturumunuz bulunamadı" diye belirsiz bir
+                // uyarıyla öğrenciyi çıkışsız bırakırdı). Bunun yerine net
+                // bir mesajla hesap oluşturmasını istiyoruz; cevapları yerel
+                // state'te durduğu için kaybolmuyor, hesap oluşturur
+                // oluşturmaz (aşağıdaki pendingFinishAfterLogin efekti)
+                // sınav otomatik olarak bitirilip sonucu gösterilecek.
+                alert("Süre doldu! Sonucunu ve raporunu görebilmek için ücretsiz bir hesap oluşturman gerekiyor. Cevapların kaybolmadı.");
+                setPendingFinishAfterLogin(true);
+                setAuthMode('register');
+                setShowAuthModal(true);
+              } else {
+                saveAndFinishExam(0);
+                alert("Süre doldu! Sınavınız otomatik olarak tamamlanmıştır.");
+              }
+              return 0;
+            }
+            return prev - 1;
+          });
+        } else {
+          setTimeLeft((prev) => prev + 1);
+        }
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [user, appMode, activeStudentExam, isExamFinished, showResults, isPaused]);
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Kampanya bitişine kalan süreyi "X gün Y saat" biçiminde döndürür; süre geçmişse null.
+  const getCampaignCountdown = (exam) => {
+    if (!exam.campaignEndsAt) return null;
+    const end = new Date(exam.campaignEndsAt).getTime();
+    const diff = end - Date.now();
+    if (diff <= 0) return null;
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    if (days > 0) return `${days} gün ${hours} saat kaldı`;
+    const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    return `${hours} saat ${mins} dk kaldı`;
+  };
+
+  const handleStartCreateExam = () => {
+    setNewExamForm({
+      name: '',
+      duration: '',
+      examType: 'deneme',
+      categoryExamType: '',
+      categoryLesson: '',
+      price: 0,
+      originalPrice: 0,
+      isParent: true,
+      answerKey: {},
+      sections: [],
+      numPages: 0,
+      description: ''
+    });
+    setIsCreatingExam(true);
+    setActiveAdminExamId(null);
+    setActiveSubExamId(null);
+  };
+
+  const handleSaveNewExam = async () => {
+    setAuthLoading(true);
+
+    if (activeAdminExamId) {
+      // Mevcut bir sınavın ayarlarını güncelliyoruz
+      await updateExamInDb(activeAdminExamId, {
+        name: newExamForm.name,
+        duration: Number(newExamForm.duration) || 0,
+        examType: newExamForm.examType,
+        categoryExamType: newExamForm.categoryExamType,
+        categoryLesson: newExamForm.categoryLesson,
+        price: Number(newExamForm.price) || 0,
+        originalPrice: Number(newExamForm.originalPrice) || 0,
+        description: newExamForm.description || ''
+      });
+      setAuthLoading(false);
+      setIsCreatingExam(false);
+      setActiveAdminExamId(null);
+      return;
+    }
+
+    const newExamData = {
+      name: newExamForm.name,
+      duration: Number(newExamForm.duration) || 0,
+      exam_type: newExamForm.examType,
+      category_exam_type: newExamForm.categoryExamType,
+      category_lesson: newExamForm.categoryLesson,
+      is_published: false,
+      price: Number(newExamForm.price) || 0,
+      original_price: Number(newExamForm.originalPrice) || 0,
+      is_parent: true,
+      sections: [],
+      description: newExamForm.description || ''
+    };
+
+    const { data, error } = await supabase.from('exams').insert([newExamData]).select();
+    setAuthLoading(false);
+
+    if (error) {
+      alert("Sınav oluşturulamadı: " + error.message);
+    } else if (data && data.length > 0) {
+      const formatted = formatExamData(data[0]);
+      setExams(prev => [formatted, ...prev]);
+      setIsCreatingExam(false);
+    }
+  };
+
+  // Cevap anahtarı artık ayrı bir tabloda (exam_answer_keys) tutuluyor ve
+  // genel sınav sorgusuyla hiç çekilmiyor. Admin bir ürünün alt testlerini
+  // açtığında, o testlere ait cevap anahtarlarını burada ayrıca çekip
+  // (sadece admin bu tabloyu okuyabiliyor) yerel `exams` state'ine işliyoruz.
+  const fetchAndMergeAnswerKeys = async (examIds) => {
+    if (!examIds || examIds.length === 0) return;
+    const { data, error } = await supabase
+      .from('exam_answer_keys')
+      .select('exam_id, answer_key')
+      .in('exam_id', examIds);
+
+    if (error) {
+      console.error("Cevap anahtarları çekilemedi:", error);
+      return;
+    }
+    if (data && data.length > 0) {
+      setExams(prev => prev.map(ex => {
+        const found = data.find(k => k.exam_id === ex.id);
+        return found ? { ...ex, answerKey: found.answer_key || {} } : ex;
+      }));
+    }
+  };
+
+  const handleOpenDefinitionScreen = (examId) => {
+    setActiveAdminExamId(examId);
+    setActiveSubExamId(null);
+    setIsCreatingExam(false);
+    const childIds = exams.filter(e => e.parentId === examId).map(e => e.id);
+    fetchAndMergeAnswerKeys(childIds);
+  };
+
+  const handleOpenSettingsScreen = (examId) => {
+    const exam = exams.find(e => e.id === examId);
+    if (!exam) return;
+    setNewExamForm({
+      name: exam.name || '',
+      duration: exam.duration || '',
+      examType: exam.examType || 'deneme',
+      categoryExamType: exam.categoryExamType || '',
+      categoryLesson: exam.categoryLesson || '',
+      price: exam.price || 0,
+      originalPrice: exam.originalPrice || 0,
+      isParent: true,
+      answerKey: exam.answerKey || {},
+      sections: exam.sections || [],
+      numPages: exam.numPages || 0,
+      description: exam.description || ''
+    });
+    setActiveAdminExamId(examId);
+    setActiveSubExamId(null);
+    setIsCreatingExam(true);
+  };
+
+
+
+  const handleFastKeyEntryForExam = (examId, text) => {
+    const exam = exams.find(e => e.id === examId);
+    if (!exam) return;
+    const sanitizedText = text.toUpperCase().replace(/[^ABCDE]/g, '');
+    const newKey = {};
+    for (let i = 0; i < sanitizedText.length; i++) {
+      if (i < (exam.numPages || 120)) {
+        newKey[i + 1] = sanitizedText[i];
+      }
+    }
+    updateAnswerKeyInDb(examId, newKey);
+  };
+
+  // Bir testin TÜM sorularının aynı Ders/Kazanım'ı kapsadığı durumlar için
+  // (soru bankalarında konu konu bölünmüş testler gibi): Excel hazırlamadan,
+  // tek bir Ders/Kazanım girip 1'den numPages'e kadar tüm soru numaralarına
+  // aynı değeri uygular.
+
+  // Aynı ürün altındaki (ör. "KPSS Tarih Son Tekrar" paketindeki 7 deneme
+  // gibi) testlerin genelde SORU SIRASI ve KONU DAĞILIMI birebir aynı olur.
+  // Bu yüzden bir testin kazanım haritasını, zaten kazanımı girilmiş başka
+  // bir testten olduğu gibi kopyalayabilmek için: kaynak testin topicMap'ini
+  // (derin kopya alarak) hedef teste yazıyoruz, mevcut haritanın üzerine.
+
+  // Bir kazanım adının Kategori Yönetimi'ndeki master listeyle birebir
+  // eşleşmediği durumlarda, admin'e "bunu mu demek istediniz?" ipucu vermek
+  // için büyük/küçük harf ve fazla boşluk farkını göz ardı ederek arar.
+  // NOT: Bu sadece bir ÖNERİDİR, otomatik uygulanmaz -- eşleştirme yine katı.
+
+  // Kazanım Referans Listesi: Kategori Yönetimi'ndeki tüm Ders/Konu/Kazanım
+  // adlarını, Excel yüklemesinde beklenen sütun sırasıyla (Ders, Konu,
+  // Kazanım) bir .xlsx dosyasına döker. Admin buradan kopyala-yapıştır
+  // yaparak Excel'e yazım hatasız isim girebilir -- yükleme artık BİREBİR
+  // eşleşme istediği için bu liste pratikte zorunlu bir yardımcı oldu.
+
+  // Soru Havuzu Excel Şablonu -- her satır TEK bir soru. Sütun sırası:
+  // 1. Soru PDF (dosya adı), 2. Çözüm PDF (dosya adı, opsiyonel),
+  // 3. Doğru Cevap (A-E). Ders/Konu/Kazanım BİLEREK Excel'de YOK -- metin
+  // eşleştirmesi (yazım hatasına açık) yerine, yükledikten sonra dropdown'la
+  // (Tek Kazanım Uygula ya da satır satır seçerek) atanıyor, tıpkı mevcut
+  // Kazanım Haritası ekranınızdaki gibi.
+  const downloadPoolImportTemplate = () => {
+    const rows = [['Soru PDF (dosya adı)', 'Çözüm PDF (dosya adı, opsiyonel)', 'Doğru Cevap (A-E)', 'Soru Grubu (opsiyonel, bağlı sorulara aynı kod: G1, G1, G1)']];
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Soru Havuzu');
+    XLSX.writeFile(wb, 'soru-havuzu-yukleme-sablonu.xlsx');
+  };
+
+  const handlePoolExcelSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+        const parsed = [];
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row || row.length === 0) continue;
+          const soruPdfName = String(row[0] || '').trim();
+          if (!soruPdfName) continue;
+          parsed.push({
+            soruPdfName,
+            cozumPdfName: String(row[1] || '').trim(),
+            cevap: String(row[2] || '').trim().toUpperCase(),
+            setCode: String(row[3] || '').trim(),
+          });
+        }
+        if (parsed.length === 0) {
+          alert('Excel dosyasında geçerli satır bulunamadı. Sütun sırasının Soru PDF / Çözüm PDF / Doğru Cevap olduğundan emin olun.');
+          return;
+        }
+        setPoolExcelRows(parsed);
+      } catch (err) {
+        alert('Excel dosyası okunamadı: ' + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handlePoolPdfSelect = (e) => {
+    const files = Array.from(e.target.files || []);
+    const map = new Map();
+    files.forEach((f) => map.set(f.name.toLowerCase(), f));
+    setPoolPdfFiles(map);
+  };
+
+  // Havuza toplu yükleme: her satır BAĞIMSIZ bir question_pool kaydı
+  // oluşturur, hiçbir sınav/pakete bağlanmaz. Ders/Konu/Kazanım BOŞ
+  // (null) olarak eklenir -- bunlar aşağıdaki "Etiketlenmemiş Sorular"
+  // bölümünden (dropdown ile, metin eşleştirmesi olmadan) atanır. Sayfa
+  // sayısı okumaya hiç gerek yok çünkü her PDF zaten tam olarak 1 sayfa/
+  // 1 soru (InDesign'dan "Create Separate PDF Files" ile bölünmüş
+  // dosyalar).
+  const runPoolImport = async () => {
+    if (poolExcelRows.length === 0) return;
+    if (!poolGroupName.trim()) {
+      alert('Lütfen bu yükleme için bir Grup Adı girin (ör. "Biyoloji Kitabı 1") -- etiketleme ekranında bu grubu bu isimle bulacaksınız.');
+      return;
+    }
+
+    setPoolImporting(true);
+    setPoolImportErrors([]);
+    setPoolImportProgress({ current: 0, total: poolExcelRows.length });
+
+    const errors = [];
+    // Bu içe aktarmanın TAMAMI, admin'in kendi verdiği grup adına (metin)
+    // girer -- böylece daha sonra başka bir oturumda yüklenecek farklı bir
+    // grupla karışmaz, etiketleme ekranında isimle seçilebilir. Aynı ismi
+    // tekrar kullanırsanız (ör. aynı gruba sonradan soru eklerken) bilerek
+    // aynı gruba dahil olur.
+    const batchId = poolGroupName.trim();
+
+    for (let i = 0; i < poolExcelRows.length; i++) {
+      const row = poolExcelRows[i];
+      setPoolImportProgress({ current: i + 1, total: poolExcelRows.length });
+      const rowLabel = row.soruPdfName || `Satır ${i + 1}`;
+
+      try {
+        if (!['A', 'B', 'C', 'D', 'E'].includes(row.cevap)) {
+          errors.push(`${rowLabel}: Doğru cevap "${row.cevap}" geçersiz -- A, B, C, D ya da E olmalı.`);
+          continue;
+        }
+
+        // 1) Soru PDF'ini eşleştir ve yükle (zorunlu).
+        const soruFile = poolPdfFiles.get(row.soruPdfName.toLowerCase());
+        if (!soruFile) {
+          errors.push(`${rowLabel}: "${row.soruPdfName}" adlı dosya seçilenler arasında bulunamadı.`);
+          continue;
+        }
+        const soruExt = soruFile.name.split('.').pop();
+        const soruStorageName = `pool_${Math.random().toString(36).substring(2)}_${Date.now()}.${soruExt}`;
+        const { error: soruUpErr } = await supabase.storage.from('exam-files').upload(soruStorageName, soruFile);
+        if (soruUpErr) throw new Error('Soru PDF yüklenemedi: ' + soruUpErr.message);
+
+        // 2) Çözüm PDF'i (opsiyonel) eşleştir ve yükle.
+        let cozumStorageName = null;
+        if (row.cozumPdfName) {
+          const cozumFile = poolPdfFiles.get(row.cozumPdfName.toLowerCase());
+          if (!cozumFile) {
+            errors.push(`${rowLabel}: "${row.cozumPdfName}" adlı çözüm dosyası seçilenler arasında bulunamadı (soru yine de havuza eklendi).`);
+          } else {
+            const cozumExt = cozumFile.name.split('.').pop();
+            cozumStorageName = `pool_sol_${Math.random().toString(36).substring(2)}_${Date.now()}.${cozumExt}`;
+            const { error: cozumUpErr } = await supabase.storage.from('exam-files').upload(cozumStorageName, cozumFile);
+            if (cozumUpErr) {
+              errors.push(`${rowLabel}: Çözüm PDF yüklenemedi: ${cozumUpErr.message} (soru yine de havuza eklendi).`);
+              cozumStorageName = null;
+            }
+          }
+        }
+
+        // 3) question_pool kaydını oluştur -- Ders/Konu/Kazanım BOŞ.
+        const { error: insertErr } = await supabase.from('question_pool').insert([{
+          pdf_file: soruStorageName,
+          solution_pdf_file: cozumStorageName,
+          correct_answer: row.cevap,
+          upload_batch_id: batchId,
+          set_key: row.setCode ? `${batchId}::${row.setCode}` : null,
+        }]);
+        if (insertErr) throw new Error('Havuz kaydı oluşturulamadı: ' + insertErr.message);
+      } catch (err) {
+        errors.push(`${rowLabel}: ${err.message}`);
+      }
+    }
+
+    setPoolImportErrors(errors);
+    setPoolImporting(false);
+
+    if (errors.length === 0) {
+      alert(`✓ ${poolExcelRows.length} soru "${poolGroupName}" grubuna eklendi. Şimdi aşağıdan Ders/Konu/Kazanım atayabilirsiniz.`);
+      setPoolExcelRows([]);
+      setPoolPdfFiles(new Map());
+      setPoolGroupName('');
+    } else {
+      alert(`${poolExcelRows.length - errors.length}/${poolExcelRows.length} soru havuza eklendi. ${errors.length} satırda sorun oldu -- listeyi kontrol edin.`);
+    }
+    // Yeni yüklenen grubu otomatik seçip doğrudan etiketleme ekranına
+    // düşürüyoruz -- admin ekstra bir tıklama yapmadan devam edebilsin.
+    await fetchPoolBatches();
+    setSelectedPoolBatch(batchId);
+  };
+
+  // --- Havuz Kazanım Ataması ---
+  // Etiketsiz (outcome_id NULL) soruları YÜKLEME GRUBUNA göre gruplar --
+  // her grup kendi upload_batch_id'siyle ayrı ayrı listelenir, böylece
+  // farklı oturumlarda yüklenen gruplar birbirine karışmaz.
+  const fetchPoolBatches = async () => {
+    setPoolTaggingLoading(true);
+    const { data, error } = await supabase
+      .from('question_pool')
+      .select('upload_batch_id, created_at')
+      .is('outcome_id', null)
+      .order('created_at', { ascending: false });
+    setPoolTaggingLoading(false);
+    if (error) {
+      console.error('Yükleme grupları okunamadı:', error);
+      return;
+    }
+    const grouped = new Map();
+    (data || []).forEach((row) => {
+      const key = row.upload_batch_id || 'grupsuz';
+      if (!grouped.has(key)) {
+        grouped.set(key, { batch_id: row.upload_batch_id, count: 0, created_at: row.created_at });
+      }
+      grouped.get(key).count++;
+    });
+    setPoolBatches(Array.from(grouped.values()));
+  };
+
+  // SADECE seçili yükleme grubundaki (batchId) etiketsiz soruları getirir --
+  // diğer gruplara hiç dokunmaz.
+  const fetchUnlabeledPoolQuestions = async (batchId) => {
+    if (!batchId) { setPoolUntagged([]); return; }
+    setPoolTaggingLoading(true);
+    let query = supabase
+      .from('question_pool')
+      .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, source_label, created_at, upload_batch_id')
+      .is('outcome_id', null)
+      .order('created_at', { ascending: false });
+    query = batchId === 'grupsuz' ? query.is('upload_batch_id', null) : query.eq('upload_batch_id', batchId);
+    const { data, error } = await query;
+    setPoolTaggingLoading(false);
+    if (!error && data) {
+      setPoolUntagged(data);
+    } else if (error) {
+      console.error('Etiketlenmemiş havuz soruları okunamadı:', error);
+    }
+  };
+
+  // "⚡ Tek Kazanım Uygula" -- şu an listede görünen (etiketlenmemiş) TÜM
+  // havuz sorularına aynı Ders/Konu/Kazanım'ı bir kerede uygular. Ders/
+  // Konu/Kazanım isimleri zaten dropdown'dan (master listeden) geldiği
+  // için burada bir metin-eşleştirme riski yok.
+  const applyQuickKazanimToPool = async ({ dersId, konuId, kazanimId }) => {
+    const ders = lessonCategories.find((lc) => String(lc.id) === String(dersId));
+    const konu = topics.find((t) => String(t.id) === String(konuId));
+    const kazanim = learningOutcomes.find((lo) => String(lo.id) === String(kazanimId));
+    if (!ders || !konu || !kazanim) {
+      alert('Ders, Konu ve Kazanım alanlarını doldurun.');
+      return;
+    }
+    if (poolUntagged.length === 0) {
+      alert('Etiketlenecek soru yok.');
+      return;
+    }
+    const ids = poolUntagged.map((r) => r.id);
+    const { error } = await supabase
+      .from('question_pool')
+      .update({ lesson_category_id: ders.id, topic_id: konu.id, outcome_id: kazanim.id })
+      .in('id', ids);
+    if (error) {
+      alert('Uygulanamadı: ' + error.message);
+      return;
+    }
+    alert(`✓ ${ids.length} sorunun tamamına "${ders.name} / ${konu.name} / ${kazanim.name}" uygulandı.`);
+    setPoolUntagged([]);
+    setQuickPoolIds({ dersId: '', konuId: '', kazanimId: '' });
+    setSelectedPoolBatch(null);
+    fetchPoolBatches();
+  };
+
+  // Satır satır etiketleme: her dropdown değişikliği ANINDA o havuz
+  // satırına yazılır -- Kazanım seçilince satır artık "etiketlenmemiş"
+  // olmaktan çıktığı için listeden kaldırılır.
+  // Satırdaki ortak Ders/Konu/Kazanım seçicisi bu fonksiyonu çağırır (id tabanlı).
+  const updatePoolRowTags = async (rowId, ids) => {
+    const patch = { lesson_category_id: ids.dersId ? Number(ids.dersId) : null, topic_id: ids.konuId ? Number(ids.konuId) : null, outcome_id: ids.kazanimId ? Number(ids.kazanimId) : null };
+    const { error } = await supabase.from('question_pool').update(patch).eq('id', rowId);
+    if (error) { alert('Kaydedilemedi: ' + error.message); return; }
+    setPoolUntagged((prev) => {
+      // Kazanım atandıysa satır artık "etiketlenmemiş" değil, listeden çıkar.
+      const updated = patch.outcome_id ? prev.filter((r) => r.id !== rowId) : prev.map((r) => (r.id === rowId ? { ...r, ...patch } : r));
+      // Seçili gruptaki SON soruysa grup listesini tazele (0 soruluk eski buton kalmasın).
+      if (updated.length === 0) { fetchPoolBatches(); setSelectedPoolBatch(null); }
+      return updated;
+    });
+  };
+
+  // --- Havuz Listesi + Detay Paneli ---
+
+  const fetchPoolBrowserRows = async (overrides = {}) => {
+    const tagFilter = overrides.tag !== undefined ? overrides.tag : poolBrowserFilterTag;
+    const groupFilter = overrides.group !== undefined ? overrides.group : poolBrowserGroup;
+    setPoolBrowserLoading(true);
+    setDupState({ key: null, pairs: null, noText: 0 });
+    const rows = [];
+    let failed = null;
+    const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir -- sayfalayarak hepsini alıyoruz
+    for (let from = 0; from < 40000; from += pageSize) {
+      // Hazır resimsiz kopya (source_light); SQL henüz çalıştırılmadıysa tam kayda düşer.
+      const build = (tbl) => {
+        let qy = supabase
+          .from('question_pool')
+          .select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, extra_outcome_ids, upload_batch_id, set_key, source_json:' + (tbl === 'light' ? 'source_light' : 'source_json') + ', used_count, created_at')
+          .order('id', { ascending: false })
+          .range(from, from + pageSize - 1);
+        if (tagFilter === 'tagged') qy = qy.not('outcome_id', 'is', null);
+        if (tagFilter === 'untagged') qy = qy.is('outcome_id', null);
+        if (groupFilter === '__none__') qy = qy.is('upload_batch_id', null);
+        else if (groupFilter) qy = qy.eq('upload_batch_id', groupFilter);
+        return qy;
+      };
+      let { data, error } = await build(poolLightOk.current ? 'light' : 'full');
+      if (error && poolLightOk.current) { poolLightOk.current = false; ({ data, error } = await build('full')); }
+      if (error) { failed = error; break; }
+      rows.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+    }
+    setPoolBrowserLoading(false);
+    if (failed) console.error('Havuz listesi okunamadı:', failed);
+    else setPoolBrowserRows(sortPoolRowsByTree(rows));
+  };
+
+  // Listede resimsiz (hafif) kayıt var; düzenlemeye tam kaydı çekip açıyoruz.
+  // Soru numarasıyla doğrudan soruya git / düzenleme ekranını aç
+  const [poolGoId, setPoolGoId] = useState('');
+  const goPoolId = async (edit) => {
+    const id = Number(String(poolGoId).replace(/\D/g, ''));
+    if (!id) { alert('Bir soru numarası yazın.'); return; }
+    const inList = poolBrowserRows.some((r) => r.id === id);
+    if (edit) {
+      const { data } = await supabase.from('question_pool').select('*').eq('id', id).single();
+      if (!data) { alert(`#${id} numaralı soru bulunamadı.`); return; }
+      setPoolEditorRow(data); setShowPoolEditor(true);
+      return;
+    }
+    if (!inList) { alert(`#${id} numaralı soru listede yok (kazanımı atanmamış ya da silinmiş olabilir). "Düzenle" ile açmayı deneyin.`); return; }
+    poolNavRef.current = null;
+    openPoolQuestionDetail(id);
+  };
+  const openPoolEditor = async (row) => {
+    let full = row;
+    if (row && row.source_json) {
+      const { data } = await supabase.from('question_pool').select('*').eq('id', row.id).single();
+      if (data) full = { ...row, ...data };
+    }
+    setPoolEditorRow(full); setShowPoolEditor(true);
+  };
+  // Soru Havuzu ağacı sırası: Ders -> Konu -> Kazanım -> soru no. Önceki/Sonraki soru da bu sırayı izler.
+  const poolNm = (list, id, fb) => { const x = list.find((e) => e.id === id); return x ? x.name : fb; };
+  const sortPoolRowsByTree = (rows) => {
+    const dName = (r) => { const d = lessonCategories.find((lc) => lc.id === r.lesson_category_id); return d ? lcKey(d) : '\uffff'; };
+    const tName = (r) => (topics.find((t) => t.id === r.topic_id)?.name) || '\uffff';
+    const oName = (r) => (learningOutcomes.find((o) => o.id === r.outcome_id)?.name) || '\uffff';
+    const cmp = (a, b) => String(a).localeCompare(String(b), 'tr');
+    return [...rows].sort((a, b) => cmp(dName(a), dName(b)) || cmp(tName(a), tName(b)) || cmp(oName(a), oName(b)) || a.id - b.id);
+  };
+
+  // Bir soruya tıklayınca detay panelini açar -- "hangi testlerde kullanıldı"
+  // bilgisini de question_pool_usage + exams üzerinden çeker (bkz. daha
+  // önce kurduğumuz question_pool_usage tablosu -- şu an henüz hiçbir yerden
+  // buraya kayıt düşürülmüyor, "Havuzdan Oluştur" adımında dolduracağız,
+  // ama tablo ve bu sorgu şimdiden hazır).
+  // Bir soru açılınca çevresindeki soruların PDF adreslerini tek istekle önceden hazırla (gezinme hızlansın)
+  useEffect(() => {
+    if (!selectedPoolQuestionId || !poolBrowserRows.length) return;
+    const navIds = poolNavRef.current || poolBrowserRows.map((r) => r.id);
+    const idx = navIds.indexOf(selectedPoolQuestionId);
+    if (idx < 0) return;
+    prefetchPoolPdfs(navIds.slice(Math.max(0, idx - 2), idx + 12));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPoolQuestionId, poolBrowserRows.length]);
+  // Gezinme sırası: detay açıldığı andaki liste sırası SABİT tutulur. Bir sorunun kazanımı değişse bile
+  // Önceki/Sonraki aynı sırada devam eder (soru yeni kazanımın listesine atlamaz).
+  const poolNavRef = useRef(null);
+  useEffect(() => { if (!selectedPoolQuestionId) poolNavRef.current = null; }, [selectedPoolQuestionId]);
+  const openPoolQuestionDetail = async (id) => {
+    if (!poolNavRef.current) poolNavRef.current = poolBrowserRows.map((r) => r.id);
+    setSelectedPoolQuestionId(id);
+    setPoolDetailUsageLoading(true);
+    const { data, error } = await supabase
+      .from('question_pool_usage')
+      .select('id, used_at, exams(id, name)')
+      .eq('pool_question_id', id);
+    setPoolDetailUsageLoading(false);
+    if (!error && data) {
+      setPoolDetailUsage(data);
+    } else {
+      setPoolDetailUsage([]);
+    }
+  };
+
+  // Detaydaki Ders/Konu/Kazanım/Cevap değişiklikleri -- etiketleme
+  // ekranındaki gibi ANINDA kaydedilir, ama bu sefer poolUntagged listesine
+  // değil, poolBrowserRows'a (genel listeye) yazıyoruz -- çünkü burası
+  // zaten etiketlenmiş bir soruyu DÜZELTMEK için de kullanılıyor.
+  const updatePoolDetailField = async (fields) => {
+    if (!selectedPoolQuestionId) return;
+    await supabase.from('question_pool').update(fields).eq('id', selectedPoolQuestionId);
+    setPoolBrowserRows((prev) => prev.map((r) => r.id === selectedPoolQuestionId ? { ...r, ...fields } : r));
+  };
+
+  // Benzer soru kontrolü: Soru Havuzu ağacında bir KAZANIMIN altındaki sorular kendi içinde karşılaştırılır.
+  // Metin zaten poolBrowserRows'ta (source_json) olduğundan Supabase'e ek sorgu gitmez.
+  const runDupCheck = (key, rows) => {
+    const textOf = (r) => (r.source_json && r.source_json.q ? pqPlainText(r.source_json.q).replace(/\n+/g, ' ').trim() : '');
+    // Belge sıklığı (df): tüm havuzdan -- sık geçen kelimeler az ağırlık alır
+    const df = new Map(); let N = 0;
+    (poolBrowserRows.length ? poolBrowserRows : rows).forEach((r) => {
+      const raw = textOf(r); if (pqNorm(raw).length < 15) return; N++;
+      new Set(pqTokens(raw).map((t) => t[0])).forEach((w) => df.set(w, (df.get(w) || 0) + 1));
+    });
+    const items = []; let noText = 0;
+    rows.forEach((r) => {
+      const raw = textOf(r);
+      const norm = pqNorm(raw);
+      if (norm.length < 15) { noText++; return; }
+      const tf = new Map();
+      pqTokens(raw).forEach(([w, wt]) => tf.set(w, (tf.get(w) || 0) + wt));
+      const vec = new Map(); let sq = 0;
+      tf.forEach((c, w) => { const v = (1 + Math.log(1 + c)) * (Math.log((N + 1) / ((df.get(w) || 0) + 1)) + 1); vec.set(w, v); sq += v * v; });
+      const len = Math.sqrt(sq) || 1;
+      items.push({ id: r.id, ans: r.correct_answer, raw, vec, len, nums: pqNums(norm), pdf: r.pdf_file, sol: r.solution_pdf_file });
+    });
+    const pairs = [];
+    for (let a = 0; a < items.length; a++) {
+      const A = items[a];
+      for (let b = a + 1; b < items.length; b++) {
+        const B = items[b];
+        const sm = A.vec.size < B.vec.size ? A.vec : B.vec, lg = sm === A.vec ? B.vec : A.vec;
+        let dot = 0; sm.forEach((v, w) => { const u = lg.get(w); if (u) dot += v * u; });
+        const sim = dot / (A.len * B.len);
+        if (sim * 100 >= 40) pairs.push({ a: A, b: B, sim, sameNums: A.nums === B.nums });
+      }
+    }
+    pairs.sort((x, y) => y.sim - x.sim);
+    setDupIdx(0); setDupSkip(new Set());
+    setDupState({ key, pairs, noText });
+  };
+  const deleteDupRow = async (row) => {
+    if (!window.confirm(`#${row.id} numaralı soru (ve çözüm PDF'i) havuzdan KALICI olarak silinecek. Devam edilsin mi?`)) return;
+    const { error, count } = await supabase.from('question_pool').delete({ count: 'exact' }).eq('id', row.id);
+    if (error) { alert('Silinemedi: ' + error.message); return; }
+    if (!count) { alert('Soru silinemedi (yetki sorunu olabilir).'); return; }
+    await removePoolStorageFiles([row.pdf, row.sol]);
+    setDupState((d) => ({ ...d, pairs: (d.pairs || []).filter((p) => p.a.id !== row.id && p.b.id !== row.id) }));
+    setPoolBrowserRows((prev) => prev.filter((r) => r.id !== row.id)); // ağaç listesinden de hemen kalksın
+    fetchPoolBatches(); fetchPoolBrowserGroups();
+  };
+
+  // Soru İnceleme: kazanımdaki soruların metni "komut" olarak kopyalanır, Gemini/Claude sitesinden gelen cevap yapıştırılır;
+  // her soru solda önizleme, sağda eleştiri olarak tek tek incelenir (düzenle / sil / cevabı düzelt).
+  const revTextOf = (r) => (r && r.source_json && r.source_json.q ? pqPlainText(r.source_json.q).replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim() : '');
+  const copyText = async (text) => {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) {
+      const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+      let ok = false; try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+      document.body.removeChild(ta); return ok;
+    }
+  };
+  // ---- Depo temizliği: hiçbir kayda bağlı olmayan PDF'leri siler ----
+  const [cleanBusy, setCleanBusy] = useState(false);
+  const cleanOrphanFiles = async () => {
+    if (cleanBusy) return;
+    setCleanBusy(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      const call = async (action) => {
+        const resp = await fetch('/api/clean-storage', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ action }) });
+        const j = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(j.error || 'İstek başarısız');
+        return j;
+      };
+      const r = await call('scan');
+      if (!r.orphanCount) { alert(`Depoda ${r.total} dosya var, hepsi kullanımda. Silinecek bir şey yok.`); return; }
+      const mb = (r.bytes / 1048576).toFixed(0);
+      if (!window.confirm(`Depoda ${r.total} dosya var. Hiçbir soruya ya da sınava bağlı OLMAYAN ${r.orphanCount} dosya (yaklaşık ${mb} MB) bulundu.\n\nÖrnek: ${(r.sample || []).join(', ')}\n\nBunlar KALICI olarak silinsin mi?`)) return;
+      let removed = 0, failed = 0;
+      for (let round = 0; round < 40; round++) {
+        const d = await call('delete');
+        removed += d.removed; failed += d.failed;
+        if (!d.remaining || (!d.removed && d.failed)) break;
+      }
+      alert(`${removed} dosya silindi (~${mb} MB)` + (failed ? `, ${failed} dosya silinemedi.` : '.') + '\nSupabase panelindeki kullanım birkaç saat içinde güncellenir.');
+    } catch (e) { alert('Temizlik yapılamadı: ' + e.message); } finally { setCleanBusy(false); }
+  };
+
+  // Kazanım kontrolü için: listedeki soruları (ders, konu, kazanım, soru metni) CSV olarak indirir.
+  const exportPoolForReview = () => {
+    if (!poolBrowserRows.length) { alert('Önce listenin yüklenmesini bekleyin.'); return; }
+    const esc = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const lines = [['id', 'ders', 'konu', 'kazanim', 'cevap', 'metin'].map(esc).join(',')];
+    poolBrowserRows.forEach((r) => {
+      const txt = r.source_json && r.source_json.q ? pqPlainText(r.source_json.q).replace(/\s+/g, ' ').trim().slice(0, 900) : '';
+      lines.push([r.id, poolNm(lessonCategories, r.lesson_category_id, ''), poolNm(topics, r.topic_id, ''), poolNm(learningOutcomes, r.outcome_id, ''), r.correct_answer || '', txt].map(esc).join(','));
+    });
+    const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'havuz_kazanim_kontrol.csv'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
+
+  // ---- Bul / Değiştir ----
+  const frUpd = (patch) => setFr((f) => ({ ...f, ...patch }));
+  const frScopeIds = (f) => {
+    const lessonIds = f.lesson ? lessonCategories.filter((l) => l.name === f.lesson).map((l) => l.id) : null;
+    const topicIds = f.topic ? topics.filter((t) => (!lessonIds || lessonIds.includes(t.lesson_category_id)) && t.name === f.topic).map((t) => t.id) : null;
+    const outcomeIds = f.outcome ? learningOutcomes.filter((o) => (!topicIds || topicIds.includes(o.topic_id)) && o.name === f.outcome).map((o) => o.id) : null;
+    return { lessonIds, topicIds, outcomeIds };
+  };
+  const frSearch = async () => {
+    const f = fr;
+    if (!f.find) { frUpd({ msg: 'Önce "Aranan" kutusunu doldurun.' }); return; }
+    frUpd({ busy: true, msg: '', results: null });
+    const { lessonIds, topicIds, outcomeIds } = frScopeIds(f);
+    const rows = [];
+    for (let from = 0; from < 20000; from += 500) {
+      let q = supabase.from('question_pool').select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, extra_outcome_ids, upload_batch_id, set_key, source_json').order('id').range(from, from + 499);
+      if (lessonIds) q = q.in('lesson_category_id', lessonIds);
+      if (topicIds) q = q.in('topic_id', topicIds);
+      if (outcomeIds) q = q.in('outcome_id', outcomeIds);
+      const { data, error } = await q;
+      if (error) { frUpd({ busy: false, msg: 'Okunamadı: ' + error.message }); return; }
+      rows.push(...(data || []));
+      if (!data || data.length < 500) break;
+    }
+    const results = [];
+    rows.forEach((r) => {
+      const sj = r.source_json;
+      if (!sj || sj.v !== 2 || !sj.q) return;
+      const snips = [];
+      let nQ = 0, nS = 0, q2 = sj.q, s2 = sj.s;
+      if (f.part !== 'sol') { const x = pqFrDoc(sj.q, f.find, f.repl, f.matchCase, f.whole, snips); nQ = x.n; q2 = x.doc; }
+      if (f.part !== 'q' && sj.s) { const x = pqFrDoc(sj.s, f.find, f.repl, f.matchCase, f.whole, snips); nS = x.n; s2 = x.doc; }
+      if (nQ + nS > 0) results.push({ row: r, nQ, nS, snip: snips[0], newJson: { ...sj, q: q2, s: s2 } });
+    });
+    results.sort((a, b) => a.row.id - b.row.id);
+    const sel = {}; results.forEach((x) => { sel[x.row.id] = true; });
+    frUpd({ busy: false, results, sel, scanned: rows.length, msg: '' });
+  };
+  const frApply = () => {
+    const chosen = fr.results.filter((x) => fr.sel[x.row.id]);
+    if (!chosen.length) return;
+    if (!window.confirm(`${chosen.length} soruda "${fr.find}" → "${fr.repl}" değiştirilecek ve bu soruların PDF'leri yeniden çizilecek (soru başına yaklaşık 2-3 sn).\n\nİşlem bitene kadar pencereyi kapatmayın. Devam edilsin mi?`)) return;
+    setFrJob({
+      rows: chosen.map((x) => ({ ...x.row, source_json: x.newJson })),
+      undoRows: chosen.map((x) => ({ ...x.row })),
+      isUndo: false,
+      label: `${fr.find} → ${fr.repl}`,
+    });
+  };
+  const frRunUndo = () => {
+    if (!frUndo || !window.confirm(`Son değişiklik (${frUndo.label}) geri alınsın mı? ${frUndo.rows.length} sorunun PDF'i yeniden çizilecek.`)) return;
+    setFrJob({ rows: frUndo.rows, undoRows: null, isUndo: true, label: frUndo.label });
+  };
+  const renderFrModal = () => {
+    const f = fr;
+    const lessonNames = lessonCategories.map((l) => l.name).filter((n, i, arr) => n && arr.indexOf(n) === i).sort((x, y) => x.localeCompare(y, 'tr'));
+    const lessonIds = f.lesson ? lessonCategories.filter((l) => l.name === f.lesson).map((l) => l.id) : [];
+    const topicNames = f.lesson ? topics.filter((t) => lessonIds.includes(t.lesson_category_id)).map((t) => t.name).filter((n, i, arr) => n && arr.indexOf(n) === i).sort((x, y) => x.localeCompare(y, 'tr')) : [];
+    const topicIds = f.topic ? topics.filter((t) => lessonIds.includes(t.lesson_category_id) && t.name === f.topic).map((t) => t.id) : [];
+    const outNames = f.topic ? learningOutcomes.filter((o) => topicIds.includes(o.topic_id)).map((o) => o.name).filter((n, i, arr) => n && arr.indexOf(n) === i).sort((x, y) => x.localeCompare(y, 'tr')) : [];
+    const inp = { width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #94a3b8', fontSize: '0.92rem', boxSizing: 'border-box' };
+    const lab = { display: 'block', fontSize: '0.8rem', fontWeight: 'bold', color: '#334155', margin: '10px 0 3px' };
+    const nSel = f.results ? f.results.filter((x) => f.sel[x.row.id]).length : 0;
+    return (
+      <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.55)', zIndex: 1060, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+        <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '18px 20px', width: '860px', maxWidth: '100%', maxHeight: '92vh', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '4px' }}>
+            <h3 style={{ margin: 0 }}>🔎 Bul / Değiştir</h3>
+            <button onClick={() => setFr(null)} style={{ marginLeft: 'auto', padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat ✕</button>
+          </div>
+          <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', overflowY: 'auto' }}>
+            <div style={{ flex: '1 1 300px', minWidth: '260px' }}>
+              <label style={lab}>Aranan</label>
+              <input value={f.find} onChange={(e) => frUpd({ find: e.target.value, results: null })} onKeyDown={(e) => { if (e.key === 'Enter') frSearch(); }} style={inp} autoFocus />
+              <label style={lab}>Yeni metin</label>
+              <input value={f.repl} onChange={(e) => frUpd({ repl: e.target.value, results: null })} onKeyDown={(e) => { if (e.key === 'Enter') frSearch(); }} style={inp} placeholder="Boş bırakırsanız bulunan metin silinir" />
+              <div style={{ display: 'flex', gap: '16px', marginTop: '10px', flexWrap: 'wrap' }}>
+                <label style={{ fontSize: '0.85rem' }}><input type="checkbox" checked={f.matchCase} onChange={(e) => frUpd({ matchCase: e.target.checked, results: null })} /> Büyük/küçük harf ayrımı</label>
+                <label style={{ fontSize: '0.85rem' }}><input type="checkbox" checked={f.whole} onChange={(e) => frUpd({ whole: e.target.checked, results: null })} /> Tam kelime</label>
+              </div>
+            </div>
+            <div style={{ flex: '1 1 300px', minWidth: '260px' }}>
+              <label style={lab}>Nerede arayalım?</label>
+              <select value={f.part} onChange={(e) => frUpd({ part: e.target.value, results: null })} style={inp}>
+                <option value="both">Soru ve çözüm</option>
+                <option value="q">Yalnız soru</option>
+                <option value="sol">Yalnız çözüm</option>
+              </select>
+              <label style={lab}>Ders</label>
+              <select value={f.lesson} onChange={(e) => frUpd({ lesson: e.target.value, topic: '', outcome: '', results: null })} style={inp}>
+                <option value="">Tüm havuz (bütün dersler)</option>
+                {lessonNames.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <label style={lab}>Konu</label>
+              <select value={f.topic} disabled={!f.lesson} onChange={(e) => frUpd({ topic: e.target.value, outcome: '', results: null })} style={inp}>
+                <option value="">Tüm konular</option>
+                {topicNames.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <label style={lab}>Kazanım</label>
+              <select value={f.outcome} disabled={!f.topic} onChange={(e) => frUpd({ outcome: e.target.value, results: null })} style={inp}>
+                <option value="">Tüm kazanımlar</option>
+                {outNames.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', margin: '12px 0 8px', flexWrap: 'wrap' }}>
+            <button onClick={frSearch} disabled={f.busy} className="yt-btn yt-btn-primary" style={{ padding: '8px 18px' }}>{f.busy ? 'Aranıyor…' : 'Bul'}</button>
+            {f.results && f.results.length > 0 && (
+              <button onClick={frApply} style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}>Seçilenleri değiştir ({nSel} soru)</button>
+            )}
+            {frUndo && <button onClick={frRunUndo} style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid #f59e0b', backgroundColor: '#fffbeb', color: '#92400e', cursor: 'pointer' }}>↩ Son değişikliği geri al ({frUndo.rows.length})</button>}
+            {f.msg && <span style={{ color: '#b91c1c', fontSize: '0.85rem' }}>{f.msg}</span>}
+          </div>
+          {f.results && (
+            <div style={{ fontSize: '0.82rem', color: '#475569', marginBottom: '6px' }}>
+              {f.scanned} soru tarandı · <b>{f.results.length}</b> soruda toplam <b>{f.results.reduce((t, x) => t + x.nQ + x.nS, 0)}</b> eşleşme.
+              {f.results.length > 0 && (
+                <> <button onClick={() => { const sel = {}; f.results.forEach((x) => { sel[x.row.id] = true; }); frUpd({ sel }); }} style={{ marginLeft: 8, border: 'none', background: 'none', color: '#2563eb', cursor: 'pointer' }}>Hepsini seç</button>
+                <button onClick={() => frUpd({ sel: {} })} style={{ border: 'none', background: 'none', color: '#2563eb', cursor: 'pointer' }}>Hiçbirini seçme</button></>
+              )}
+            </div>
+          )}
+          {f.results && (
+            <div style={{ overflowY: 'auto', flex: 1, minHeight: '120px', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+              {f.results.length === 0 && <div style={{ padding: '16px', color: '#64748b' }}>Eşleşme bulunamadı.</div>}
+              {f.results.map((x) => (
+                <label key={x.row.id} style={{ display: 'flex', gap: '10px', padding: '8px 10px', borderBottom: '1px solid #f1f5f9', alignItems: 'flex-start', cursor: 'pointer', backgroundColor: f.sel[x.row.id] ? '#fff' : '#f8fafc', opacity: f.sel[x.row.id] ? 1 : 0.55 }}>
+                  <input type="checkbox" checked={!!f.sel[x.row.id]} onChange={(e) => frUpd({ sel: { ...f.sel, [x.row.id]: e.target.checked } })} style={{ marginTop: '3px' }} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '0.76rem', color: '#64748b' }}>
+                      <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); openPoolEditor(x.row); }} title="Bu soruyu düzenleme ekranında aç" style={{ marginRight: '6px', fontSize: '0.72rem', padding: '2px 8px', borderRadius: '5px', border: '1px solid #c7d2fe', backgroundColor: '#eef2ff', color: '#3730a3', cursor: 'pointer' }}>✏️ Düzenle</button><b>#{x.row.id}</b> · {poolNm(lessonCategories, x.row.lesson_category_id, 'Dersi belirsiz')} › {poolNm(learningOutcomes, x.row.outcome_id, 'Kazanımsız')} · {x.nQ > 0 && `soruda ${x.nQ}`}{x.nQ > 0 && x.nS > 0 && ', '}{x.nS > 0 && `çözümde ${x.nS}`}
+                    </div>
+                    {x.snip && (
+                      <div style={{ fontSize: '0.88rem', marginTop: '2px', wordBreak: 'break-word' }}>
+                        …{x.snip.before}<span style={{ backgroundColor: '#fecaca', textDecoration: 'line-through' }}>{x.snip.hit}</span><span style={{ backgroundColor: '#bbf7d0' }}>{x.snip.to}</span>{x.snip.after}…
+                      </div>
+                    )}
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderReviewModal = () => {
+    const byId = new Map(poolBrowserRows.map((r) => [r.id, r]));
+    const allRows = rev.ids.map((id) => byId.get(id)).filter(Boolean);
+    const parts = Math.max(1, Math.ceil(allRows.length / rev.size));
+    const partRows = allRows.slice(rev.part * rev.size, (rev.part + 1) * rev.size);
+    const reviewed = partRows.filter((r) => rev.parsed[r.id]);
+    const list = rev.onlyIssues ? reviewed.filter((r) => rev.parsed[r.id].durum !== 'tamam') : reviewed;
+    const idx = Math.min(rev.idx, Math.max(0, list.length - 1));
+    const row = list[idx];
+    const res = row ? rev.parsed[row.id] : null;
+    const upd = (patch) => setRev((r) => ({ ...r, ...patch }));
+    const doCopy = async () => {
+      const items = partRows.map((r) => ({ id: r.id, ans: r.correct_answer, text: revTextOf(r) })).filter((q) => q.text.length > 10);
+      if (items.length === 0) { upd({ error: 'Bu kısımdaki soruların metni kayıtlı değil (Excel/PDF ile yüklenmiş olabilir).' }); return; }
+      const ok = await copyText(pqReviewPrompt(items));
+      upd({ error: ok ? '' : 'Panoya kopyalanamadı.', copied: ok ? items.length : 0 });
+    };
+    const doParse = () => {
+      try {
+        const out = pqParseReview(rev.paste);
+        const n = Object.keys(out).length;
+        if (n === 0) throw new Error('Cevapta soru numarası (id) olan kayıt bulunamadı.');
+        upd({ parsed: { ...rev.parsed, ...out }, paste: '', error: '', idx: 0, copied: 0 });
+      } catch (e) { upd({ error: e.message }); }
+    };
+    const setAnswer = async (r, letter) => {
+      if (!window.confirm(`#${r.id} sorusunun doğru cevabı ${r.correct_answer} yerine ${letter} yapılsın mı?`)) return;
+      const { error } = await supabase.from('question_pool').update({ correct_answer: letter }).eq('id', r.id);
+      if (error) { alert('Güncellenemedi: ' + error.message); return; }
+      setPoolBrowserRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, correct_answer: letter } : x)));
+    };
+    const badge = { tamam: ['✓ Sorun yok', '#16a34a', '#f0fdf4'], duzeltme: ['✎ Düzeltme gerekli', '#b45309', '#fffbeb'], hatali: ['⚠ Hatalı', '#dc2626', '#fef2f2'] };
+    const btn = (disabled) => ({ padding: '7px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: disabled ? 'not-allowed' : 'pointer', fontSize: '0.85rem', opacity: disabled ? 0.45 : 1 });
+    const counts = { tamam: 0, duzeltme: 0, hatali: 0 }; reviewed.forEach((r) => { counts[rev.parsed[r.id].durum]++; });
+    const showReview = reviewed.length > 0 && !rev.pasteMode;
+    return (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 1050, backgroundColor: 'rgba(15,23,42,0.6)', display: 'flex', justifyContent: 'center', padding: '10px' }}>
+        <div style={{ backgroundColor: '#fff', borderRadius: '12px', width: '100%', maxWidth: '1700px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 16px', borderBottom: '1px solid #e2e8f0', flexWrap: 'wrap' }}>
+            <b style={{ fontSize: '1rem' }}>🧐 Soru İnceleme</b>
+            <span style={{ fontSize: '0.82rem', color: '#475569' }}>{rev.name} · {allRows.length} soru{parts > 1 ? ` · Parça ${rev.part + 1} / ${parts}` : ''}</span>
+            {reviewed.length > 0 && <span style={{ fontSize: '0.8rem' }}><b style={{ color: '#16a34a' }}>{counts.tamam} tamam</b> · <b style={{ color: '#b45309' }}>{counts.duzeltme} düzeltme</b> · <b style={{ color: '#dc2626' }}>{counts.hatali} hatalı</b></span>}
+            <span style={{ flex: 1 }} />
+            {reviewed.length > 0 && <button onClick={() => upd({ pasteMode: !rev.pasteMode })} style={btn(false)}>{rev.pasteMode ? '◀ İncelemeye dön' : '📋 Komut / yeni cevap yapıştır'}</button>}
+            <button onClick={() => setRev(null)} style={{ ...btn(false), backgroundColor: '#f1f5f9' }}>Kapat ✕</button>
+          </div>
+
+          {!showReview ? (
+            <div style={{ padding: '16px 20px', overflow: 'auto', flex: 1, maxWidth: '900px' }}>
+              <ol style={{ margin: '0 0 12px 18px', padding: 0, fontSize: '0.88rem', lineHeight: 1.7 }}>
+                <li>Aşağıdaki düğmeyle bu {parts > 1 ? 'parçadaki' : 'kazanımdaki'} soruların metnini <b>hazır komutla birlikte</b> kopyalayın.</li>
+                <li>Gemini (ya da Claude) sitesinde yeni bir sohbete yapıştırıp gönderin. Cevap bir <b>kod bloğu (JSON)</b> olarak gelecek.</li>
+                <li>Cevabı (kod bloğunun tamamını) aşağıdaki kutuya yapıştırıp &quot;İncele&quot;ye basın.</li>
+              </ol>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' }}>
+                <label style={{ fontSize: '0.82rem' }}>Bir seferde
+                  <select value={rev.size} onChange={(e) => upd({ size: Number(e.target.value), part: 0, copied: 0 })} style={{ margin: '0 6px', padding: '5px' }}>
+                    {[10, 20, 30, 50].map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>soru
+                </label>
+                {parts > 1 && <label style={{ fontSize: '0.82rem' }}>Parça
+                  <select value={rev.part} onChange={(e) => upd({ part: Number(e.target.value), copied: 0 })} style={{ margin: '0 6px', padding: '5px' }}>
+                    {Array.from({ length: parts }, (_, i) => <option key={i} value={i}>{i + 1} / {parts}{allRows.slice(i * rev.size, (i + 1) * rev.size).every((r) => rev.parsed[r.id]) ? ' ✓' : ''}</option>)}
+                  </select></label>}
+                <button onClick={doCopy} style={{ ...btn(false), backgroundColor: '#4f46e5', color: '#fff', border: 'none' }}>📋 Komutu kopyala ({partRows.length} soru)</button>
+                {rev.copied > 0 && <span style={{ color: '#16a34a', fontSize: '0.82rem', fontWeight: 'bold' }}>✓ {rev.copied} soru kopyalandı</span>}
+              </div>
+              <textarea value={rev.paste} onChange={(e) => upd({ paste: e.target.value })} placeholder="Gemini'nin cevabını buraya yapıştırın…" style={{ width: '100%', height: '200px', boxSizing: 'border-box', padding: '8px', borderRadius: '8px', border: '1px solid #cbd5e1', fontFamily: 'monospace', fontSize: '0.78rem' }} />
+              <div style={{ marginTop: '8px', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <button onClick={doParse} disabled={!rev.paste.trim()} style={{ ...btn(!rev.paste.trim()), backgroundColor: '#16a34a', color: '#fff', border: 'none' }}>İncele</button>
+                {rev.error && <span style={{ color: '#b91c1c', fontSize: '0.82rem' }}>⚠ {rev.error}</span>}
+              </div>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 16px', borderBottom: '1px solid #e2e8f0', backgroundColor: '#f8fafc', flexWrap: 'wrap' }}>
+                {row ? <span style={{ fontSize: '0.88rem' }}>Soru <b>{idx + 1} / {list.length}</b> · <b>#{row.id}</b></span> : <span style={{ fontSize: '0.88rem', color: '#16a34a', fontWeight: 'bold' }}>{rev.onlyIssues ? 'Sorunlu soru kalmadı ✓' : 'Soru yok'}</span>}
+                <label style={{ fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}><input type="checkbox" checked={rev.onlyIssues} onChange={(e) => upd({ onlyIssues: e.target.checked, idx: 0 })} /> Sadece sorunlu olanları göster</label>
+                <span style={{ flex: 1 }} />
+                <button disabled={idx === 0} onClick={() => upd({ idx: idx - 1 })} style={btn(idx === 0)}>◀ Önceki</button>
+                <button disabled={idx >= list.length - 1} onClick={() => upd({ idx: idx + 1 })} style={btn(idx >= list.length - 1)}>Sonraki ▶</button>
+              </div>
+              <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px', backgroundColor: '#f1f5f9' }}>
+                {row && res && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '12px', alignItems: 'start' }}>
+                    <div style={{ backgroundColor: '#fff', borderRadius: '10px', padding: '10px', border: '1px solid #e2e8f0', minWidth: 0 }}>
+                      <div style={{ fontWeight: 'bold', fontSize: '0.9rem', marginBottom: '8px' }}>#{row.id} · doğru cevap: {row.correct_answer}</div>
+                      <SecurePdfViewer poolId={row.id} type="pool-question" pageNumber={1} version={poolPdfVersions[`pdf_file:${row.id}`]} />
+                      {row.solution_pdf_file && (
+                        <div style={{ marginTop: '8px' }}>
+                          <button onClick={() => upd({ showSol: !rev.showSol })} style={{ ...btn(false), fontSize: '0.78rem', padding: '4px 10px' }}>{rev.showSol ? 'Çözümü gizle' : 'Çözümü göster'}</button>
+                          {rev.showSol && <div style={{ marginTop: '6px' }}><SecurePdfViewer poolId={row.id} type="pool-solution" pageNumber={1} version={poolPdfVersions[`solution_pdf_file:${row.id}`]} /></div>}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ backgroundColor: '#fff', borderRadius: '10px', padding: '12px', border: '1px solid #e2e8f0', minWidth: 0 }}>
+                      <div style={{ display: 'inline-block', padding: '4px 10px', borderRadius: '999px', fontSize: '0.82rem', fontWeight: 'bold', color: badge[res.durum][1], backgroundColor: badge[res.durum][2], border: `1px solid ${badge[res.durum][1]}`, marginBottom: '10px' }}>{badge[res.durum][0]}</div>
+                      {res.onerilenCevap && res.onerilenCevap !== row.correct_answer && (
+                        <div style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '8px 10px', marginBottom: '10px', fontSize: '0.85rem' }}>
+                          ⚠ Cevap anahtarı şüpheli: sistemde <b>{row.correct_answer}</b>, öneri <b>{res.onerilenCevap}</b>.
+                          <button onClick={() => setAnswer(row, res.onerilenCevap)} style={{ ...btn(false), marginLeft: '8px', fontSize: '0.76rem', padding: '3px 8px' }}>Cevabı {res.onerilenCevap} yap</button>
+                        </div>
+                      )}
+                      {res.sorunlar.length > 0 ? (
+                        <ul style={{ margin: '0 0 10px 18px', padding: 0, fontSize: '0.88rem', lineHeight: 1.6 }}>{res.sorunlar.map((x, i) => <li key={i}>{x}</li>)}</ul>
+                      ) : <div style={{ fontSize: '0.86rem', color: '#64748b', marginBottom: '10px' }}>Eleştiri yok.</div>}
+                      {res.onerilenMetin && (
+                        <div style={{ marginBottom: '10px' }}>
+                          <div style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#475569', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '8px' }}>Önerilen metin
+                            <button onClick={() => copyText(res.onerilenMetin)} style={{ ...btn(false), fontSize: '0.72rem', padding: '2px 8px' }}>📋 Kopyala</button>
+                          </div>
+                          <div style={{ whiteSpace: 'pre-wrap', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '8px 10px', fontSize: '0.84rem', maxHeight: '260px', overflow: 'auto' }}>{res.onerilenMetin}</div>
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
+                        <button onClick={() => openPoolEditor(row)} style={{ ...btn(false), backgroundColor: '#eef2ff', borderColor: '#c7d2fe' }}>✏️ Düzenle</button>
+                        <button onClick={() => deleteDupRow({ id: row.id, pdf: row.pdf_file, sol: row.solution_pdf_file })} style={{ ...btn(false), color: '#dc2626', borderColor: '#dc2626' }}>🗑 Sil</button>
+                        <button onClick={() => upd({ idx: Math.min(idx + 1, list.length - 1) })} style={{ ...btn(false), backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }}>✓ Tamam, sonraki</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Sonuç penceresi: birbirine bağlı sorular TEK GRUP olarak yan yana, gerçek PDF önizlemesiyle (soru + çözüm) gösterilir.
+  // Grup sayısı kadar sütun açılır (2'li, 3'lü...); gruplar arasında ◀ ▶ ile gezilir. Silinen soru gruptan düşer.
+  const renderDupPanel = () => {
+    const shown = (dupState.pairs || []).filter((p) => p.sim * 100 >= dupMin);
+    const parent = new Map();
+    const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; };
+    shown.forEach((p) => { [p.a.id, p.b.id].forEach((id) => { if (!parent.has(id)) parent.set(id, id); }); parent.set(find(p.a.id), find(p.b.id)); });
+    const clusters = new Map();
+    shown.forEach((p) => {
+      const root = find(p.a.id);
+      if (!clusters.has(root)) clusters.set(root, { members: new Map(), pairs: [] });
+      const c = clusters.get(root);
+      c.members.set(p.a.id, p.a); c.members.set(p.b.id, p.b); c.pairs.push(p);
+    });
+    const allGroups = [...clusters.values()].map((c) => {
+      const members = [...c.members.values()].sort((x, y) => x.id - y.id);
+      return { key: members.map((m) => m.id).join('-'), members, pairs: c.pairs.sort((x, y) => y.sim - x.sim), maxSim: Math.max(...c.pairs.map((p) => p.sim)) };
+    }).sort((x, y) => y.maxSim - x.maxSim);
+    const isAllDifferent = (r) => r && r.clusters.every((c) => c.ids.length < 2 || c.verdict === 'farkli');
+    const groups = allGroups.filter((g) => !dupSkip.has(g.key) && !(dupAi.hideDifferent && isAllDifferent(dupAi.results[`${dupAi.provider}:${g.key}`])));
+    const idx = Math.min(dupIdx, Math.max(0, groups.length - 1));
+    const g = groups[idx];
+    const close = () => { setDupState({ key: null, pairs: null, noText: 0 }); setDupIdx(0); };
+    const btn = (disabled) => ({ padding: '7px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: disabled ? 'not-allowed' : 'pointer', fontSize: '0.85rem', opacity: disabled ? 0.45 : 1 });
+    const n = g ? g.members.length : 0;
+    const aiKey = (grp, prov) => `${prov}:${grp.key}`;
+    const aiRes = (grp, prov) => dupAi.results[aiKey(grp, prov)];
+    const runAiVerify = async () => {
+      const prov = dupAi.provider;
+      const todo = groups.filter((x) => !aiRes(x, prov)).slice(0, 50);
+      if (todo.length === 0) { setDupAi((d) => ({ ...d, error: 'Bu model için tüm gruplar zaten doğrulandı.' })); return; }
+      const CHUNK = 10; // tek istekte 10 grup: ücretsiz Gemini'nin günlük 20 / dakikalık 5 istek sınırına takılmamak için
+      setDupAi((d) => ({ ...d, running: true, done: 0, total: todo.length, error: '' }));
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      let finished = 0;
+      for (let c = 0; c < todo.length; c += CHUNK) {
+        const chunk = todo.slice(c, c + CHUNK);
+        try {
+          if (c > 0 && prov === 'gemini') await new Promise((r) => setTimeout(r, 13000)); // dakikada 5 istek sınırı
+          const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), 70000);
+          const resp = await fetch('/api/ai-analyze', {
+            signal: ctrl.signal,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({ provider: prov, groups: chunk.map((grp) => ({ key: grp.key, items: grp.members.slice(0, 8).map((m) => ({ id: m.id, text: m.raw, answer: m.ans })) })) }),
+          });
+          clearTimeout(tm);
+          const out = await resp.json().catch(() => ({}));
+          if (!resp.ok) throw new Error(out.error || `Sunucu hatası ${resp.status} (Vercel > Logs'a bakın)`);
+          const add = {};
+          chunk.forEach((grp) => { if (out.results && out.results[grp.key]) add[aiKey(grp, prov)] = { clusters: out.results[grp.key] }; });
+          finished += chunk.length;
+          setDupAi((d) => ({ ...d, done: finished, results: { ...d.results, ...add } }));
+        } catch (err) {
+          setDupAi((d) => ({ ...d, running: false, error: `${finished} grup doğrulandı, sonra durdu: ${err.name === 'AbortError' ? 'cevap 70 sn içinde gelmedi (zaman aşımı)' : err.message}` }));
+          return;
+        }
+      }
+      setDupAi((d) => ({ ...d, running: false }));
+    };
+    const verdictTxt = { ayni: ['AYNI SORU', '#dc2626'], benzer: ['BENZER (aynı bilgi)', '#b45309'], farkli: ['FARKLI', '#16a34a'] };
+    const cols = n <= 4 ? `repeat(${n || 1}, minmax(0, 1fr))` : `repeat(${n}, minmax(340px, 1fr))`;
+    return (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 1200, backgroundColor: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'stretch', justifyContent: 'center', padding: '10px' }}>
+        <div style={{ backgroundColor: '#fff', borderRadius: '12px', width: '100%', maxWidth: '1900px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 16px', borderBottom: '1px solid #e2e8f0', flexWrap: 'wrap' }}>
+            <b style={{ fontSize: '1rem' }}>🔍 Benzer Sorular</b>
+            {g ? (
+              <>
+                <span style={{ fontSize: '0.88rem' }}>Grup <b>{idx + 1} / {groups.length}</b> · <b style={{ color: g.maxSim >= 0.97 ? '#dc2626' : '#b45309' }}>{n} soru</b> birbirine benziyor (en yüksek %{Math.round(g.maxSim * 100)})</span>
+                {new Set(g.members.map((m) => m.ans)).size > 1 && <span style={{ color: '#2563eb', fontSize: '0.82rem' }}>⚠ doğru cevaplar farklı</span>}
+                {g.pairs.some((p) => !p.sameNums) && <span style={{ color: '#2563eb', fontSize: '0.82rem' }}>⚠ sayılar farklı olabilir</span>}
+              </>
+            ) : <span style={{ fontSize: '0.88rem', color: '#16a34a', fontWeight: 'bold' }}>{shown.length === 0 ? `Benzer soru bulunamadı (en az %${dupMin})` : 'Tüm gruplar tamamlandı ✓'}</span>}
+            {dupState.noText > 0 && <span style={{ color: '#b45309', fontSize: '0.78rem' }}>metni kayıtlı olmadığı için taranmayan: {dupState.noText}</span>}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '3px 8px', border: '1px solid #c7d2fe', borderRadius: '8px', backgroundColor: '#eef2ff' }}>
+              <select value={dupAi.provider} disabled={dupAi.running} onChange={(e) => setDupAi((d) => ({ ...d, provider: e.target.value, error: '' }))} style={{ padding: '4px 6px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }}>
+                <option value="gemini">Gemini</option>
+                <option value="claude">Claude</option>
+              </select>
+              <button onClick={runAiVerify} disabled={dupAi.running || groups.length === 0} title="Gruplardaki soruları yapay zekâya gönderip gerçekten tekrar mı diye sordurur (en fazla 50 grup)" style={{ ...btn(dupAi.running || groups.length === 0), backgroundColor: '#4f46e5', color: '#fff', border: 'none', padding: '6px 12px' }}>
+                {dupAi.running ? `⏳ ${dupAi.done} / ${dupAi.total}` : '🤖 Yapay zekâyla doğrula'}
+              </button>
+              <label style={{ fontSize: '0.76rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '3px' }} title="Seçili modelin FARKLI dediği grupları listeden çıkarır">
+                <input type="checkbox" checked={dupAi.hideDifferent} onChange={(e) => { setDupAi((d) => ({ ...d, hideDifferent: e.target.checked })); setDupIdx(0); }} /> Farklı çıkanları gizle
+              </label>
+            </span>
+            <label style={{ fontSize: '0.8rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Eşiği değiştirince liste anında güncellenir">Benzerlik en az %<input type="number" min="40" max="100" value={dupMin} onChange={(e) => { setDupMin(Number(e.target.value) || 85); setDupIdx(0); }} style={{ width: '58px', padding: '5px', borderRadius: '6px', border: '1px solid #cbd5e1' }} /></label>
+            <span style={{ flex: 1 }} />
+            {g && <button disabled={idx === 0} onClick={() => setDupIdx(idx - 1)} style={btn(idx === 0)}>◀ Önceki</button>}
+            {g && <button onClick={() => setDupSkip((prev) => new Set([...prev, g.key]))} title="Bu grubu benzer değil say; listeden çıkar" style={btn(false)}>Benzer değil, geç</button>}
+            {g && <button disabled={idx >= groups.length - 1} onClick={() => setDupIdx(idx + 1)} style={btn(idx >= groups.length - 1)}>Sonraki ▶</button>}
+            <button onClick={close} style={{ ...btn(false), backgroundColor: '#f1f5f9' }}>Kapat ✕</button>
+          </div>
+          {g && (
+            <div style={{ padding: '6px 16px', backgroundColor: '#fffbeb', borderBottom: '1px solid #fde68a', fontSize: '0.78rem', display: 'flex', flexWrap: 'wrap', gap: '4px 16px' }}>
+              {g.pairs.map((p) => (
+                <span key={`${p.a.id}-${p.b.id}`}><b>#{p.a.id}</b> ↔ <b>#{p.b.id}</b> : <b style={{ color: p.sim >= 0.97 ? '#dc2626' : '#b45309' }}>%{Math.round(p.sim * 100)}</b></span>
+              ))}
+            </div>
+          )}
+          {dupAi.error && <div style={{ padding: '6px 16px', backgroundColor: '#fef2f2', color: '#b91c1c', fontSize: '0.8rem', borderBottom: '1px solid #fecaca' }}>⚠ {dupAi.error}</div>}
+          {g && ['gemini', 'claude'].map((prov) => {
+            const r = aiRes(g, prov);
+            if (!r) return null;
+            return (
+              <div key={prov} style={{ padding: '6px 16px', backgroundColor: '#eef2ff', borderBottom: '1px solid #c7d2fe', fontSize: '0.8rem' }}>
+                <b>🤖 {prov === 'claude' ? 'Claude' : 'Gemini'}:</b>
+                {r.clusters.map((c, i) => (
+                  <span key={i} style={{ marginLeft: '14px' }}>
+                    {c.ids.map((id) => `#${id}`).join(', ')}{c.ids.length > 1 ? ' → ' : ' → tek başına: '}
+                    <b style={{ color: (verdictTxt[c.verdict] || verdictTxt.farkli)[1] }}>{(verdictTxt[c.verdict] || verdictTxt.farkli)[0]}</b>
+                    {c.reason && <span style={{ color: '#475569' }}> — {c.reason}</span>}
+                    {c.keep && c.ids.length > 1 && c.verdict !== 'farkli' && <b style={{ color: '#4f46e5' }}> · Tutulması önerilen: #{c.keep}</b>}
+                  </span>
+                ))}
+              </div>
+            );
+          })}
+          <div style={{ flex: 1, overflow: 'auto', padding: '12px 16px', backgroundColor: '#f1f5f9' }}>
+            {g && (
+              <div style={{ display: 'grid', gridTemplateColumns: cols, gap: '12px', alignItems: 'start' }}>
+                {g.members.map((q) => (
+                  <div key={q.id} style={{ backgroundColor: '#fff', borderRadius: '10px', padding: '10px', border: '1px solid #e2e8f0', minWidth: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                      <b style={{ fontSize: '0.9rem' }}>#{q.id} · doğru cevap: {q.ans}</b>
+                      <button onClick={() => deleteDupRow(q)} style={{ fontSize: '0.78rem', padding: '5px 12px', borderRadius: '6px', border: '1px solid #dc2626', backgroundColor: '#fff', color: '#dc2626', cursor: 'pointer', fontWeight: 'bold' }}>🗑 Bunu sil</button>
+                    </div>
+                    <SecurePdfViewer poolId={q.id} type="pool-question" pageNumber={1} version={poolPdfVersions[`pdf_file:${q.id}`]} />
+                    {q.sol && (
+                      <div style={{ marginTop: '10px' }}>
+                        <div style={{ fontSize: '0.78rem', fontWeight: 'bold', color: '#475569', marginBottom: '4px' }}>Çözüm</div>
+                        <SecurePdfViewer poolId={q.id} type="pool-solution" pageNumber={1} version={poolPdfVersions[`solution_pdf_file:${q.id}`]} />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const fetchPoolBrowserGroups = async () => {
+    const counts = new Map();
+    const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir -- sayfalayarak hepsini sayıyoruz
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await supabase
+        .from('question_pool')
+          .select('upload_batch_id, outcome_id')
+        .order('id', { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) { console.error('Havuz grupları okunamadı:', error); break; }
+      (data || []).forEach((r) => {
+        const key = r.upload_batch_id || '__none__';
+        const c = counts.get(key) || { count: 0, tagged: 0 };
+        c.count += 1; if (r.outcome_id != null) c.tagged += 1;
+        counts.set(key, c);
+      });
+      if (!data || data.length < pageSize) break;
+    }
+    setPoolBrowserGroups(Array.from(counts.entries()).map(([key, c]) => ({ key, count: c.count, tagged: c.tagged })));
+  };
+
+  // Silinen soruların PDF dosyalarını depodan da temizler. Veritabanı kaydı
+  // zaten silinmiş olduğu için burada bir hata olursa (ör. depo silme izni
+  // yoksa) işlem yarım kalmaz -- sadece dosyalar depoda artık olarak kalır.
+  // Kaç dosyanın silinemediğini döndürür.
+  const removePoolStorageFiles = async (paths) => {
+    const clean = paths.filter(Boolean);
+    let failed = 0;
+    for (let i = 0; i < clean.length; i += 100) {
+      const chunk = clean.slice(i, i + 100);
+      const { data, error } = await supabase.storage.from('exam-files').remove(chunk);
+      failed += error ? chunk.length : Math.max(0, chunk.length - (data ? data.length : 0));
+    }
+    return failed;
+  };
+
+  // Detay panelindeki "Sil ✕": tek bir soruyu (ve çözüm PDF'ini) havuzdan siler,
+  // ardından listedeki bir sonraki (yoksa bir önceki) soruya geçer.
+  const deletePoolQuestion = async () => {
+    const id = selectedPoolQuestionId;
+    const row = poolBrowserRows.find((r) => r.id === id);
+    if (!row) return;
+    const navBefore = poolNavRef.current || poolBrowserRows.map((r) => r.id);
+    const nIdx = navBefore.indexOf(id);
+    const usedNote = poolDetailUsage.length > 0
+      ? `\n\nDikkat: Bu soru ${poolDetailUsage.length} testte kullanılmış. O testlerdeki kopyalar etkilenmez, ama kullanım kaydı silinir.`
+      : '';
+    if (!window.confirm(`#${id} numaralı soru (ve çözüm PDF'i) havuzdan KALICI olarak silinecek. Bu işlem geri alınamaz.${usedNote}\n\nDevam edilsin mi?`)) return;
+
+    const { error, count } = await supabase.from('question_pool').delete({ count: 'exact' }).eq('id', id);
+    if (error) { alert('Silinemedi: ' + error.message); return; }
+    if (!count) { alert('Soru silinemedi (yetki sorunu olabilir -- question_pool için silme izni gerekiyor).'); return; }
+    await removePoolStorageFiles([row.pdf_file, row.solution_pdf_file]);
+
+    const remaining = poolBrowserRows.filter((r) => r.id !== id);
+    setPoolBrowserRows(remaining);
+    const navAfter = navBefore.filter((x) => x !== id);
+    poolNavRef.current = navAfter;
+    if (navAfter.length === 0) {
+      setSelectedPoolQuestionId(null);
+    } else {
+      openPoolQuestionDetail(navAfter[Math.min(Math.max(nIdx, 0), navAfter.length - 1)]);
+    }
+    fetchPoolBrowserGroups();
+  };
+
+  // Listedeki "Bu Grubu Tümden Sil": seçili gruptaki BÜTÜN soruları siler
+  // (ekranda görünen 500'le sınırlı değil -- grubun gerçek toplamı silinir).
+  const deletePoolGroup = async () => {
+    const key = poolBrowserGroup;
+    if (!key) return;
+    const info = poolBrowserGroups.find((g) => g.key === key);
+    const label = key === '__none__' ? 'İsimsiz Grup' : key;
+    const total = info ? info.count : 0;
+    if (!window.confirm(`"${label}" grubundaki ${total} sorunun TAMAMI (soru ve çözüm PDF dosyalarıyla birlikte) havuzdan KALICI olarak silinecek. Bu işlem geri alınamaz.\n\nDevam edilsin mi?`)) return;
+    if (!window.confirm(`Son onay: "${label}" grubundaki ${total} soru silinsin mi?`)) return;
+
+    setPoolBrowserLoading(true);
+    // Satırlar silinince dosya adları da kaybolacağı için önce toplıyoruz.
+    const paths = [];
+    const pageSize = 1000;
+    for (let from = 0; ; from += pageSize) {
+      let q = supabase.from('question_pool').select('pdf_file, solution_pdf_file').order('id', { ascending: true }).range(from, from + pageSize - 1);
+      q = key === '__none__' ? q.is('upload_batch_id', null) : q.eq('upload_batch_id', key);
+      const { data, error } = await q;
+      if (error) { setPoolBrowserLoading(false); alert('Dosya listesi okunamadı: ' + error.message); return; }
+      (data || []).forEach((r) => { paths.push(r.pdf_file, r.solution_pdf_file); });
+      if (!data || data.length < pageSize) break;
+    }
+
+    let del = supabase.from('question_pool').delete({ count: 'exact' });
+    del = key === '__none__' ? del.is('upload_batch_id', null) : del.eq('upload_batch_id', key);
+    const { error: delErr, count } = await del;
+    if (delErr) { setPoolBrowserLoading(false); alert('Silinemedi: ' + delErr.message); return; }
+    if (!count) { setPoolBrowserLoading(false); alert('Hiçbir soru silinmedi (yetki sorunu olabilir -- question_pool için silme izni gerekiyor).'); return; }
+
+    const failedFiles = await removePoolStorageFiles(paths);
+    setPoolBrowserGroup('');
+    setSelectedPoolQuestionId(null);
+    await fetchPoolBrowserGroups();
+    await fetchPoolBrowserRows({ group: '' });
+    alert(`✓ ${count} soru silindi.` + (failedFiles > 0 ? `\n(${failedFiles} PDF dosyası depodan silinemedi -- veritabanı kayıtları silindiği için sorun değil, sadece depoda artık dosya kaldı.)` : ''));
+  };
+
+  const handlePoolDetailDersChange = (dersName) => {
+    const ders = lcByKey(dersName);
+    updatePoolDetailField({ lesson_category_id: ders ? ders.id : null, topic_id: null, outcome_id: null });
+  };
+  const handlePoolDetailKonuChange = (dersId, konuName) => {
+    const konu = topics.find((t) => t.name === konuName && t.lesson_category_id === dersId);
+    updatePoolDetailField({ topic_id: konu ? konu.id : null, outcome_id: null });
+  };
+  const handlePoolDetailKazanimChange = (topicId, kazanimName) => {
+    const kazanim = learningOutcomes.find((lo) => lo.name === kazanimName && lo.topic_id === topicId);
+    if (!kazanim) return;
+    updatePoolDetailField({ outcome_id: kazanim.id });
+  };
+  const handlePoolDetailSetChange = (row, code) => {
+    const clean = (code || '').trim();
+    updatePoolDetailField({ set_key: clean ? `${row.upload_batch_id || ''}::${clean}` : null });
+  };
+  const handlePoolDetailCevapChange = (cevap) => {
+    updatePoolDetailField({ correct_answer: cevap });
+  };
+
+  // Soru/Çözüm PDF'ini DEĞİŞTİRME -- İçerik Ayarları ekranındaki
+  // handleExamPdfUploadForExam ile aynı desen: yeni dosyayı storage'a
+  // yükler, question_pool satırındaki dosya adını günceller. Eski dosya
+  // storage'da kalır (silinmez) -- kazara yanlış dosya seçilirse diye
+  // güvenli taraf.
+  const handlePoolDetailPdfReplace = async (field, e) => {
+    const file = e.target.files[0];
+    if (!file || !selectedPoolQuestionId) return;
+    setPoolDetailUploading(true);
+    const ext = file.name.split('.').pop();
+    const prefix = field === 'solution_pdf_file' ? 'pool_sol' : 'pool';
+    const storageName = `${prefix}_${Math.random().toString(36).substring(2)}_${Date.now()}.${ext}`;
+    const { error: upErr } = await supabase.storage.from('exam-files').upload(storageName, file);
+    setPoolDetailUploading(false);
+    if (upErr) {
+      alert('PDF yüklenemedi: ' + upErr.message);
+      return;
+    }
+    await updatePoolDetailField({ [field]: storageName });
+    setPoolPdfVersions((prev) => ({ ...prev, [`${field}:${selectedPoolQuestionId}`]: Date.now() }));
+  };
+
+
+
+  // ÖNEMLİ: Bir sorunun kazanım haritası girişi (topicMap[soruNo]) kaydedildiği
+  // an "konu" metnini olduğu gibi kopyalar. Kategori Yönetimi'nden o kazanımın
+  // bağlı olduğu Konu daha sonra değiştirilirse, bu eski metin KENDİLİĞİNDEN
+  // güncellenmez. Bu fonksiyon, mevcut kazanım adını (entry.kazanim) master
+  // learningOutcomes listesinde arayıp, bulursa Konu'yu oradan (o kazanımın
+  // GÜNCEL topic_id'sinden) canlı olarak döndürür -- böylece Kategori
+  // Yönetimi'nde bir kazanımın konusunu değiştirmek, o kazanımı kullanan tüm
+  // sorularda otomatik yansır, tek tek soru düzenlemeye gerek kalmaz. Eşleşen
+  // bir kazanım bulunamazsa (silinmiş/yeniden adlandırılmışsa) eski kayıtlı
+  // metne geri döner.
+  // Bir topicMap satırının (entry: {ders, konu, kazanim}) GÜNCEL master
+  // kayıtlardaki gerçek ID'lerini çözer. Kazanım adı üzerinden
+  // learningOutcomes'ta arayıp, oradan lessonCategoryId/topicId/outcomeId'yi
+  // döndürür -- bulunamazsa (silinmiş/hiç eşleşmemiş) null'lar döner.
+  // Hem bu sınavın kendi raporunu hem de ÖNERİ MOTORUNU (findKonuTesti,
+  // findOnerilenDeneme) aynı ID'lere göre çalıştırmak için tek, ortak
+  // bir yerden çözülüyor -- böylece "aynı kazanım farklı yazılmış" gibi
+  // metin bazlı uyuşmazlıklar öneri motorunu etkilemiyor.
+  const resolveEntryIds = (entry) => {
+    if (!entry || !entry.kazanim) return { lessonCategoryId: null, topicId: null, outcomeId: null };
+    const dersList = lessonCategories.filter((lc) => lc.name === entry.ders);
+    const ders = lcForEntry(entry.ders, entry.konu);
+    const topicNameOf = (lo) => { const tp = topics.find((t) => t.id === lo.topic_id); return tp ? tp.name : ''; };
+    const inDers = (lo) => dersList.length === 0 || dersList.some((d) => d.id === lo.lesson_category_id);
+    const matchingOutcome = learningOutcomes.find((lo) => lo.name === entry.kazanim && inDers(lo) && (!entry.konu || topicNameOf(lo) === entry.konu))
+      || learningOutcomes.find((lo) => lo.name === entry.kazanim && inDers(lo));
+    if (!matchingOutcome) return { lessonCategoryId: ders ? ders.id : null, topicId: null, outcomeId: null };
+    return {
+      lessonCategoryId: matchingOutcome.lesson_category_id,
+      topicId: matchingOutcome.topic_id,
+      outcomeId: matchingOutcome.id
+    };
+  };
+
+  const resolveLiveKonuForEntry = (entry) => {
+    if (!entry) return '';
+    const { topicId } = resolveEntryIds(entry);
+    if (topicId) {
+      const liveTopic = topics.find((t) => t.id === topicId);
+      if (liveTopic) return liveTopic.name;
+    }
+    return entry.konu || '';
+  };
+
+  // NOT: Kategori Yönetimi'ndeki "Konu Değiştir" dropdown'u kaldırıldı --
+  // Konu artık sadece kazanım oluşturulurken seçiliyor, sonradan
+  // değiştirilmiyor (bkz. kullanıcı talebi). resolveLiveKonuForEntry hâlâ
+  // kullanışlı: bir Konu ya da Kazanım YENİDEN ADLANDIRILDIĞINDA, o adı
+  // kullanan sorularda güncel adı otomatik gösterir.
+
+  // --- Havuzdan Oluştur ---
+  // Diziden rastgele (tekrarsız) n eleman seçer -- kaynak diziyi bozmaz.
+  const sampleN = (arr, n) => {
+    const copy = [...arr];
+    const out = [];
+    while (out.length < n && copy.length > 0) {
+      const i = Math.floor(Math.random() * copy.length);
+      out.push(copy.splice(i, 1)[0]);
+    }
+    return out;
+  };
+
+  // Bir kazanıma ait, excludeIds listesinde OLMAYAN havuz sorularını getirir.
+  // includeUsed false ise sadece hiç kullanılmamış (used_count=0) sorular aday olur.
+  // Birbirine bağlı sorular (aynı set_key) tek birim sayılır: ya hepsi gelir
+  // ya hiçbiri, ve testte art arda dizilir. Tek soruların set_key'i boştur.
+  // n soruya TAM ulaşmak için sığmayan grup atlanıp sıradaki birim denenir.
+  const pickUnits = (arr, n) => {
+    const sets = new Map();
+    const units = [];
+    arr.forEach((q) => {
+      if (!q.set_key) { units.push([q]); return; }
+      if (!sets.has(q.set_key)) { const u = []; sets.set(q.set_key, u); units.push(u); }
+      sets.get(q.set_key).push(q);
+    });
+    units.forEach((u) => u.sort((a, b) => (a.id > b.id ? 1 : a.id < b.id ? -1 : 0)));
+    for (let i = units.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [units[i], units[j]] = [units[j], units[i]]; }
+    const out = [];
+    for (const u of units) {
+      if (out.length === n) break;
+      if (out.length + u.length <= n) out.push(...u);
+    }
+    return out;
+  };
+  // Ortak havuz: ders + konu + kazanım ADI aynı olan, ama başka sınav kategorisinde (KPSS / MEB-AGS / yarın eklenecek ABC...)
+  // tanımlı kazanımların numaraları. Böylece sorular bir kez etiketlenir; yeni bir sınav kategorisi açılınca
+  // (adlar aynıysa) sorulara geri dönüp yeniden etiketlemek gerekmez.
+  const normName = (v) => String(v == null ? '' : v).toLocaleLowerCase('tr').replace(/\s+/g, ' ').trim();
+  const siblingOutcomeIds = (outcomeId) => {
+    const lo = learningOutcomes.find((x) => String(x.id) === String(outcomeId));
+    const tp = lo && topics.find((t) => String(t.id) === String(lo.topic_id));
+    const dr = tp && lessonCategories.find((l) => String(l.id) === String(tp.lesson_category_id));
+    if (!lo || !tp || !dr) return [outcomeId];
+    const ids = learningOutcomes.filter((x) => {
+      if (normName(x.name) !== normName(lo.name)) return false;
+      const t2 = topics.find((t) => String(t.id) === String(x.topic_id));
+      if (!t2 || normName(t2.name) !== normName(tp.name)) return false;
+      const d2 = lessonCategories.find((l) => String(l.id) === String(t2.lesson_category_id));
+      return !!d2 && normName(d2.name) === normName(dr.name);
+    }).map((x) => x.id);
+    if (!ids.some((i) => String(i) === String(outcomeId))) ids.push(outcomeId);
+    return ids;
+  };
+  const fetchPoolCandidatesForOutcome = async (outcomeId, excludeIds, includeUsed, shared = true) => {
+    const all = [];
+    const pageSize = 1000; // Supabase tek istekte en fazla 1000 satır verir
+    for (let from = 0; ; from += pageSize) {
+      // Ana kazanımı bu olan sorular + "ek etiket" olarak bu kazanımı da taşıyan sorular (extra_outcome_ids jsonb dizisi).
+      const build = (withExtra) => {
+        let q = supabase.from('question_pool').select('*').order('id', { ascending: true }).range(from, from + pageSize - 1);
+        const ids = shared ? siblingOutcomeIds(outcomeId) : [outcomeId];
+        const lit = (i) => (typeof i === 'number' ? String(i) : `"${i}"`);
+        q = withExtra
+          ? q.or([`outcome_id.in.(${ids.map(lit).join(',')})`, ...ids.map((i) => `extra_outcome_ids.cs.${JSON.stringify([i])}`)].join(','))
+          : q.in('outcome_id', ids);
+        if (!includeUsed) q = q.eq('used_count', 0);
+        return q;
+      };
+      let { data, error } = await build(true);
+      if (error && /extra_outcome_ids/.test(error.message || '')) ({ data, error } = await build(false)); // SQL henüz çalıştırılmadıysa eski davranış
+      if (error) throw new Error(error.message);
+      all.push(...(data || []));
+      if (!data || data.length < pageSize) break;
+    }
+    const excludeSet = new Set(excludeIds);
+    return all.filter((r) => !excludeSet.has(r.id));
+  };
+
+  // Bir havuz sorusunun (ya da çözümünün) PDF baytlarını, get-pdf-url.js'teki
+  // admin-only "SORU HAVUZU" dalından imzalı link alıp indirerek getirir.
+  const fetchPoolPdfBytes = async (poolId, type) => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    const resp = await fetch('/api/get-pdf-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ poolId, type }),
+    });
+    const result = await resp.json();
+    if (!resp.ok) throw new Error(result.error || 'PDF alınamadı');
+    const pdfResp = await fetch(result.url);
+    return await pdfResp.arrayBuffer();
+  };
+
+  // Tek sayfalık PDF baytlarını sırasıyla TEK PDF'te birleştirir. Listede
+  // `null` varsa (ör. sorunun çözümü yok) o sırada BOŞ sayfa eklenir --
+  // çözüm PDF'indeki sayfa numarası soru PDF'iyle hizalı kalsın diye.
+  const mergePdfBytesList = async (bytesList) => {
+    const merged = await PDFDocument.create();
+    for (const bytes of bytesList) {
+      if (bytes === null) {
+        merged.addPage();
+        continue;
+      }
+      const srcDoc = await PDFDocument.load(bytes);
+      const pages = await merged.copyPages(srcDoc, srcDoc.getPageIndices());
+      pages.forEach((pg) => merged.addPage(pg));
+    }
+    return await merged.save();
+  };
+
+  // Seçilen havuz sorularından (picked) GERÇEK bir test/deneme sınavı oluşturur:
+  // PDF'leri birleştirir, exams kaydını açar, cevap anahtarını (exam_answer_keys)
+  // ve kazanım haritasını (topic_map) sorulardan otomatik doldurur,
+  // question_pool_usage kaydı düşürüp used_count'ları artırır.
+  const assemblePoolExamRow = async ({ picked, examName, parentExam, sortOrder, examType, duration, batchId, sections = [] }) => {
+    const questionBytesList = [];
+    for (const q of picked) {
+      questionBytesList.push(await fetchPoolPdfBytes(q.id, 'pool-question'));
+    }
+    const mergedQuestionsPdf = await mergePdfBytesList(questionBytesList);
+    const mergedQuestionsName = `pool_gen_${Math.random().toString(36).substring(2)}_${Date.now()}.pdf`;
+    const { error: qUpErr } = await supabase.storage.from('exam-files').upload(mergedQuestionsName, new Blob([mergedQuestionsPdf], { type: 'application/pdf' }));
+    if (qUpErr) throw new Error("Birleştirilmiş soru PDF'i yüklenemedi: " + qUpErr.message);
+
+    let mergedSolutionName = null;
+    if (picked.some((q) => q.solution_pdf_file)) {
+      const solutionBytesList = [];
+      for (const q of picked) {
+        solutionBytesList.push(q.solution_pdf_file ? await fetchPoolPdfBytes(q.id, 'pool-solution') : null);
+      }
+      const mergedSolutionsPdf = await mergePdfBytesList(solutionBytesList);
+      mergedSolutionName = `pool_gen_sol_${Math.random().toString(36).substring(2)}_${Date.now()}.pdf`;
+      const { error: sUpErr } = await supabase.storage.from('exam-files').upload(mergedSolutionName, new Blob([mergedSolutionsPdf], { type: 'application/pdf' }));
+      if (sUpErr) throw new Error("Birleştirilmiş çözüm PDF'i yüklenemedi: " + sUpErr.message);
+    }
+
+    const topicMap = {};
+    const answerKey = {};
+    picked.forEach((q, idx) => {
+      const page = idx + 1;
+      const ders = lessonCategories.find((lc) => lc.id === q.lesson_category_id);
+      const konu = topics.find((t) => t.id === q.topic_id);
+      const kazanim = learningOutcomes.find((lo) => lo.id === q.outcome_id);
+      topicMap[page] = { ders: ders?.name || '', konu: konu?.name || '', kazanim: kazanim?.name || '' };
+      answerKey[page] = q.correct_answer;
+    });
+
+    // Alt testler ayrı satılmaz (toplu yüklemeyle aynı): fiyat 0, paket üst testten satılır.
+    const computedPrice = 0;
+    const { data, error } = await supabase.from('exams').insert([{
+      name: examName,
+      parent_id: parentExam.id,
+      is_published: true,
+      exam_type: examType,
+      category_exam_type: parentExam.categoryExamType || '',
+      category_lesson: '',
+      duration: duration,
+      price: computedPrice,
+      sections,
+      num_pages: picked.length,
+      sort_order: sortOrder,
+      pdf_file: mergedQuestionsName,
+      solution_pdf_file: mergedSolutionName,
+      topic_map: topicMap,
+    }]).select();
+    if (error) throw new Error('Sınav kaydı oluşturulamadı: ' + error.message);
+    const newExamRow = data[0];
+
+    const { error: keyErr } = await supabase.from('exam_answer_keys').upsert([{ exam_id: newExamRow.id, answer_key: answerKey }], { onConflict: 'exam_id' });
+    if (keyErr) throw new Error('Cevap anahtarı kaydedilemedi: ' + keyErr.message);
+
+    const usageRows = picked.map((q) => ({ pool_question_id: q.id, exam_id: newExamRow.id, batch_id: batchId }));
+    const { error: usageErr } = await supabase.from('question_pool_usage').insert(usageRows);
+    if (usageErr) console.error('question_pool_usage kaydedilemedi (sınav yine de oluşturuldu):', usageErr);
+
+    for (const q of picked) {
+      await supabase.from('question_pool').update({ used_count: (q.used_count || 0) + 1 }).eq('id', q.id);
+    }
+
+    return formatExamData(newExamRow);
+  };
+
+  // MOD 1 -- "Test Üret": aynı kazanımdan, soru TEKRARI OLMADAN birden fazla test
+  // (ör. "Hücre ve Metabolizma'dan 16'şar sorulu 10 test").
+  const runGeneratePoolTests = async () => {
+    const parentExam = exams.find((e) => e.id === poolGenParentId);
+    const ders = lcByKey(poolGenTestDers);
+    const konu = ders && topics.find((t) => t.name === poolGenTestKonu && t.lesson_category_id === ders.id);
+    const kazanim = konu && learningOutcomes.find((lo) => lo.name === poolGenTestKazanim && lo.topic_id === konu.id);
+    if (!parentExam || !ders || !konu || !kazanim) {
+      alert('Ders, Konu ve Kazanım seçin.');
+      return;
+    }
+    const testCount = Number(poolGenTestCount);
+    const testSize = Number(poolGenTestSize);
+    if (!testCount || testCount < 1 || !testSize || testSize < 1) {
+      alert('Test sayısı ve soru sayısı için geçerli bir değer girin.');
+      return;
+    }
+    const needed = testCount * testSize;
+
+    setPoolGenLoading(true);
+    const createdExams = [];
+    try {
+      const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, [], poolGenIncludeUsed, true);
+      if (candidates.length < needed) {
+        alert(`Yetersiz soru: "${kazanim.name}" kazanımında ${candidates.length} uygun soru var, ama ${testCount} test × ${testSize} soru = ${needed} soru gerekiyor.` + (!poolGenIncludeUsed ? '\n\n"Kullanılmışları da dahil et" seçeneğini işaretlemeyi deneyebilirsiniz.' : ''));
+        setPoolGenLoading(false);
+        return;
+      }
+
+      setPoolGenProgress({ current: 0, total: testCount });
+      const batchId = crypto.randomUUID();
+      const pool = [...candidates];
+      const existingChildren = exams.filter((ex) => ex.parentId === parentExam.id);
+      let nextOrder = existingChildren.length > 0 ? Math.max(...existingChildren.map((ex) => ex.sortOrder || 0)) + 1 : 0;
+
+      for (let i = 0; i < testCount; i++) {
+        setPoolGenProgress({ current: i + 1, total: testCount });
+        const picked = pickUnits(pool, testSize);
+        if (picked.length < testSize) throw new Error(`${i + 1}. test için ${testSize} soruya tamamlanamadı (${picked.length} bulunabildi). Bağlı soru grupları bölünemediği için kalan sorular bu sayıya tam oturmuyor -- soru sayısını değiştirin veya "kullanılmışları da dahil et"i deneyin.`);
+        picked.forEach((p) => { const idx = pool.findIndex((x) => x.id === p.id); if (idx !== -1) pool.splice(idx, 1); });
+        const examName = `${poolGenNamePrefix.trim() || kazanim.name} ${i + 1}`;
+        const tagged = picked.map((q) => ({ ...q, lesson_category_id: ders.id, topic_id: konu.id, outcome_id: kazanim.id })); // ek etiketle gelen soru, üretilen testte İSTENEN kazanımla eşlensin
+        const newExam = await assemblePoolExamRow({ picked: tagged, examName, parentExam, sortOrder: nextOrder, examType: 'test', duration: 0, batchId });
+        nextOrder++;
+        createdExams.push(newExam);
+      }
+      setExams((prev) => [...prev, ...createdExams]);
+      alert(`✓ ${createdExams.length} test oluşturuldu ve "${parentExam.name}" paketine eklendi.`);
+      setShowPoolGenerate(false);
+    } catch (err) {
+      alert('Oluşturulurken hata: ' + err.message + (createdExams.length > 0 ? `\n\n${createdExams.length} test başarıyla oluşturuldu, bunlar listede kaldı -- işlem burada durdu.` : ''));
+      if (createdExams.length > 0) setExams((prev) => [...prev, ...createdExams]);
+    }
+    setPoolGenLoading(false);
+  };
+
+  // MOD 2 -- "Deneme Üret": birden fazla ders/konu/kazanımdan TEK bir karma deneme
+  // (ör. "Biyoloji'den 20, Kimya'dan 15, Fizik'ten 15").
+  const runGeneratePoolDeneme = async () => {
+    const parentExam = exams.find((e) => e.id === poolGenParentId);
+    if (!parentExam) { alert('Üst paket bulunamadı.'); return; }
+    const rows = poolGenDenemeRows.filter((r) => r.ders && r.konu && r.kazanim && Number(r.count) > 0);
+    if (rows.length === 0) { alert('En az bir satır (Ders/Konu/Kazanım + soru sayısı) doldurun.'); return; }
+    if (!poolGenNamePrefix.trim()) { alert('Deneme adı girin.'); return; }
+
+    setPoolGenLoading(true);
+    setPoolGenProgress({ current: 0, total: rows.length });
+    const allPicked = [];
+    const pickedCounts = [];
+    try {
+      for (let i = 0; i < rows.length; i++) {
+        setPoolGenProgress({ current: i + 1, total: rows.length });
+        const r = rows[i];
+        const ders = lcByKey(r.ders);
+        const konu = ders && topics.find((t) => t.name === r.konu && t.lesson_category_id === ders.id);
+        const kazanim = konu && learningOutcomes.find((lo) => lo.name === r.kazanim && lo.topic_id === konu.id);
+        if (!ders || !konu || !kazanim) throw new Error(`Satır ${i + 1}: Ders/Konu/Kazanım eşleşmedi.`);
+        const candidates = await fetchPoolCandidatesForOutcome(kazanim.id, allPicked.map((p) => p.id), poolGenIncludeUsed, true);
+        const need = Number(r.count);
+        if (candidates.length < need) throw new Error(`Satır ${i + 1} ("${kazanim.name}"): ${candidates.length} uygun soru var, ${need} gerekiyor.`);
+        const rowPicked = pickUnits(candidates, need);
+        if (rowPicked.length < need) throw new Error(`Satır ${i + 1} ("${kazanim.name}"): ${need} soruya tam oturan bir seçim yapılamadı (bağlı soru grupları bölünemez). Soru sayısını grup büyüklüğüne uygun girin.`);
+        pickedCounts.push(rowPicked.length);
+        allPicked.push(...rowPicked.map((q) => ({ ...q, lesson_category_id: ders.id, topic_id: konu.id, outcome_id: kazanim.id })));
+      }
+      const existingChildren = exams.filter((ex) => ex.parentId === parentExam.id);
+      const nextOrder = existingChildren.length > 0 ? Math.max(...existingChildren.map((ex) => ex.sortOrder || 0)) + 1 : 0;
+      const batchId = crypto.randomUUID();
+      // Bölümler: satırlardaki "Bölüm" adından; boş bırakılan satır bir önceki bölüme dahil olur.
+      let sections = [];
+      if (rows.some((r) => (r.bolum || '').trim())) {
+        let pos = 0; let cur = '';
+        rows.forEach((r, i) => {
+          const nm = (r.bolum || '').trim() || cur || `Bölüm ${i + 1}`;
+          cur = nm;
+          const cnt = pickedCounts[i];
+          const last = sections[sections.length - 1];
+          if (last && last.name === nm) last.end = pos + cnt;
+          else sections.push({ name: nm, start: pos + 1, end: pos + cnt });
+          pos += cnt;
+        });
+      }
+      const newExam = await assemblePoolExamRow({ picked: allPicked, examName: poolGenNamePrefix.trim(), parentExam, sortOrder: nextOrder, examType: 'deneme', sections, duration: Number(poolGenDuration) || 0, batchId });
+      setExams((prev) => [...prev, newExam]);
+      alert(`✓ "${poolGenNamePrefix}" denemesi (${allPicked.length} soru) oluşturuldu ve "${parentExam.name}" paketine eklendi.`);
+      setShowPoolGenerate(false);
+    } catch (err) {
+      alert('Oluşturulurken hata: ' + err.message);
+    }
+    setPoolGenLoading(false);
+  };
+
+  // Pakete test eklemek artık yalnızca havuzdan yapılır: "Havuzdan Oluştur" penceresini bu paket için açar.
+  const openPoolGenerate = (parentId) => {
+    setPoolGenParentId(parentId);
+    setPoolGenMode('test');
+    setPoolGenNamePrefix('');
+    setPoolGenTestDers(''); setPoolGenTestKonu(''); setPoolGenTestKazanim('');
+    setPoolGenTestCount(10); setPoolGenTestSize(16);
+    setPoolGenDenemeRows([{ ders: '', konu: '', kazanim: '', count: 10, bolum: '' }]);
+    setPoolGenIncludeUsed(false);
+    setShowPoolGenerate(true);
+  };
+
+  const togglePublish = async (examId) => {
+    const exam = exams.find(e => e.id === examId);
+    if (exam) {
+      await updateExamInDb(examId, { isPublished: !exam.isPublished });
+    }
+  };
+
+  const deleteExam = async (examId) => {
+    if (window.confirm("Bu içeriği silmek istediğinize emin misiniz?")) {
+      await supabase.from('exams').delete().eq('parent_id', examId);
+      const { error } = await supabase.from('exams').delete().eq('id', examId);
+
+      if (error) {
+        console.error("Silme hatası:", error);
+      } else {
+        setExams(prev => prev.filter(e => e.id !== examId && e.parentId !== examId));
+        if (activeAdminExamId === examId) {
+          setActiveAdminExamId(null);
+          setActiveSubExamId(null);
+        }
+      }
+    }
+  };
+
+  // Giriş yapmadan da doğrudan başlatılabilecek "ücretsiz deneme" sınav(lar)ı.
+  // Pazarlama/sosyal medya linkleriyle paylaşılan ilk deneyimde üyelik
+  // sürtünmesini azaltmak için SADECE bu ID'ler için üyelik zorunluluğu
+  // atlanıyor -- diğer tüm sınavlar eskisi gibi giriş istemeye devam eder.
+  // İleride bu listeye başka sınav ID'leri eklenip çıkarılabilir.
+  const FREE_TRIAL_EXAM_IDS = ['81'];
+
+  // ÖNEMLİ: Bu kontrol TEK bir yerden yapılıyor ve hem sınavın KENDİ id'sine
+  // hem de (varsa) ÜST PAKETİNİN id'sine bakıyor. Sebep: aynı "ücretsiz
+  // deneme sınavını login'siz başlat" izni birden fazla yerde (startExam,
+  // paket içindeki alt-test butonu, tekli/standalone test butonu) AYRI AYRI
+  // kontrol ediliyordu -- id'lerden biri bu merkezi fonksiyonu kullanmayı
+  // unutursa (ya da sınav yapısı standalone'dan pakete/tam tersine
+  // değişirse) sessizce eski "giriş yap" davranışına geri dönebiliyordu.
+  // Artık HER YERDE bu tek fonksiyon çağrılıyor.
+  const isFreeTrialExam = (exam) => {
+    if (!exam) return false;
+    if (FREE_TRIAL_EXAM_IDS.includes(String(exam.id))) return true;
+    if (exam.parentId && FREE_TRIAL_EXAM_IDS.includes(String(exam.parentId))) return true;
+    return false;
+  };
+
+  const startExam = (exam) => {
+    if (!user && !isFreeTrialExam(exam)) {
+      alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
+      setAuthMode('login');
+      setShowAuthModal(true);
+      return;
+    }
+
+    const isFree = !exam.price || exam.price <= 0;
+    const isPurchased = studentPurchases[exam.id] || (exam.parentId && studentPurchases[exam.parentId]);
+
+    if (!isFree && !isPurchased) {
+      handleIyzicoPayment(exam);
+      return;
+    }
+
+    // ÖNEMLİ: sınav şu an ücretsiz (isFree) olsa bile, öğrencinin buraya
+    // eriştiğini KALICI bir student_purchases kaydına dönüştürüyoruz.
+    // Sebep: bu satır olmadan, ücretsizken çözülen bir sınav daha sonra
+    // admin panelinden ücretli hale getirilirse, öğrencinin hiçbir satın
+    // alma kaydı olmadığı için (ücretsizken buna hiç ihtiyaç yoktu) bir
+    // dahaki girişinde "erişiminiz yok" duvarına çarpıyordu -- daha önce
+    // gerçekten çözmüş olmasına rağmen. Aynı güvenli sunucu uç noktasını
+    // (initializePayment) kullanıyoruz; sunucu güncel fiyatı (şu an 0)
+    // hesaplayıp bakiyeden hiçbir şey düşmeden "freeCheckout" olarak
+    // kaydı oluşturuyor -- handleIyzicoPayment'taki freeCheckout dalıyla
+    // birebir aynı mekanizma. Kullanıcıyı BEKLETMİYORUZ: arka planda
+    // (fire-and-forget) çalışır, sınava giriş anında hiçbir gecikme olmaz.
+    if (isFree && !isPurchased) {
+      registerFreeExamAccess(exam);
+    }
+
+    // Yarım kalmış (bitirilmemiş) bir oturum varsa cevapları, süreyi ve sayfayı oradan geri yükle.
+    const existingRes = studentResultsMap[exam.id];
+    let hasUnfinishedSession = existingRes && !existingRes.is_finished && existingRes.answers && Object.keys(existingRes.answers).length > 0;
+
+    // Giriş yapmamış ziyaretçi (ücretsiz deneme sınavı): sunucuda hiç
+    // kayıt olamayacağı için, bu tarayıcıda daha önce localStorage'a
+    // yazılmış bir ilerleme var mı diye bakıyoruz (bkz. saveProgress).
+    let guestLocalProgress = null;
+    if (!user) {
+      try {
+        const raw = localStorage.getItem(`yt_guest_progress_${exam.id}`);
+        if (raw) {
+          guestLocalProgress = JSON.parse(raw);
+          if (guestLocalProgress?.answers && Object.keys(guestLocalProgress.answers).length > 0) {
+            hasUnfinishedSession = true;
+          }
+        }
+      } catch (e) {
+        // localStorage okunamadıysa sıfırdan başlanır, sorun değil.
+      }
+    }
+
+    setActiveStudentExamId(exam.id);
+    setInspectingExamId(null);
+    setIsExamFinished(false);
+    setShowResults(false);
+    setViewingSolutionQ(false);
+
+    if (hasUnfinishedSession) {
+      // Daha önce başlanmış bir oturuma dönüyor, süre kaldığı yerden akmaya devam etsin.
+      const restoreFrom = existingRes || guestLocalProgress;
+      setIsPaused(false);
+      setExamStarted(true);
+      setStudentAnswers(restoreFrom.answers || {});
+      setStudentCurrentPage(restoreFrom.currentPage || 1);
+      if (exam.examType === 'deneme') {
+        setTimeLeft(restoreFrom.timeLeft != null ? restoreFrom.timeLeft : exam.duration * 60);
+      } else {
+        setTimeLeft(restoreFrom.timeLeft || 0);
+      }
+    } else {
+      // Sıfırdan başlıyor: soru ekranı gelsin ama öğrenci "Başla"ya basana kadar süre işlemesin.
+      setIsPaused(true);
+      setExamStarted(false);
+      setStudentAnswers({});
+      setStudentCurrentPage(1);
+      setTimeLeft(exam.examType === 'deneme' ? exam.duration * 60 : 0);
+    }
+  };
+
+  // Ücretsiz bir sınava giren öğrenci için sunucuda KALICI bir satın alma
+  // kaydı oluşturur (bkz. startExam içindeki açıklama). Sessizce çalışır --
+  // hata olursa öğrencinin sınava girişini engellemez, sadece konsola
+  // yazar (bu turdaki erişimi zaten isFree kontrolü karşılıyor; burada
+  // amaç yalnızca GELECEKTEKİ erişimi güvenceye almak).
+  const registerFreeExamAccess = async (exam) => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (!token) return;
+      initializePayment(
+        { examIds: [exam.id], items: [{ id: exam.id }] },
+        token,
+        (err, result) => {
+          if (err) {
+            console.error('Ücretsiz erişim kaydı oluşturulamadı:', err);
+            return;
+          }
+          if (result && result.freeCheckout) {
+            setStudentPurchases(prev => ({ ...prev, [exam.id]: true }));
+            if (typeof result.newBalance === 'number') setStudentBalance(result.newBalance);
+          }
+        }
+      );
+    } catch (err) {
+      console.error('Ücretsiz erişim kaydı oluşturulamadı:', err);
+    }
+  };
+
+  // Fatura bilgisinin TAM (dört alan da dolu) olup olmadığını kontrol eder.
+  const hasCompleteBillingInfo = () => {
+    return !!(myBillingInfo && myBillingInfo.full_name && myBillingInfo.tc_kimlik_no && myBillingInfo.invoice_email && myBillingInfo.address);
+  };
+
+  const handleIyzicoPayment = async (exam) => {
+    if (!user) {
+      alert("Ödeme yapabilmek ve sınava katılabilmek için lütfen giriş yapın.");
+      setAuthMode('login');
+      setShowAuthModal(true);
+      return;
+    }
+    // ÖDEME ÖNCESİ ZORUNLU FATURA ADIMI: fatura bilgisi eksikse, ödemeyi
+    // burada durdurup önce fatura formunu açıyoruz. Form kaydedilince
+    // proceedIyzicoPayment aşağıda otomatik devam ettirilir.
+    if (!hasCompleteBillingInfo()) {
+      setPendingPaymentAction({ type: 'single', exam });
+      setShowBillingGateModal(true);
+      return;
+    }
+    proceedIyzicoPayment(exam);
+  };
+
+  const proceedIyzicoPayment = async (exam) => {
+    // Not: Gerçek tutar her zaman sunucuda hesaplanır; burada sadece
+    // onay mesajını daha bilgilendirici göstermek için varolan bakiyeyi
+    // (studentBalance) kullanıyoruz.
+    const estimatedApplied = Math.min(studentBalance || 0, exam.price);
+    const estimatedPayable = exam.price - estimatedApplied;
+    const confirmMsg = estimatedApplied > 0
+      ? `"${exam.name}" isimli sınav ücretli (₺${exam.price}). ₺${estimatedApplied} bakiyenizden kullanılacak, kalan ₺${estimatedPayable} için iyzico ödeme formu açılacaktır. Onaylıyor musunuz?`
+      : `"${exam.name}" isimli sınav ücretli (₺${exam.price}). İyzico ödeme formu açılacaktır. Onaylıyor musunuz?`;
+    const confirmed = window.confirm(confirmMsg);
+    if (!confirmed) return;
+
+    // Not: price/email artık sunucuda (Authorization token'ı ve veritabanı
+    // üzerinden) doğrulanıyor, burada gönderilenler sadece referans amaçlı.
+    const paymentData = {
+      examIds: [exam.id],
+      items: [{ id: exam.id }]
+    };
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if (!token) {
+      alert("Oturumunuz bulunamadı, lütfen tekrar giriş yapın.");
+      return;
+    }
+
+    initializePayment(paymentData, token, (err, result) => {
+      if (err) {
+        console.error("Ödeme hatası:", err);
+        alert("Ödeme başlatılırken bir hata oluştu.");
+        return;
+      }
+
+      // Toplam tutar tamamen hediye bakiyeden karşılandıysa iyzico'ya hiç
+      // gidilmez -- içerik sunucu tarafında zaten tanımlandı, burada sadece
+      // arayüzü güncelliyoruz.
+      if (result.freeCheckout) {
+        setStudentPurchases(prev => ({ ...prev, [exam.id]: true }));
+        setStudentBalance(result.newBalance ?? 0);
+        trackPixelEvent('Purchase', {
+          content_ids: [exam.id],
+          content_name: exam.name,
+          content_type: 'product',
+          value: exam.price || 0,
+          currency: 'TRY'
+        });
+        alert(`🎉 Ödeme bakiyenizden karşılandı! ₺${result.balanceApplied} bakiye kullanıldı. İçerik hesabınıza tanımlandı.`);
+        return;
+      }
+
+      if (result.status === 'success' && result.paymentPageUrl) {
+        // Artık gömülü widget yerine iyzico'nun kendi barındırdığı ödeme
+        // sayfasına tam sayfa yönlendirme yapıyoruz -- iframe/overlay
+        // karmaşasına gerek kalmadı.
+        // Pixel'in "Purchase" olayını, ödeme GERÇEKTEN onaylanıp siteye geri
+        // dönüldüğünde (?payment=success) ateşleyebilmek için, o ana kadar
+        // hayatta kalması gereken bilgiyi burada geçici olarak saklıyoruz.
+        try {
+          sessionStorage.setItem('yt_pending_pixel_purchase', JSON.stringify({
+            content_ids: [exam.id],
+            content_name: exam.name,
+            value: estimatedPayable,
+            currency: 'TRY'
+          }));
+        } catch (e) { /* sessionStorage kapalıysa sessizce devam */ }
+        window.location.href = result.paymentPageUrl;
+      } else {
+        alert("İşlem başarısız: " + (result.errorMessage || 'Ödeme sayfası oluşturulamadı.'));
+      }
+    });
+  };
+
+  // --- Sepet ---
+  const toggleCartItem = (examId) => {
+    setCartItems(prev => {
+      const alreadyIn = prev.includes(examId);
+      if (!alreadyIn) {
+        // Sadece EKLEME anında tetikliyoruz, sepetten çıkarmada değil.
+        const exam = exams.find(e => e.id === examId);
+        if (exam) {
+          trackPixelEvent('AddToCart', {
+            content_ids: [exam.id],
+            content_name: exam.name,
+            content_type: 'product',
+            value: exam.price || 0,
+            currency: 'TRY'
+          });
+        }
+      }
+      return alreadyIn ? prev.filter(id => id !== examId) : [...prev, examId];
+    });
+  };
+
+  const handleCartCheckout = async () => {
+    if (!user) {
+      alert("Ödeme yapabilmek için lütfen giriş yapın veya üye olun.");
+      setAuthMode('login');
+      setShowAuthModal(true);
+      return;
+    }
+    if (cartItems.length === 0) return;
+    // ÖDEME ÖNCESİ ZORUNLU FATURA ADIMI -- bkz. handleIyzicoPayment'taki not.
+    if (!hasCompleteBillingInfo()) {
+      setPendingPaymentAction({ type: 'cart' });
+      setShowBillingGateModal(true);
+      return;
+    }
+    proceedCartCheckout();
+  };
+
+  const proceedCartCheckout = async () => {
+    const cartExams = exams.filter(e => cartItems.includes(e.id));
+    if (cartExams.length === 0) return;
+
+    // GÜVENLİK AĞI: Arayüz artık ücretsiz (₺0) ürünleri sepete hiç eklemiyor
+    // (bkz. renderOneriTestSatiri'deki effectivelyFree düzeltmesi) -- ama
+    // sepette eski/bozuk bir state kalmışsa diye burada AYRICA ayıklıyoruz.
+    // SEBEP: sepette ₺50'lik bir ürünün yanında ₺0'lık bir ürün varken ödeme
+    // "Ödeme başlatılırken bir hata oluştu" ile başarısız oluyordu -- iyzico
+    // (veya sunucudaki ödeme fonksiyonu) sepette 0 tutarlı bir kalem olunca
+    // TÜM işlemi reddediyor. Çözüm: ücretsiz olanları normal ödeme isteğine
+    // HİÇ katmıyoruz, onları ayrı ve sorunsuz şekilde ücretsiz olarak
+    // kaydediyoruz; sadece gerçekten ücretli olanlar iyzico'ya gidiyor.
+    const payableExams = cartExams.filter(e => (e.price || 0) > 0);
+    const freeExams = cartExams.filter(e => !((e.price || 0) > 0));
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if (!token) {
+      alert("Oturumunuz bulunamadı, lütfen tekrar giriş yapın.");
+      return;
+    }
+
+    // Önce (varsa) ücretsiz ürünleri sessizce kaydet -- kullanıcıyı ekstra
+    // bir onay diyaloğuyla yormuyoruz, zaten ücretsiz oldukları belliydi.
+    if (freeExams.length > 0) {
+      await new Promise((resolve) => {
+        initializePayment(
+          { examIds: freeExams.map(e => e.id), items: freeExams.map(e => ({ id: e.id })) },
+          token,
+          (err, result) => {
+            if (!err && result && result.freeCheckout) {
+              setStudentPurchases(prev => {
+                const updated = { ...prev };
+                (result.purchasedExamIds || freeExams.map(e => e.id)).forEach(id => { updated[id] = true; });
+                return updated;
+              });
+              if (typeof result.newBalance === 'number') setStudentBalance(result.newBalance);
+            } else if (err) {
+              console.error('Ücretsiz ürün(ler) kaydedilemedi:', err);
+            }
+            resolve();
+          }
+        );
+      });
+      setCartItems(prev => prev.filter(id => !freeExams.some(e => e.id === id)));
+    }
+
+    if (payableExams.length === 0) {
+      if (freeExams.length > 0) alert('🎉 Ücretsiz içerik(ler) hesabınıza tanımlandı.');
+      return;
+    }
+
+    const cartTotal = payableExams.reduce((sum, e) => sum + (e.price || 0), 0);
+
+    // Not: Gerçek tutar her zaman sunucuda hesaplanır; burada sadece
+    // onay mesajını daha bilgilendirici göstermek için varolan bakiyeyi
+    // (studentBalance) kullanıyoruz.
+    const estimatedApplied = Math.min(studentBalance || 0, cartTotal);
+    const estimatedPayable = cartTotal - estimatedApplied;
+    const confirmMsg = estimatedApplied > 0
+      ? `Sepetinizdeki ${payableExams.length} içerik için toplam ₺${cartTotal.toLocaleString('tr-TR')}. ₺${estimatedApplied} bakiyenizden kullanılacak, kalan ₺${estimatedPayable} için iyzico ödeme formu açılacaktır. Onaylıyor musunuz?`
+      : `Sepetinizdeki ${payableExams.length} içerik için toplam ₺${cartTotal.toLocaleString('tr-TR')} tutarında ödeme yapılacak. Onaylıyor musunuz?`;
+    const confirmed = window.confirm(confirmMsg);
+    if (!confirmed) return;
+
+    // Not: price/email artık sunucuda (Authorization token'ı ve veritabanı
+    // üzerinden) doğrulanıyor, burada gönderilenler sadece referans amaçlı.
+    const paymentData = {
+      examIds: payableExams.map(e => e.id),
+      items: payableExams.map(e => ({ id: e.id }))
+    };
+
+    initializePayment(paymentData, token, (err, result) => {
+      if (err) {
+        console.error("Ödeme hatası:", err);
+        alert("Ödeme başlatılırken bir hata oluştu.");
+        return;
+      }
+
+      // Toplam tutar tamamen hediye bakiyeden karşılandıysa iyzico'ya hiç
+      // gidilmez -- içerikler sunucu tarafında zaten tanımlandı, burada
+      // sadece arayüzü (satın alınanlar + sepet + bakiye) güncelliyoruz.
+      if (result.freeCheckout) {
+        setStudentPurchases(prev => {
+          const updated = { ...prev };
+          (result.purchasedExamIds || []).forEach(id => { updated[id] = true; });
+          return updated;
+        });
+        setStudentBalance(result.newBalance ?? 0);
+        setCartItems(prev => prev.filter(id => !payableExams.some(e => e.id === id)));
+        trackPixelEvent('Purchase', {
+          content_ids: payableExams.map(e => e.id),
+          content_type: 'product',
+          value: cartTotal,
+          currency: 'TRY'
+        });
+        alert(`🎉 Ödeme bakiyenizden karşılandı! ₺${result.balanceApplied} bakiye kullanıldı. İçerikler hesabınıza tanımlandı.`);
+        return;
+      }
+
+      if (result.status === 'success' && result.paymentPageUrl) {
+        // Sepeti burada BOŞALTMIYORUZ -- ödeme henüz tamamlanmadı, sadece
+        // iyzico'nun ödeme sayfasına yönlendiriyoruz. Sepet, ödeme
+        // başarıyla bittiğinde ("?payment=success" ile geri dönüldüğünde)
+        // temizlenecek.
+        // Pixel'in "Purchase" olayını ödeme onaylanıp geri dönüldüğünde
+        // ateşleyebilmek için gereken bilgiyi geçici olarak saklıyoruz.
+        try {
+          sessionStorage.setItem('yt_pending_pixel_purchase', JSON.stringify({
+            content_ids: payableExams.map(e => e.id),
+            value: estimatedPayable,
+            currency: 'TRY'
+          }));
+        } catch (e) { /* sessionStorage kapalıysa sessizce devam */ }
+        window.location.href = result.paymentPageUrl;
+      } else {
+        alert("İşlem başarısız: " + (result.errorMessage || 'Ödeme sayfası oluşturulamadı.'));
+      }
+    });
+  };
+
+  // Sınav sırasında (henüz bitmemişken) her cevap işaretlemesinde ilerlemeyi kaydeder.
+  // Böylece bağlantı kopsa/sayfa kapansa bile öğrenci kaldığı yerden devam edebilir.
+  const saveProgress = async (updatedAnswers, currentTimeLeft, currentPage) => {
+    if (!activeStudentExamId) return;
+    if (!user) {
+      // Giriş yapmamış (ücretsiz deneme sınavını çözen) bir ziyaretçi --
+      // sunucuya kaydedemeyiz (student_email yok). Bu yüzden ilerlemeyi
+      // SADECE bu tarayıcıda, localStorage'da tutuyoruz -- "İçerik
+      // Listesine Dön" deyip geri geldiğinde işaretlemeler kaybolmasın
+      // diye. Hesap oluşturulup sınav gerçekten bitirildiğinde bu kayıt
+      // temizlenir (bkz. pendingFinishAfterLogin useEffect'i). Girişsiz
+      // başka hiçbir sınava erişilemediği için bu sadece o tek ücretsiz
+      // deneme sınavını etkiler, başka bir yeri değiştirmez.
+      try {
+        localStorage.setItem(`yt_guest_progress_${activeStudentExamId}`, JSON.stringify({
+          answers: updatedAnswers,
+          timeLeft: currentTimeLeft,
+          currentPage: currentPage
+        }));
+      } catch (e) {
+        // localStorage kapalıysa (gizli sekme kısıtlaması vb.) sessizce devam et.
+      }
+      return;
+    }
+    try {
+      const { error } = await supabase
+        .from('student_exams')
+        .upsert([
+          {
+            student_email: user.email,
+            exam_id: activeStudentExamId,
+            answers: updatedAnswers,
+            time_left: currentTimeLeft,
+            current_page: currentPage,
+            is_finished: false
+          }
+        ], { onConflict: 'student_email, exam_id' });
+
+      if (error) {
+        console.error("İlerleme kaydedilemedi:", error);
+      } else {
+        setStudentResultsMap(prev => ({
+          ...prev,
+          [activeStudentExamId]: {
+            ...(prev[activeStudentExamId] || {}),
+            is_finished: false,
+            answers: updatedAnswers,
+            timeLeft: currentTimeLeft,
+            currentPage: currentPage
+          }
+        }));
+      }
+    } catch (err) {
+      console.error("İlerleme kaydedilemedi:", err);
+    }
+  };
+
+  const handleAnswerSelect = (option) => {
+    if (isExamFinished || isPaused) return;
+    setStudentAnswers((prev) => {
+      let updated;
+      if (prev[studentCurrentPage] === option) {
+        updated = { ...prev };
+        delete updated[studentCurrentPage];
+      } else {
+        updated = { ...prev, [studentCurrentPage]: option };
+      }
+      saveProgress(updated, timeLeft, studentCurrentPage);
+      return updated;
+    });
+  };
+
+  const calculateResults = () => {
+    if (!activeStudentExam) return { correct: 0, wrong: 0, empty: 0, net: 0 };
+    let correct = 0, wrong = 0, empty = 0;
+    const numP = activeStudentExam.numPages;
+
+    for (let i = 1; i <= numP; i++) {
+      const studentAns = studentAnswers[i];
+      const correctAns = activeStudentExam.answerKey[i];
+
+      if (!studentAns) {
+        empty++;
+      } else if (correctAns && studentAns === correctAns) {
+        correct++;
+      } else if (correctAns && studentAns !== correctAns) {
+        wrong++;
+      } else if (!correctAns && studentAns) {
+        empty++; 
+      }
+    }
+    const net = Math.max(0, correct - wrong * 0.25);
+    return { correct, wrong, empty, net };
+  };
+
+  // Kazanım Analizi -- Ders > Konu > Kazanım hiyerarşisiyle çalışır.
+  // topicMap zaten { ders, konu, kazanim } üçlüsünü tuttuğu için ek bir veri
+  // toplamaya gerek yok, sadece raporlama katmanını Konu seviyesinde
+  // gruplayacak şekilde genişletiyoruz.
+  //
+  // Ayrıca SADECE Ders (üst başlık) seviyesi için bir ek sinyal hesaplıyoruz:
+  // "hedefDisi" -- öğrenci o dersten HİÇ soru cevaplamamışsa (tamamı boşsa),
+  // bunu düşük performans (kırmızı/"Riskli") olarak göstermek yerine nötr bir
+  // bilgi notuyla geçiyoruz: "Bu dersten hiç soru cevaplamamışsın." -- ne
+  // test öneriyoruz ne kaynak. Konu seviyesinde bu ayrım YOK: bir dersin
+  // içinde tek tük konular tamamen boş kalmış olsa bile (öğrenci o dersin
+  // GENELİYLE ilgileniyor, sadece bir konuyu atlamış/unutmuş olabilir), bu
+  // "bilerek hedefinde değil" sayılamaz -- normal barem'e göre (0 doğru ->
+  // Riskli) değerlendirilip konu anlatımı/video önerilir.
+  //
+  // NOT: Bilerek bir "yetersiz veri / az soru var" eşiği YOK -- konuda tek
+  // soru bile olsa, elimizdeki veriyle gerçek bir barem (Riskli/İyi/Harika)
+  // veriyoruz. Hiçbir şey söylememek, öğrenciye yanlış bir şey söylemekten
+  // daha kötü bir tercih değil.
+  const getKazanimReport = () => {
+    if (!activeStudentExam || !activeStudentExam.topicMap || Object.keys(activeStudentExam.topicMap).length === 0) {
+      return null;
+    }
+    const numP = activeStudentExam.numPages;
+    const byDers = {}; // { ders: { correct, total, empty, konular: { konu: { correct, total, empty, kazanimlar: {...} } } } }
+
+    for (let i = 1; i <= numP; i++) {
+      const topic = activeStudentExam.topicMap[i];
+      if (!topic || !topic.ders || !topic.kazanim) continue;
+
+      const studentAns = studentAnswers[i];
+      const correctAns = activeStudentExam.answerKey[i];
+      const isEmpty = !studentAns;
+      const isCorrect = !!(studentAns && correctAns && studentAns === correctAns);
+      // ÖNEMLİ: topic.konu, sınavın topicMap'inde DONMUŞ (Excel yüklendiği/
+      // elle girildiği andaki) bir metin -- Kategori Yönetimi'nde bir kazanımın
+      // konusu sonradan değiştirilirse burada otomatik güncellenmez. Bu yüzden
+      // GÜNCEL ID'leri (resolveEntryIds) çözüp hem görünen adı hem de -- öneri
+      // motorunun metne değil ID'ye göre çalışabilmesi için -- lessonCategoryId/
+      // topicId/outcomeId'yi de saklıyoruz.
+      const { lessonCategoryId, topicId, outcomeId } = resolveEntryIds(topic);
+      const konuName = (topicId && topics.find((t) => t.id === topicId)?.name) || topic.konu || topic.kazanim;
+
+      if (!byDers[topic.ders]) byDers[topic.ders] = { correct: 0, total: 0, empty: 0, konular: {}, lessonCategoryId };
+      const dersEntry = byDers[topic.ders];
+      dersEntry.total++;
+      if (isCorrect) dersEntry.correct++;
+      if (isEmpty) dersEntry.empty++;
+      if (!dersEntry.lessonCategoryId && lessonCategoryId) dersEntry.lessonCategoryId = lessonCategoryId;
+
+      if (!dersEntry.konular[konuName]) {
+        dersEntry.konular[konuName] = { correct: 0, total: 0, empty: 0, kazanimlar: {}, topicId };
+      }
+      const konuEntry = dersEntry.konular[konuName];
+      konuEntry.total++;
+      if (isCorrect) konuEntry.correct++;
+      if (isEmpty) konuEntry.empty++;
+      if (!konuEntry.topicId && topicId) konuEntry.topicId = topicId;
+
+      if (!konuEntry.kazanimlar[topic.kazanim]) {
+        konuEntry.kazanimlar[topic.kazanim] = { correct: 0, total: 0, outcomeId };
+      }
+      konuEntry.kazanimlar[topic.kazanim].total++;
+      if (isCorrect) konuEntry.kazanimlar[topic.kazanim].correct++;
+      if (!konuEntry.kazanimlar[topic.kazanim].outcomeId && outcomeId) konuEntry.kazanimlar[topic.kazanim].outcomeId = outcomeId;
+    }
+
+    // Barem (3 kademe): Riskli <%40, İyi %40-%69, Harika >=%70 -- bilerek
+    // sonuç ekranındaki oran renginin (getBaremTextColor) kırmızı/turuncu/
+    // yeşil sınırlarıyla AYNI: rozet ve altındaki rakamın rengi hep tutarlı
+    // olsun diye.
+    // "Hedefte Değil" SADECE Ders seviyesinde: bir dersten HİÇ soru
+    // cevaplanmamışsa (cevaplanan sayısı 0 ise), o dersi performans barem'i
+    // dışında tutup nötr gösteriyoruz -- ne test ne kaynak öneriyoruz.
+    const computeDersTier = (entry) => {
+      const answered = entry.total - entry.empty;
+      if (answered === 0) {
+        return { tier: 'hedefDisi', oran: 0 };
+      }
+      const oran = entry.correct / entry.total;
+      let tier;
+      if (oran < 0.4) tier = 'riskli';
+      else if (oran < 0.7) tier = 'iyi';
+      else tier = 'harika';
+      return { tier, oran };
+    };
+    const computeKonuTier = (entry) => {
+      const oran = entry.total > 0 ? entry.correct / entry.total : 0;
+      let tier;
+      if (oran < 0.4) tier = 'riskli';
+      else if (oran < 0.7) tier = 'iyi';
+      else tier = 'harika';
+      return { tier, oran };
+    };
+
+    // İkinci geçiş: her Ders VE her Konu için barem hesapla.
+    Object.values(byDers).forEach((dersEntry) => {
+      const dersTierResult = computeDersTier(dersEntry);
+      dersEntry.tier = dersTierResult.tier;
+      dersEntry.oran = dersTierResult.oran;
+
+      Object.entries(dersEntry.konular).forEach(([konuName, konuEntry]) => {
+        const konuTierResult = computeKonuTier(konuEntry);
+        konuEntry.tier = konuTierResult.tier;
+        konuEntry.oran = konuTierResult.oran;
+
+        // Kazanım seviyesinde de "Hedefte Değil" yok, sadece doğru oranına
+        // göre aynı 3 kademeli barem (Riskli/İyi/Harika). Bu, riskli
+        // kazanımların altına kaynak (PDF/video) göstermek için yeterli.
+        Object.values(konuEntry.kazanimlar).forEach((kzEntry) => {
+          const oran = kzEntry.total > 0 ? kzEntry.correct / kzEntry.total : 0;
+          if (oran < 0.4) kzEntry.tier = 'riskli';
+          else if (oran < 0.7) kzEntry.tier = 'iyi';
+          else kzEntry.tier = 'harika';
+        });
+      });
+    });
+
+    const hasData = Object.keys(byDers).length > 0;
+    return { byDers, hasData };
+  };
+
+  // Bir sınavın gerçekten ÇÖZÜLEBİLİR olup olmadığını kontrol eder.
+  // ÖNEMLİ: numPages (soru sayısı) tek başına yeterli değil -- kazanım
+  // haritası hazırlanırken önceden girilmiş olabilir ama asıl PDF hiç
+  // yüklenmemiş olabilir (tam bu yüzden "İdare" gibi boş bir sayfaya
+  // düşülüyordu). isParent bayrağına da güvenmiyoruz (bazı eski
+  // kayıtlarda tutarsız olabiliyor) -- bunun yerine doğrudan: ya kendi
+  // PDF'i var mı, ya da en az bir yayınlanmış alt testi var mı diye
+  // bakıyoruz. İkisi de yoksa öneri motoru bu sınavı asla önermez.
+  const examHasPlayableContent = (exam) => {
+    if (!exam) return false;
+    const hasOwnPdf = !!exam.pdfFile;
+    const hasPublishedChildren = exams.some((c) => c.parentId === exam.id && c.isPublished && c.pdfFile);
+    return hasOwnPdf || hasPublishedChildren;
+  };
+
+  // Bir aday sınavın öneri motorunda GÖSTERİLEBİLİR olup olmadığını
+  // kontrol eder.
+  // ÖNEMLİ (bug fix): price=0 her zaman "ücretsiz" demek değil -- bir ALT
+  // TEST (parentId dolu) için price=0, admin panelindeki notta da yazdığı
+  // gibi "bu test tek başına satılmaz, sadece üst paketi satın alanlar
+  // erişebilir" anlamına gelir. Eskiden bu ayrım yapılmıyordu: price=0 olan
+  // HER alt test, paketi satın almamış öğrenciye bile doğrudan "Ücretsiz
+  // Çöz" olarak öneriliyordu -- oysa öğrenci o teste hiç erişemiyordu.
+  // Şimdi: üst seviye (paket) sınavlarda price=0 gerçekten ücretsizdir; alt
+  // testlerde ise price=0 VE paket sahipliği yoksa bu test öneri listesine
+  // hiç girmez (paketi satın almış bir öğrenciye "owned" üzerinden zaten
+  // gösterilmeye devam eder).
+  const examIsIndividuallyRecommendable = (exam) => {
+    if (!examHasPlayableContent(exam)) return false;
+    const owned = !!(studentPurchases[exam.id] || (exam.parentId && studentPurchases[exam.parentId]));
+    if (owned) return true;
+    const isFree = !exam.parentId && (!exam.price || exam.price <= 0);
+    if (isFree) return true;
+    return !!(exam.price && exam.price > 0);
+  };
+
+  // Bir konuda öğrenci zayıfsa/orta seviyedeyse, o konuya özel testleri
+  // önerebilmek için: yayınlanmış sınavlar arasında, topicMap'inin en az
+  // %80'i AYNI KONU ID'sine (topic_id) çözülen sınavları buluyoruz.
+  // ÖNEMLİ: artık konu ADI değil, GÜNCEL ID karşılaştırılıyor -- bir
+  // kazanımın konusu Kategoriler'den değiştirildiğinde, hem bu raporun
+  // kendisi hem de burada taranan aday sınavlar aynı canlı ID'ye göre
+  // çözüldüğü için öneri motoru asla eski/metin tabanlı bir uyuşmazlık
+  // yüzünden doğru testi kaçırmaz.
+  // Eskiden eşleşen TÜM testler gösteriliyordu -- artık öğrenciyi
+  // boğmamak için TEK bir test öneriyoruz: soru sayısı en AZ olandan
+  // başlıyoruz (kısa/kolay bir testle başlayıp pekiştirmesi için).
+  const findKonuTestleri = (topicId, excludeExamId) => {
+    if (!topicId) return [];
+    const matches = exams
+      .filter((e) => {
+        if (!e.isPublished || e.id === excludeExamId || !e.topicMap) return false;
+        // NOT: Burada kasıtlı olarak examIsIndividuallyRecommendable YERİNE
+        // examHasPlayableContent kullanıyoruz. Amacımız öğrenciyi satın
+        // almaya yönlendirmek -- öğrenci bu testin (veya üst paketinin)
+        // sahibi olmasa bile konuya en uygun testi önermeliyiz.
+        // renderOneriTestSatiri, sahip olunmayan ve tek başına satılmayan
+        // (parentId dolu, price=0) bir alt-test için doğru şekilde üst
+        // paketin fiyatını/satın alma linkini gösterir -- bkz. o fonksiyon.
+        if (!examHasPlayableContent(e)) return false;
+        const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
+        if (entries.length === 0) return false;
+        const matchCount = entries.filter((t) => resolveEntryIds(t).topicId === topicId).length;
+        return (matchCount / entries.length) >= 0.8;
+      })
+      .sort((a, b) => (a.numPages || 0) - (b.numPages || 0));
+    return matches.slice(0, 1);
+  };
+
+  // AYNI mantık ama KAZANIM (outcome_id) seviyesinde: bir konunun içinde
+  // birden fazla kazanım varsa (örn. "Anayasa, İnsan Hakları Hukuku"
+  // konusunun altında Yasama/Yürütme/Yargı kazanımları gibi) ve bu
+  // kazanımlardan HER BİRİNE ÖZEL, dar kapsamlı bir test varsa (ör. sadece
+  // "Yargı" sorularından oluşan bir test), bunu genel konu testi yerine
+  // (veya onunla birlikte) önerebilmek için kullanılır. findKonuTestleri
+  // sadece TEK bir (konu geneline en uygun) test döndürüyordu -- bu yüzden
+  // örn. Yasama/Yürütme/Yargı'nın hepsi aynı konunun altında olduğu için
+  // öneri motoru bunlardan sadece birini (rastgele en az soru sayılı olanı)
+  // gösterip diğer ikisini hiç önermiyordu. Bu fonksiyon çağrıldığı yerde
+  // HER kazanım için AYRI AYRI çalıştırılıp sonuçlar birleştirilir.
+  const findKazanimTestleri = (outcomeId, excludeExamId) => {
+    if (!outcomeId) return [];
+    const matches = exams
+      .filter((e) => {
+        if (!e.isPublished || e.id === excludeExamId || !e.topicMap) return false;
+        if (!examHasPlayableContent(e)) return false;
+        const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
+        if (entries.length === 0) return false;
+        const matchCount = entries.filter((t) => resolveEntryIds(t).outcomeId === outcomeId).length;
+        return (matchCount / entries.length) >= 0.8;
+      })
+      .sort((a, b) => (a.numPages || 0) - (b.numPages || 0));
+    return matches.slice(0, 1);
+  };
+
+  // Bir öğrenci iyi/harika durumdaysa, aynı sınav türünden (ör. "deneme") VE
+  // AYNI DERSE (artık ID ile, lessonCategoryId), henüz çözmediği TÜM
+  // denemeleri buluyoruz.
+  const findOnerilenDenemeler = (excludeExamId, examType, lessonCategoryId) => {
+    return exams
+      .filter((e) => {
+        if (!e.isPublished || e.parentId || e.id === excludeExamId) return false;
+        if (e.examType !== (examType || 'deneme')) return false;
+        if (studentResultsMap[e.id] && studentResultsMap[e.id].is_finished) return false;
+        if (!examIsIndividuallyRecommendable(e)) return false;
+        if (!lessonCategoryId) return true;
+        if (!e.topicMap) return false;
+        const entries = Object.values(e.topicMap).filter((t) => t && t.kazanim);
+        if (entries.length === 0) return false;
+        const matchCount = entries.filter((t) => resolveEntryIds(t).lessonCategoryId === lessonCategoryId).length;
+        return (matchCount / entries.length) >= 0.8;
+      })
+      .sort((a, b) => (a.price || 0) - (b.price || 0));
+  };
+
+  // Barem'e göre kısa, doğal dilde bir öneri cümlesi + aksiyon etiketi.
+  // ("Hedefte Değil" konu seviyesinde artık hiç kullanılmıyor -- bkz.
+  // computeKonuTier -- bu yüzden switch'te o case yok.)
+  // - riskli: test/deneme önermiyoruz, konu anlatımı/videoya yönlendiriyoruz
+  //   (asıl kaynak linki -- varsa -- kazanım kırılımında, en altta çıkar).
+  // - iyi: bu konuya özel bir test öneriyoruz.
+  // - harika: hiçbir şey önermiyoruz -- öğrenci bu konuda zaten iyi durumda.
+  const getKonuTavsiyesi = (konuName, konuEntry) => {
+    switch (konuEntry.tier) {
+      case 'riskli':
+        return {
+          mesaj: `${konuName} konusunda ciddi bir eksiğin var. Önce konu anlatımı/video ile temelden tekrar etmeni öneririz. Daha sonra önerilen testi çözünüz.`,
+          aksiyon: 'video',
+        };
+      case 'iyi':
+        return {
+          mesaj: `${konuName} konusuna hakimsin. Daha fazla test çözerek iyice sağlama alabilirsin.`,
+          aksiyon: 'konuTesti',
+        };
+      case 'harika':
+        return {
+          mesaj: `${konuName} konusunda harikasın! Bu konuyla ilgili şu an için ek bir önerimiz yok.`,
+          aksiyon: null,
+        };
+      default:
+        // Normal şartlarda buraya hiç düşülmez (tier her zaman yukarıdakilerden
+        // biri olarak atanıyor) -- sadece beklenmedik bir durum için güvenlik ağı.
+        return {
+          mesaj: `${konuName} konusu için bir değerlendirme oluşturulamadı.`,
+          aksiyon: null,
+        };
+    }
+  };
+
+  // Ders (Türkçe/Matematik/Tarih...) seviyesindeki barem'e göre kısa bir
+  // değerlendirme + (varsa) aksiyon.
+  // - riskli: doğrudan bir kaynak önermek yerine aşağıdaki konu kırılımına
+  //   bakmasını öneriyoruz -- aksiyon yok, sadece mesaj.
+  // - iyi: aynı dersten yeni bir deneme öneriyoruz (findOnerilenDenemeler).
+  // - harika: hiçbir şey önermiyoruz.
+  // - hedefDisi: bu dersten HİÇ soru cevaplanmamış -- durumu net biçimde
+  //   bildiriyoruz. Buna bir "cevap" beklercesine soru sormuyoruz (arayüzde
+  //   bir yanıt alıp değerlendirecek bir mekanizma yok), sadece bilgi
+  //   veriyoruz: bu ders hedefindeyse eksik, değilse sorun değil.
+  const getDersTavsiyesi = (dersName, dersEntry) => {
+    switch (dersEntry.tier) {
+      case 'riskli':
+        return {
+          mesaj: `${dersName} dersinde genel olarak zorlanıyor gibisin. Ayrıntılı rapor ve öneriler için konu başlıklarına tıklayınız.`,
+          aksiyon: null,
+        };
+      case 'iyi':
+        return {
+          mesaj: `${dersName} dersine genel olarak hakimsin. Daha fazla test çözerek iyice sağlama alabilirsin.`,
+          aksiyon: 'deneme',
+        };
+      case 'harika':
+        return {
+          mesaj: `${dersName} dersinde harikasın! Bu dersle ilgili şu an için ek bir önerimiz yok.`,
+          aksiyon: null,
+        };
+      case 'hedefDisi':
+        return {
+          mesaj: `${dersName} dersinden hiç soru cevaplamamışsın. Bu ders hedefinde değilse sorun değil; hedefindeyse en kısa sürede bu dersten de çalışmaya başlamalısın.`,
+          aksiyon: null,
+        };
+      default:
+        return { mesaj: `${dersName} dersi için bir değerlendirme oluşturulamadı.`, aksiyon: null };
+    }
+  };
+
+
+  const KONU_TIER_META = {
+    riskli: { label: 'Riskli', color: '#E24B4A', bg: '#FBE4E2' },
+    iyi: { label: 'İyi', color: '#5B9A34', bg: '#EDF6E4' },
+    harika: { label: 'Harika', color: '#FFFFFF', bg: '#639922' },
+    hedefDisi: { label: 'Hedefte Değil', color: '#FFFFFF', bg: '#111111' },
+  };
+
+  // Çubuk her zaman kırmızı zemin üzerine, doğru oranı kadar yeşil dolgu (soldan sağa) şeklinde bölünür.
+  const getBaremGreenWidth = (correct, total) => {
+    if (!total) return 0;
+    return Math.round((correct / total) * 100);
+  };
+
+  // Yandaki "doğru/toplam" rakamının rengi 3 kademeli: kırmızı (<%40), turuncu (%40-69), yeşil (>=%70)
+  const getBaremTextColor = (correct, total) => {
+    if (!total) return 'var(--yt-graphite)';
+    const pct = correct / total;
+    if (pct >= 0.7) return '#639922';
+    if (pct >= 0.4) return '#FF9500';
+    return '#E24B4A';
+  };
+
+  // Puanlama artık tarayıcıda değil, sunucuda (/api/finish-exam) yapılıyor.
+  // Böylece cevap anahtarı sınav bitene kadar hiçbir zaman client'a inmiyor.
+  const saveAndFinishExam = async (ratingVal = 0) => {
+    const existingRes = studentResultsMap[activeStudentExamId] || {};
+    const finalRating = ratingVal > 0 ? ratingVal : (existingRes.rating || 0);
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if (!token) {
+      alert("Oturumunuz bulunamadı, lütfen tekrar giriş yapın.");
+      return;
+    }
+
+    try {
+      const resp = await fetch('/api/finish-exam', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          examId: activeStudentExamId,
+          answers: studentAnswers,
+          rating: finalRating
+        })
+      });
+      const result = await resp.json();
+
+      if (!resp.ok) {
+        alert("Sonuç kaydedilemedi: " + (result.error || 'Bilinmeyen hata'));
+        return;
+      }
+
+      // Sınav artık bitti, dönen cevap anahtarını (sadece bu sınav için)
+      // yerel state'e işleyip doğru/yanlış tablosunun render edilmesini sağlıyoruz.
+      setExams(prev => prev.map(ex => ex.id === activeStudentExamId ? { ...ex, answerKey: result.answerKey || {} } : ex));
+      setIsExamFinished(true);
+      setShowResults(true);
+      setStudentResultsMap(prev => ({
+        ...prev,
+        [activeStudentExamId]: {
+          ...(prev[activeStudentExamId] || {}), // reset_count gibi alanları koru, üzerine yazma
+          is_finished: true,
+          correct: result.correct,
+          wrong: result.wrong,
+          empty: result.empty,
+          net: result.net,
+          answers: studentAnswers,
+          rating: finalRating
+        }
+      }));
+      fetchAllRatings();
+    } catch (err) {
+      console.error("Sonuç kaydedilemedi:", err);
+      alert("Sonuç kaydedilirken bir hata oluştu, lütfen tekrar deneyin.");
+    }
+  };
+
+  // Daha önce bitirilmiş bir sınavın sonucunu tekrar incelerken, cevap
+  // anahtarını sunucudan (/api/get-answer-key) çekip yerel state'e işliyoruz.
+  // Sunucu, gerçekten bu sınavı bitirdiğinizi doğruladıktan sonra verir.
+  const fetchAnswerKeyForReview = async (examId) => {
+    const exam = exams.find(e => e.id === examId);
+    if (exam && exam.answerKey && Object.keys(exam.answerKey).length > 0) return; // zaten yüklü
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if (!token) return;
+
+    try {
+      const resp = await fetch('/api/get-answer-key', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ examId })
+      });
+      const result = await resp.json();
+      if (resp.ok) {
+        setExams(prev => prev.map(ex => ex.id === examId ? { ...ex, answerKey: result.answerKey || {} } : ex));
+      }
+    } catch (err) {
+      console.error("Cevap anahtarı alınamadı:", err);
+    }
+  };
+
+  const finishExam = () => {
+    // Giriş yapmadan (ücretsiz deneme sınavı için) buraya kadar gelmiş bir
+    // ziyaretçi -- sonucu görebilmesi için artık hesap oluşturması gerekiyor.
+    // ÖNEMLİ: Bunu burada kibarca, cevaplarının kaybolmayacağını belirterek
+    // yapıyoruz. Bu kontrol olmadan doğrudan saveAndFinishExam çağrılsaydı,
+    // sunucu (/api/finish-exam) oturum token'ı bulamayıp "Oturumunuz
+    // bulunamadı" diye belirsiz bir uyarı verip öğrenciyi hiçbir çıkış yolu
+    // olmayan bir ekranda bırakırdı.
+    if (!user) {
+      const wantsAccount = window.confirm(
+        "Sonucunu ve kişiye özel raporunu görebilmek için ücretsiz bir hesap oluşturman gerekiyor. Cevapların kaybolmayacak -- hesap oluşturur oluşturmaz sınavın otomatik olarak bitirilip sonucun gösterilecek. Şimdi hesap oluşturmak ister misin?"
+      );
+      if (!wantsAccount) return;
+      setPendingFinishAfterLogin(true);
+      setAuthMode('register');
+      setShowAuthModal(true);
+      return;
+    }
+    const confirmText = activeStudentExam.examType === 'deneme'
+      ? "Sınavı bitirmek istediğinize emin misiniz? Bitirdikten sonra cevaplarınızı değiştiremezsiniz, sadece sonuçlarınızı görüntüleyebilirsiniz."
+      : "Testi bitirmek istediğinize emin misiniz? Bitirdikten sonra cevaplarınızı değiştiremezsiniz, sadece sonuçlarınızı görüntüleyebilirsiniz.";
+    if (window.confirm(confirmText)) {
+      saveAndFinishExam(0);
+    }
+  };
+
+  // pendingFinishAfterLogin true iken kullanıcı GERÇEKTEN giriş/üyelik
+  // yapınca (user null'dan dolu hale gelince), sınavı elle "Bitir"e
+  // basmasına gerek kalmadan otomatik olarak bitiriyoruz.
+  useEffect(() => {
+    if (user && pendingFinishAfterLogin) {
+      setPendingFinishAfterLogin(false);
+      if (activeStudentExamId) {
+        try { localStorage.removeItem(`yt_guest_progress_${activeStudentExamId}`); } catch (e) {}
+      }
+      saveAndFinishExam(0);
+    }
+  }, [user]);
+
+  // Öğrenci başına, bu sınav için izin verilen sıfırlama (baştan çözme) hakkı sayısı.
+  const MAX_EXAM_RESETS = 1;
+
+  // Sınavı sıfırlar: cevaplar, süre ve sonuç sunucuda temizlenir, öğrenci
+  // 1. sorudan yeniden başlar. Kalan sıfırlama hakkı reset_count ile takip edilir.
+  const resetExam = async () => {
+    if (!user || !activeStudentExamId || !activeStudentExam) return;
+
+    const existingRes = studentResultsMap[activeStudentExamId] || {};
+    const usedResets = existingRes.reset_count || 0;
+    if (usedResets >= MAX_EXAM_RESETS) return;
+
+    const kalanHak = MAX_EXAM_RESETS - usedResets;
+    const confirmed = window.confirm(
+      `Sınavı sıfırlamak istediğinize emin misiniz? Önceki cevaplarınız ve sonucunuz silinecek, 1. sorudan yeniden başlayacaksınız. (Bu işlem sonrası kalan sıfırlama hakkınız: ${kalanHak - 1})`
+    );
+    if (!confirmed) return;
+
+    const newResetCount = usedResets + 1;
+    const freshTimeLeft = activeStudentExam.examType === 'deneme' ? activeStudentExam.duration * 60 : 0;
+
+    try {
+      const { error } = await supabase
+        .from('student_exams')
+        .upsert([
+          {
+            student_email: user.email,
+            exam_id: activeStudentExamId,
+            answers: {},
+            correct_count: 0,
+            wrong_count: 0,
+            empty_count: 0,
+            net: 0,
+            is_finished: false,
+            time_left: freshTimeLeft,
+            current_page: 1,
+            reset_count: newResetCount
+          }
+        ], { onConflict: 'student_email, exam_id' });
+
+      if (error) {
+        alert("Sınav sıfırlanamadı: " + error.message);
+        return;
+      }
+
+      setStudentResultsMap(prev => ({
+        ...prev,
+        [activeStudentExamId]: {
+          is_finished: false,
+          correct: 0,
+          wrong: 0,
+          empty: 0,
+          net: 0,
+          answers: {},
+          timeLeft: freshTimeLeft,
+          currentPage: 1,
+          reset_count: newResetCount,
+          rating: existingRes.rating || 0,
+          reviewText: existingRes.reviewText || ''
+        }
+      }));
+
+      setStudentAnswers({});
+      setStudentCurrentPage(1);
+      setTimeLeft(freshTimeLeft);
+      setIsExamFinished(false);
+      setShowResults(false);
+      setViewingSolutionQ(false);
+      setIsPaused(true);
+      setExamStarted(false);
+    } catch (err) {
+      console.error("Sınav sıfırlanamadı:", err);
+      alert("Sınav sıfırlanırken bir hata oluştu, lütfen tekrar deneyin.");
+    }
+  };
+
+  const handleRateExamInActiveScreen = async (rate) => {
+    if (!user || !activeStudentExamId) return;
+
+    const existingRes = studentResultsMap[activeStudentExamId] || {};
+    const answersToSave = existingRes.answers || studentAnswers;
+    const correctC = existingRes.correct ?? 0;
+    const wrongC = existingRes.wrong ?? 0;
+    const emptyC = existingRes.empty ?? 0;
+    const netC = existingRes.net ?? 0;
+    const isFin = existingRes.is_finished ?? false;
+
+    const { error } = await supabase
+      .from('student_exams')
+      .upsert([
+        {
+          student_email: user.email,
+          exam_id: activeStudentExamId,
+          answers: answersToSave,
+          correct_count: correctC,
+          wrong_count: wrongC,
+          empty_count: emptyC,
+          net: netC,
+          is_finished: isFin,
+          rating: rate
+        }
+      ], { onConflict: 'student_email, exam_id' });
+
+    if (!error) {
+      setStudentResultsMap(prev => ({
+        ...prev,
+        [activeStudentExamId]: { ...existingRes, rating: rate }
+      }));
+      fetchAllRatings();
+    }
+  };
+
+  const handleSubmitReview = async (reviewText) => {
+    if (!user || !activeStudentExamId) return;
+
+    const existingRes = studentResultsMap[activeStudentExamId] || {};
+    const answersToSave = existingRes.answers || studentAnswers;
+    const correctC = existingRes.correct ?? 0;
+    const wrongC = existingRes.wrong ?? 0;
+    const emptyC = existingRes.empty ?? 0;
+    const netC = existingRes.net ?? 0;
+    const isFin = existingRes.is_finished ?? false;
+    const ratingC = existingRes.rating ?? 0;
+
+    const { error } = await supabase
+      .from('student_exams')
+      .upsert([
+        {
+          student_email: user.email,
+          exam_id: activeStudentExamId,
+          answers: answersToSave,
+          correct_count: correctC,
+          wrong_count: wrongC,
+          empty_count: emptyC,
+          net: netC,
+          is_finished: isFin,
+          rating: ratingC,
+          review_text: reviewText
+        }
+      ], { onConflict: 'student_email, exam_id' });
+
+    if (error) {
+      console.error("Yorum kaydedilemedi (review_text kolonu eksik olabilir):", error);
+      alert("Yorum kaydedilemedi. Veritabanına 'review_text' kolonu eklenmiş mi kontrol edin.");
+    } else {
+      setStudentResultsMap(prev => ({
+        ...prev,
+        [activeStudentExamId]: { ...existingRes, reviewText: reviewText }
+      }));
+      alert("✓ Yorumunuz kaydedildi, teşekkürler!");
+    }
+  };
+
+  const reportKey = (examId, qNum) => `${examId}_${qNum}`;
+
+  const handleSubmitQuestionReport = async () => {
+    const trimmed = reportText.trim();
+    if (!trimmed || !activeStudentExamId || !user || reportSubmitting) return;
+
+    setReportSubmitting(true);
+    const { error } = await supabase
+      .from('question_reports')
+      .insert([
+        {
+          exam_id: activeStudentExamId,
+          question_number: studentCurrentPage,
+          student_email: user.email,
+          message: trimmed.slice(0, 300)
+        }
+      ]);
+    setReportSubmitting(false);
+
+    if (error) {
+      console.error("Bildirim gönderilemedi:", error);
+      alert("Bildirim gönderilemedi. Lütfen daha sonra tekrar deneyin.");
+      return;
+    }
+
+    setReportedQuestions(prev => ({ ...prev, [reportKey(activeStudentExamId, studentCurrentPage)]: true }));
+    setReportText('');
+    setShowReportModal(false);
+    alert("✓ Bildiriminiz alındı, teşekkürler!");
+  };
+
+  const fetchProductReviews = async (parentId, childIds) => {
+    const allIds = [parentId, ...childIds];
+    const { data, error } = await supabase
+      .from('student_exams')
+      .select('student_email, rating, review_text')
+      .in('exam_id', allIds)
+      .not('review_text', 'is', null)
+      .neq('review_text', '');
+
+    if (!error && data) {
+      setProductReviews(data);
+    } else if (error) {
+      // review_text kolonu henüz eklenmemiş olabilir, sessizce geç
+      setProductReviews([]);
+    }
+  };
+
+  // Giriş yapmış öğrencinin daha önce kaydettiği fatura bilgisini getirir
+  // (varsa) ve düzenleme formunu onunla doldurur. checkUserRoleAndSetMode
+  // içinden çağrıldığında `user` state'i henüz güncellenmemiş olabileceği
+  // için e-postayı parametre olarak da kabul ediyoruz.
+  const fetchMyBillingInfo = async (emailOverride) => {
+    const email = emailOverride || user?.email;
+    if (!email) return;
+    const { data, error } = await supabase
+      .from('billing_info')
+      .select('*')
+      .eq('student_email', email)
+      .maybeSingle();
+    if (!error && data) {
+      setMyBillingInfo(data);
+      setBillingDraft({
+        fullName: data.full_name || '',
+        tcKimlikNo: data.tc_kimlik_no || '',
+        invoiceEmail: data.invoice_email || '',
+        address: data.address || '',
+      });
+    } else if (error) {
+      console.error('Fatura bilgisi okunamadı:', error);
+    }
+  };
+
+  // Öğrenci "Fatura Bilgilerim" formunu kaydettiğinde çağrılır. TC Kimlik No
+  // basit bir uzunluk/rakam kontrolünden geçiriliyor (11 haneli, sadece
+  // rakam) -- gerçek bir algoritma doğrulaması (checksum) yapmıyoruz, sadece
+  // bariz yanlış girişleri (harf, eksik hane) önlüyoruz.
+  // `silent` true ise başarı alert'i göstermez -- ödeme akışındaki zorunlu
+  // fatura adımından çağrıldığında (bkz. showBillingGateModal), kaydettikten
+  // hemen sonra ödeme onayı diyaloğu açılacağı için ayrı bir "kaydedildi"
+  // uyarısı gösterip akışı kesmek istemiyoruz. Başarılıysa true, değilse
+  // false döner -- çağıran taraf buna göre bir sonraki adıma geçip
+  // geçmeyeceğine karar verir.
+  const saveMyBillingInfo = async (silent) => {
+    if (!user) return false;
+    const { fullName, tcKimlikNo, invoiceEmail, address } = billingDraft;
+    if (!fullName.trim() || !tcKimlikNo.trim() || !invoiceEmail.trim() || !address.trim()) {
+      alert('Lütfen tüm alanları doldurun.');
+      return false;
+    }
+    if (!/^\d{11}$/.test(tcKimlikNo.trim())) {
+      alert('TC Kimlik No 11 haneli ve sadece rakamlardan oluşmalıdır.');
+      return false;
+    }
+    if (!/^\S+@\S+\.\S+$/.test(invoiceEmail.trim())) {
+      alert('Geçerli bir fatura e-posta adresi girin.');
+      return false;
+    }
+    setSavingBillingInfo(true);
+    const { error } = await supabase
+      .from('billing_info')
+      .upsert({
+        student_email: user.email,
+        full_name: fullName.trim(),
+        tc_kimlik_no: tcKimlikNo.trim(),
+        invoice_email: invoiceEmail.trim(),
+        address: address.trim(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'student_email' });
+    setSavingBillingInfo(false);
+    if (error) {
+      alert('Kaydedilemedi: ' + error.message + '\n\n"billing_info" tablosu veritabanında henüz yoksa, önce onu oluşturmak gerekir.');
+      return false;
+    }
+    setMyBillingInfo({
+      student_email: user.email,
+      full_name: fullName.trim(),
+      tc_kimlik_no: tcKimlikNo.trim(),
+      invoice_email: invoiceEmail.trim(),
+      address: address.trim(),
+    });
+    if (!silent) alert('Fatura bilgileriniz kaydedildi.');
+    return true;
+  };
+
+  // ADMIN: tüm öğrencilerin girdiği fatura bilgilerini (RLS admin@yayinevi.com
+  // için ayrı bir SELECT politikasıyla tüm satırları görebiliyor) e-posta
+  // üzerinden aranabilir şekilde listeler.
+  const fetchAllBillingRecords = async (search) => {
+    setBillingRecordsLoading(true);
+    let query = supabase.from('billing_info').select('*').order('updated_at', { ascending: false });
+    if (search && search.trim()) {
+      query = query.ilike('student_email', `%${search.trim()}%`);
+    }
+    const { data, error } = await query;
+    setBillingRecordsLoading(false);
+    if (!error && data) {
+      setBillingRecords(data);
+    } else if (error) {
+      console.error('Fatura kayıtları okunamadı:', error);
+      setBillingRecords([]);
+    }
+  };
+
+  // ==========================================
+  // RENDER: YÖNETİCİ EKRANI
+  // ==========================================
+  if (user && appMode === 'admin') {
+    const adminActiveExam = exams.find(e => e.id === activeAdminExamId);
+    const childExams = adminActiveExam ? exams.filter(e => e.parentId === adminActiveExam.id).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0)) : [];
+    
+    const currentPreviewExam = childExams.length > 0 
+      ? (childExams.find(e => e.id === activeSubExamId) || childExams[0]) 
+      : adminActiveExam;
+
+    const editingExam = activeSubExamId ? childExams.find(e => e.id === activeSubExamId) : null;
+    const editingIndex = activeSubExamId ? childExams.findIndex(e => e.id === activeSubExamId) : -1;
+
+    return (
+      <div style={{ fontFamily: "'Roboto', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif", letterSpacing: '-0.01em', maxWidth: '1200px', margin: '0 auto', padding: '20px', color: '#1e293b' }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '2px solid #e2e8f0', paddingBottom: '12px', marginBottom: '20px' }}>
+          <h1 style={{ margin: 0, fontSize: '1.4rem', color: '#0f172a' }}>⚙️ Yönetici Paneli ({user.email})</h1>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <TopBannerManageButton />
+            <SignupBonusManageButton />
+            <button
+              onClick={() => { setPricingDraft(String(pricePerQuestion)); setShowPricingSettings(true); }}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              💲 Soru Başı Fiyat
+              <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 'normal' }}>(₺{pricePerQuestion})</span>
+            </button>
+            <button
+              onClick={() => setShowAnnounceModal(true)}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              📢 Duyuru Gönder
+            </button>
+            <button
+              onClick={() => setShowCategoryManager(true)}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              🗂 Ders / Sınav Tanımla
+            </button>
+            <button
+              onClick={() => setShowResourceManager(true)}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              📚 Kaynaklar
+            </button>
+            <button
+              onClick={() => { setShowReportsAdmin(true); fetchAdminReports(adminReportsFilter); }}
+              style={{ position: 'relative', padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              🚩 Bildirimler
+              {openReportsCount > 0 && (
+                <span style={{ position: 'absolute', top: '-8px', right: '-8px', backgroundColor: '#dc2626', color: '#fff', borderRadius: '999px', fontSize: '0.7rem', minWidth: '18px', height: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 4px' }}>
+                  {openReportsCount}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => { setShowBillingAdmin(true); fetchAllBillingRecords(billingSearch); }}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              🧾 Faturalar
+            </button>
+            <button
+              onClick={() => { setShowPoolImport(true); setSelectedPoolBatch(null); setPoolUntagged([]); fetchPoolBatches(); fetchPoolBrowserGroups(); }}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              ➕ Havuza Soru Ekle
+            </button>
+            <button
+              onClick={() => { setShowPoolBrowser(true); setSelectedPoolQuestionId(null); setPoolBrowserGroup(''); fetchPoolBrowserRows({ group: '', tag: 'tagged' }); fetchPoolBrowserGroups(); }}
+              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#0f172a', fontWeight: 'bold' }}
+            >
+              🗂️ Soru Havuzu
+            </button>
+            <button onClick={handleLogout} style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#ffffff', cursor: 'pointer', color: '#dc2626', fontWeight: 'bold' }}>Çıkış Yap</button>
+          </div>
+        </header>
+
+        {showPricingSettings && (
+          <div
+            onClick={() => setShowPricingSettings(false)}
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '22px', width: '400px', maxWidth: '100%' }}
+            >
+              <h3 style={{ margin: '0 0 6px 0', fontSize: '1.05rem', color: '#0f172a' }}>💲 Soru Başı Fiyat</h3>
+              <p style={{ margin: '0 0 14px 0', fontSize: '0.82rem', color: '#64748b' }}>
+                Bu tutar, bir testin/paketin "Soru / Sayfa Sayısı" alanı her değiştiğinde (elle ya da PDF yüklenip otomatik algılandığında), Fiyat ve Eski Fiyat'ı <b>soru sayısı × bu tutar</b> olarak otomatik hesaplar -- daha önce girilmiş manuel bir indirim varsa bile üzerine yazar. İndirim uygulamak isterseniz, hesaplama sonrası Fiyat alanını elle düşürebilirsiniz; Eski Fiyat, listedeki referans fiyat olarak kalır.
+              </p>
+              <label style={{ fontSize: '0.8rem', color: '#475569', display: 'block', marginBottom: '4px' }}>Soru başına tutar (₺)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={pricingDraft}
+                onChange={(e) => setPricingDraft(e.target.value)}
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid #e2e8f0', borderRadius: '6px', boxSizing: 'border-box', fontSize: '0.9rem', marginBottom: '16px' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+                <button type="button" onClick={() => setShowPricingSettings(false)} style={{ padding: '8px 14px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>
+                  Vazgeç
+                </button>
+                <button
+                  type="button"
+                  onClick={() => savePricePerQuestion(pricingDraft)}
+                  style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', backgroundColor: '#0f172a', color: '#fff', cursor: 'pointer', fontWeight: 'bold' }}
+                >
+                  Kaydet
+                </button>
+              </div>
+
+              <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
+                <button
+                  type="button"
+                  onClick={recalculateAllExamPrices}
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', color: '#0f172a', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.84rem' }}
+                >
+                  🔄 Güncel Fiyata Göre Tüm Testleri Yeniden Hesapla
+                </button>
+                <p style={{ margin: '6px 0 0 0', fontSize: '0.72rem', color: '#94a3b8' }}>
+                  Sistemde soru sayısı girilmiş TÜM test/paketlerin fiyatını, yukarıdaki güncel tutara göre yeniden hesaplar -- daha önce hiç dokunulmamış eski kayıtları da kapsar. Fiyatı sonradan artırırsanız/azaltırsanız da bunu kullanabilirsiniz.
+                </p>
+              </div>
+
+              <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
+                <label style={{ fontSize: '0.8rem', color: '#475569', display: 'block', marginBottom: '4px' }}>🏷️ Tüm Ürünlere Toplu İndirim (%)</label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    placeholder="örn. 20"
+                    value={discountDraft}
+                    onChange={(e) => setDiscountDraft(e.target.value)}
+                    style={{ flex: 1, padding: '8px 10px', border: '1px solid #e2e8f0', borderRadius: '6px', boxSizing: 'border-box', fontSize: '0.9rem' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={applyDiscountToAllExams}
+                    style={{ padding: '8px 16px', borderRadius: '6px', border: 'none', backgroundColor: '#dc2626', color: '#fff', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.84rem', whiteSpace: 'nowrap' }}
+                  >
+                    Uygula
+                  </button>
+                </div>
+                <p style={{ margin: '6px 0 0 0', fontSize: '0.72rem', color: '#94a3b8' }}>
+                  Her test/paketin Fiyat'ını, kendi Eski Fiyat'ı (referans fiyat) üzerinden bu yüzde kadar indirimli olarak yeniden hesaplar -- Eski Fiyat değişmez, sadece Fiyat düşer. İndirimi kaldırmak için %0 girip tekrar uygulayın.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showAnnounceModal && (
+          <div
+            onClick={() => !announceSending && setShowAnnounceModal(false)}
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+          >
+            <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: '480px', backgroundColor: '#fff', borderRadius: '12px', padding: '22px' }}>
+              <h3 style={{ margin: '0 0 14px 0', fontSize: '1.1rem', color: '#0f172a' }}>📢 Yeni Duyuru</h3>
+
+              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 'bold', color: '#334155', marginBottom: '4px' }}>Başlık</label>
+              <input
+                type="text"
+                value={announceTitle}
+                onChange={(e) => setAnnounceTitle(e.target.value)}
+                placeholder="Örn: Yeni TYT Deneme Sınavı Eklendi!"
+                style={{ width: '100%', boxSizing: 'border-box', padding: '9px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '12px', fontSize: '0.88rem' }}
+              />
+
+              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 'bold', color: '#334155', marginBottom: '4px' }}>Mesaj</label>
+              <textarea
+                value={announceMessage}
+                onChange={(e) => setAnnounceMessage(e.target.value)}
+                rows={3}
+                placeholder="Duyuru içeriği..."
+                style={{ width: '100%', boxSizing: 'border-box', padding: '9px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '12px', fontSize: '0.88rem', fontFamily: 'inherit', resize: 'vertical' }}
+              />
+
+              <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 'bold', color: '#334155', marginBottom: '4px' }}>Kime Gönderilsin?</label>
+              <select
+                value={announceAudience}
+                onChange={(e) => setAnnounceAudience(e.target.value)}
+                style={{ width: '100%', padding: '9px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '12px', fontSize: '0.88rem' }}
+              >
+                <option value="all">Tüm Üyelere</option>
+                <option value="buyers">Belirli Bir Ürünü Alanlara</option>
+                <option value="exam_type">Belirli Bir Sınav Türü Alanlara</option>
+                <option value="single">Tek Bir Öğrenciye</option>
+              </select>
+
+              {announceAudience === 'buyers' && (
+                <select
+                  value={announceExamId}
+                  onChange={(e) => setAnnounceExamId(e.target.value)}
+                  style={{ width: '100%', padding: '9px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '12px', fontSize: '0.88rem' }}
+                >
+                  <option value="">Ürün / Paket Seçin</option>
+                  {exams.filter(e => !e.parentId).map(pe => (
+                    <option key={pe.id} value={pe.id}>{pe.name || 'İsimsiz İçerik'}</option>
+                  ))}
+                </select>
+              )}
+
+              {announceAudience === 'exam_type' && (
+                <select
+                  value={announceExamType}
+                  onChange={(e) => setAnnounceExamType(e.target.value)}
+                  style={{ width: '100%', padding: '9px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '12px', fontSize: '0.88rem' }}
+                >
+                  <option value="">Sınav Türü Seçin</option>
+                  {Array.from(new Set(exams.filter(e => !e.parentId && e.categoryExamType).map(e => e.categoryExamType.trim()))).map(type => (
+                    <option key={type} value={type}>{type}</option>
+                  ))}
+                </select>
+              )}
+
+              {announceAudience === 'single' && (
+                <input
+                  type="email"
+                  value={announceStudentEmail}
+                  onChange={(e) => setAnnounceStudentEmail(e.target.value)}
+                  placeholder="ogrenci@example.com"
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '9px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '12px', fontSize: '0.88rem' }}
+                />
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '6px' }}>
+                <button onClick={() => setShowAnnounceModal(false)} disabled={announceSending} style={{ padding: '9px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Vazgeç</button>
+                <button
+                  onClick={sendAnnouncement}
+                  disabled={announceSending || !announceTitle.trim() || !announceMessage.trim()}
+                  style={{ padding: '9px 16px', borderRadius: '6px', border: 'none', backgroundColor: '#0f172a', color: '#fff', cursor: 'pointer', fontWeight: 'bold', opacity: (announceSending || !announceTitle.trim() || !announceMessage.trim()) ? 0.5 : 1 }}
+                >
+                  {announceSending ? 'Gönderiliyor...' : 'Gönder'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+
+        {showReportsAdmin && (
+          <div style={{ marginBottom: '20px', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+              <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🚩 Soru / Çözüm Bildirimleri</h2>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <select
+                  value={adminReportsFilter}
+                  onChange={(e) => { setAdminReportsFilter(e.target.value); fetchAdminReports(e.target.value); }}
+                  style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                >
+                  <option value="open">Açık Bildirimler</option>
+                  <option value="resolved">Çözülenler</option>
+                  <option value="all">Tümü</option>
+                </select>
+                <button onClick={() => setShowReportsAdmin(false)} style={{ padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+              </div>
+            </div>
+
+            {adminReportsLoading ? (
+              <p style={{ color: '#64748b' }}>Yükleniyor...</p>
+            ) : adminReports.length === 0 ? (
+              <p style={{ color: '#64748b' }}>Bu filtrede bildirim bulunmuyor.</p>
+            ) : (
+              <div style={{ display: 'grid', gap: '10px' }}>
+                {adminReports.map(rep => {
+                  const relatedExam = exams.find(e => e.id === rep.exam_id);
+                  return (
+                    <div key={rep.id} style={{ border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px 14px', backgroundColor: '#f8fafc' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', marginBottom: '6px' }}>
+                        <span style={{ fontWeight: 'bold', fontSize: '0.88rem', color: '#0f172a' }}>
+                          {relatedExam ? relatedExam.name : rep.exam_id} · {rep.question_number}. Soru
+                        </span>
+                        <span style={{ fontSize: '0.76rem', color: '#94a3b8' }}>
+                          {new Date(rep.created_at).toLocaleString('tr-TR')}
+                        </span>
+                      </div>
+                      <p style={{ margin: '0 0 8px 0', fontSize: '0.88rem', color: '#334155', whiteSpace: 'pre-wrap' }}>{rep.message}</p>
+
+                      {rep.admin_reply && (
+                        <div style={{ backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '6px', padding: '8px 10px', marginBottom: '8px' }}>
+                          <span style={{ fontSize: '0.72rem', fontWeight: 'bold', color: '#047857' }}>Yanıtınız:</span>
+                          <p style={{ margin: '2px 0 0 0', fontSize: '0.84rem', color: '#065f46', whiteSpace: 'pre-wrap' }}>{rep.admin_reply}</p>
+                        </div>
+                      )}
+
+                      {rep.status === 'open' && (
+                        <div style={{ marginBottom: '8px' }}>
+                          <textarea
+                            value={replyDrafts[rep.id] || ''}
+                            onChange={(e) => setReplyDrafts(prev => ({ ...prev, [rep.id]: e.target.value }))}
+                            placeholder="Öğrenciye yanıt yazın..."
+                            rows={2}
+                            style={{ width: '100%', boxSizing: 'border-box', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.84rem', fontFamily: 'inherit', resize: 'vertical' }}
+                          />
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                        <span style={{ fontSize: '0.76rem', color: '#64748b' }}>{rep.student_email || 'E-posta yok'}</span>
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          {rep.status === 'open' && (
+                            <button
+                              onClick={() => submitReportReply(rep.id)}
+                              disabled={!(replyDrafts[rep.id] || '').trim()}
+                              style={{ padding: '6px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#0f172a', color: '#fff', cursor: (replyDrafts[rep.id] || '').trim() ? 'pointer' : 'not-allowed', opacity: (replyDrafts[rep.id] || '').trim() ? 1 : 0.5, fontSize: '0.78rem', fontWeight: 'bold' }}
+                            >
+                              ✉ Yanıtla ve Çözüldü İşaretle
+                            </button>
+                          )}
+                          {rep.status === 'open' ? (
+                            <button onClick={() => markReportStatus(rep.id, 'resolved')} style={{ padding: '6px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#16a34a', color: '#fff', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}>
+                              ✓ Çözüldü İşaretle
+                            </button>
+                          ) : (
+                            <button onClick={() => markReportStatus(rep.id, 'open')} style={{ padding: '6px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', color: '#0f172a', cursor: 'pointer', fontSize: '0.78rem' }}>
+                              ↺ Tekrar Aç
+                            </button>
+                          )}
+                          <button onClick={() => deleteAdminReport(rep.id)} style={{ padding: '6px 10px', borderRadius: '6px', border: 'none', backgroundColor: '#ef4444', color: '#fff', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}>
+                            Sil
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+
+        {showBillingAdmin && (
+          <div style={{ marginBottom: '20px', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+              <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🧾 Fatura Bilgileri ({billingRecords.length})</h2>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  value={billingSearch}
+                  onChange={(e) => setBillingSearch(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') fetchAllBillingRecords(billingSearch); }}
+                  placeholder="E-posta ile ara..."
+                  style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                />
+                <button onClick={() => fetchAllBillingRecords(billingSearch)} style={{ padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Ara</button>
+                <button onClick={() => setShowBillingAdmin(false)} style={{ padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+              </div>
+            </div>
+
+            {billingRecordsLoading ? (
+              <p style={{ color: '#64748b' }}>Yükleniyor...</p>
+            ) : billingRecords.length === 0 ? (
+              <p style={{ color: '#64748b' }}>Kayıt bulunamadı. (Öğrenciler "Sınavlarım" sayfasından fatura bilgilerini kendileri girer.)</p>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', borderBottom: '2px solid #e2e8f0' }}>
+                      <th style={{ padding: '8px' }}>Öğrenci E-posta</th>
+                      <th style={{ padding: '8px' }}>Ad Soyad</th>
+                      <th style={{ padding: '8px' }}>TC Kimlik No</th>
+                      <th style={{ padding: '8px' }}>Fatura E-posta</th>
+                      <th style={{ padding: '8px' }}>Adres</th>
+                      <th style={{ padding: '8px' }}>Son Güncelleme</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {billingRecords.map((rec) => (
+                      <tr key={rec.student_email} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '8px' }}>{rec.student_email}</td>
+                        <td style={{ padding: '8px' }}>{rec.full_name}</td>
+                        <td style={{ padding: '8px', fontFamily: 'monospace' }}>{rec.tc_kimlik_no}</td>
+                        <td style={{ padding: '8px' }}>{rec.invoice_email}</td>
+                        <td style={{ padding: '8px', maxWidth: '260px', whiteSpace: 'pre-wrap' }}>{rec.address}</td>
+                        <td style={{ padding: '8px', color: '#94a3b8', fontSize: '0.76rem' }}>
+                          {rec.updated_at ? new Date(rec.updated_at).toLocaleString('tr-TR') : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+
+        {showCategoryManager && (() => {
+          const iconBtn = { border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.85rem', padding: '2px 5px' };
+          const delBtn = { padding: '4px 8px', borderRadius: '6px', border: 'none', backgroundColor: '#fee2e2', color: '#dc2626', cursor: 'pointer', fontSize: '0.74rem', fontWeight: 'bold' };
+          const arrowBtn = { border: 'none', background: 'none', cursor: 'pointer', fontSize: '0.8rem', color: '#64748b', width: '18px', padding: 0 };
+          const tabBtn = (id, label) => (
+            <button type="button" onClick={() => setCatTab(id)} style={{ padding: '8px 16px', border: 'none', borderBottom: catTab === id ? '3px solid #0f172a' : '3px solid transparent', background: 'none', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.88rem', color: catTab === id ? '#0f172a' : '#64748b' }}>{label}</button>
+          );
+          const sortedDersler = [...lessonCategories].sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+          return (
+            <div
+              style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+              onClick={() => setShowCategoryManager(false)}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '640px', maxWidth: '100%', maxHeight: '86vh', display: 'flex', flexDirection: 'column' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🗂 Ders / Kazanım / Sınav Tanımla</h2>
+                  <button onClick={() => setShowCategoryManager(false)} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+                </div>
+                <div style={{ display: 'flex', borderBottom: '1px solid #e2e8f0', marginBottom: '10px' }}>
+                  {tabBtn('ders', 'Dersler · Konu · Kazanım')}
+                  {tabBtn('sinav', 'Sınavlar')}
+                </div>
+
+                {catTab === 'ders' ? (
+                  <>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
+                      Ders, konu ve kazanımlar soru yüklerken (Soru Yaz ve Etiketlenmemiş Sorular) eklenir; burada sadece düzenlenir.
+                      ✏️ ile adını düzeltebilir, 🗑 ile silebilirsiniz. Bir soruya (Kazanım Haritası'na) atanmış kayıt silinemez.
+                    </div>
+                    <div style={{ overflowY: 'auto', flex: 1 }}>
+                      {sortedDersler.length === 0 ? (
+                        <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz ders yok. Soru Yaz ya da Havuza Soru Ekle ekranından ekleyebilirsiniz.</p>
+                      ) : sortedDersler.map((lc) => {
+                        const isLessonOpen = !!expandedLessonIds[lc.id];
+                        const childTopics = topics.filter((t) => t.lesson_category_id === lc.id);
+                        return (
+                          <div key={lc.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 4px' }}>
+                              <button type="button" onClick={() => setExpandedLessonIds((prev) => ({ ...prev, [lc.id]: !prev[lc.id] }))} style={arrowBtn}>{isLessonOpen ? '▾' : '▸'}</button>
+                              <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#0f172a', flex: 1 }}>{lc.name} <span style={{ color: '#94a3b8', fontSize: '0.72rem', fontWeight: 'normal' }}>({childTopics.length} konu)</span></span>
+                              <button type="button" onClick={() => renameLessonCategory(lc.id, lc.name)} title="Adını düzenle" style={iconBtn}>✏️</button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (blockDeleteIfInUse('lesson', lc, lc.name)) return;
+                                  const warn = childTopics.length > 0 ? `\n\nBu derse bağlı ${childTopics.length} konu da (ve onlara bağlı kazanımlar) birlikte silinecek.` : '';
+                                  if (window.confirm(`"${lc.name}" dersini silmek istediğinize emin misiniz?${warn}`)) deleteLessonCategory(lc.id);
+                                }}
+                                style={delBtn}
+                              >🗑</button>
+                            </div>
+                            {isLessonOpen && (
+                              <div style={{ paddingLeft: '24px', paddingBottom: '6px' }}>
+                                {childTopics.length === 0 && <p style={{ color: '#cbd5e1', fontSize: '0.76rem', padding: '2px 6px' }}>Bu derse bağlı konu yok.</p>}
+                                {childTopics.map((t) => {
+                                  const isTopicOpen = !!expandedTopicIds[t.id];
+                                  const childOutcomes = learningOutcomes.filter((o) => o.topic_id === t.id);
+                                  return (
+                                    <div key={t.id} style={{ borderTop: '1px solid #f8fafc' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 4px' }}>
+                                        <button type="button" onClick={() => setExpandedTopicIds((prev) => ({ ...prev, [t.id]: !prev[t.id] }))} style={arrowBtn}>{isTopicOpen ? '▾' : '▸'}</button>
+                                        <span style={{ fontSize: '0.84rem', flex: 1, color: '#334155' }}>{t.name} <span style={{ color: '#94a3b8', fontSize: '0.72rem' }}>({childOutcomes.length} kazanım)</span></span>
+                                        <button type="button" onClick={() => renameTopic(t.id, t.name)} title="Adını düzenle" style={iconBtn}>✏️</button>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (blockDeleteIfInUse('topic', t, t.name)) return;
+                                            const warn = childOutcomes.length > 0 ? `\n\nBu konuya bağlı ${childOutcomes.length} kazanım da birlikte silinecek.` : '';
+                                            if (window.confirm(`"${t.name}" konusunu silmek istediğinize emin misiniz?${warn}`)) deleteTopic(t.id);
+                                          }}
+                                          style={delBtn}
+                                        >🗑</button>
+                                      </div>
+                                      {isTopicOpen && (
+                                        <div style={{ paddingLeft: '24px', paddingBottom: '6px' }}>
+                                          {childOutcomes.length === 0 && <p style={{ color: '#cbd5e1', fontSize: '0.74rem', padding: '2px 6px' }}>Bu konuya bağlı kazanım yok.</p>}
+                                          {childOutcomes.map((o) => (
+                                            <div key={o.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 4px', borderTop: '1px solid #f8fafc' }}>
+                                              <span style={{ width: '18px', flexShrink: 0 }} />
+                                              <span style={{ fontSize: '0.8rem', flex: 1, color: '#475569' }}>{o.name}</span>
+                                              <button type="button" onClick={() => renameLearningOutcome(o.id, o.name)} title="Adını düzenle" style={iconBtn}>✏️</button>
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  if (blockDeleteIfInUse('outcome', o, o.name)) return;
+                                                  if (window.confirm(`"${o.name}" kazanımını silmek istediğinize emin misiniz?`)) deleteLearningOutcome(o.id);
+                                                }}
+                                                style={delBtn}
+                                              >🗑</button>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
+                      Sınavlar, "Yeni Sınav / Paket Oluştur" ekranındaki Sınav Türü kutusundan eklenir; burada adı düzeltilir ya da silinir.
+                      Sınav silinince dersler silinmez.
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                      <input value={mgrNewExam} onChange={(e) => setMgrNewExam(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addExamFromManager(); }} placeholder="Yeni sınav adı (ör. KPSS)" style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                      <button type="button" onClick={addExamFromManager} disabled={!mgrNewExam.trim()} style={{ padding: '8px 14px', borderRadius: '6px', border: 'none', backgroundColor: mgrNewExam.trim() ? '#0f172a' : '#cbd5e1', color: '#fff', fontWeight: 'bold', cursor: mgrNewExam.trim() ? 'pointer' : 'not-allowed' }}>+ Yeni sınav ekle</button>
+                    </div>
+                    <div style={{ overflowY: 'auto', flex: 1 }}>
+                      {examCategories.length === 0 ? (
+                        <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Henüz sınav türü yok.</p>
+                      ) : examCategories.map((cat) => (
+                        <div key={cat.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 4px', borderBottom: '1px solid #f1f5f9' }}>
+                          <span style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#0f172a', flex: 1 }}>{cat.name}</span>
+                          <button type="button" onClick={() => setBpExam(cat)} title="Bu sınavın derslerini, konu/kazanım soru dağılımını, süresini belirle" style={{ padding: '5px 10px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#1d4ed8', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}>📐 İçerik ve dağılım</button>
+                          <button type="button" onClick={() => renameExamCategory(cat.id, cat.name)} title="Adını düzenle" style={iconBtn}>✏️</button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (blockDeleteIfInUse('exam', cat, cat.name)) return;
+                              if (window.confirm(`"${cat.name}" sınavını silmek istediğinize emin misiniz? (Dersler silinmez.)`)) deleteExamCategory(cat.id);
+                            }}
+                            style={delBtn}
+                          >🗑</button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {showResourceManager && (
+          <div
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+            onClick={() => setShowResourceManager(false)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '760px', maxWidth: '100%', maxHeight: '84vh', display: 'flex', flexDirection: 'column' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>📚 Kazanım Kaynakları</h2>
+                <button onClick={() => setShowResourceManager(false)} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+              </div>
+
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
+                Bir kazanıma ders notu (PDF) ve/veya video linki ekleyin -- öğrenci o kazanımda
+                riskli çıkarsa, sonuç ekranında otomatik olarak burada eklediğiniz kaynak gösterilir.
+                Önce bir Ders Türü seçin.
+              </div>
+
+              <select
+                value={resourceManagerDersId || ''}
+                onChange={(e) => setResourceManagerDersId(e.target.value ? Number(e.target.value) : null)}
+                style={{ padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', marginBottom: '14px' }}
+              >
+                <option value="">Ders Türü seçin...</option>
+                {lessonCategories.map((lc) => <option key={lc.id} value={lc.id}>{lc.name}</option>)}
+              </select>
+
+              <div style={{ overflowY: 'auto', flex: 1 }}>
+                {!resourceManagerDersId ? (
+                  <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Kazanımları görmek için önce bir Ders Türü seçin.</p>
+                ) : (() => {
+                  const dersTopics = topics.filter((t) => t.lesson_category_id === resourceManagerDersId);
+                  const relevantOutcomes = learningOutcomes.filter((lo) => dersTopics.some((t) => t.id === lo.topic_id));
+                  if (relevantOutcomes.length === 0) {
+                    return <p style={{ color: '#94a3b8', fontSize: '0.85rem' }}>Bu ders türünde henüz kazanım yok.</p>;
+                  }
+                  return dersTopics.map((topic) => {
+                    const topicOutcomes = relevantOutcomes.filter((lo) => lo.topic_id === topic.id);
+                    if (topicOutcomes.length === 0) return null;
+                    return (
+                      <div key={topic.id} style={{ marginBottom: '14px' }}>
+                        <div style={{ fontSize: '0.82rem', fontWeight: 'bold', color: '#334155', marginBottom: '6px' }}>{topic.name}</div>
+                        {topicOutcomes.map((lo) => {
+                          const resource = learningOutcomeResources[lo.id] || {};
+                          const draftVideo = resourceVideoDrafts[lo.id] !== undefined ? resourceVideoDrafts[lo.id] : (resource.video_url || '');
+                          return (
+                            <div key={lo.id} style={{ display: 'grid', gridTemplateColumns: '1fr 160px 220px', gap: '8px', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f1f5f9' }}>
+                              <span style={{ fontSize: '0.84rem' }}>{lo.name}</span>
+
+                              <div>
+                                {resource.pdf_url ? (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                    <a href={resource.pdf_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.76rem', color: '#0f6e56' }}>📄 {resource.pdf_filename || 'Dosya'}</a>
+                                    <label style={{ fontSize: '0.72rem', color: '#334155', cursor: 'pointer', textDecoration: 'underline' }}>
+                                      Değiştir
+                                      <input
+                                        type="file"
+                                        accept="application/pdf"
+                                        style={{ display: 'none' }}
+                                        onChange={(e) => { if (e.target.files[0]) uploadKazanimPdf(lo.id, e.target.files[0]); e.target.value = ''; }}
+                                      />
+                                    </label>
+                                    <button onClick={() => removeKazanimPdf(lo.id)} style={{ border: 'none', background: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '0.76rem' }}>✕</button>
+                                  </div>
+                                ) : (
+                                  <label style={{ fontSize: '0.76rem', color: '#0f6e56', cursor: 'pointer', border: '1px dashed #cbd5e1', borderRadius: '6px', padding: '4px 8px', display: 'inline-block' }}>
+                                    + PDF Yükle
+                                    <input
+                                      type="file"
+                                      accept="application/pdf"
+                                      style={{ display: 'none' }}
+                                      onChange={(e) => { if (e.target.files[0]) uploadKazanimPdf(lo.id, e.target.files[0]); e.target.value = ''; }}
+                                    />
+                                  </label>
+                                )}
+                              </div>
+
+                              <div style={{ display: 'flex', gap: '4px' }}>
+                                <input
+                                  type="text"
+                                  placeholder="YouTube linki..."
+                                  value={draftVideo}
+                                  onChange={(e) => setResourceVideoDrafts((prev) => ({ ...prev, [lo.id]: e.target.value }))}
+                                  style={{ flex: 1, fontSize: '0.76rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box' }}
+                                />
+                                <button
+                                  onClick={() => saveKazanimVideoUrl(lo.id, draftVideo)}
+                                  style={{ fontSize: '0.72rem', padding: '5px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}
+                                >Kaydet</button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          </div>
+        )}
+
+
+
+
+        {showPoolImport && (
+          <div
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+            onClick={() => { if (!poolImporting) setShowPoolImport(false); }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '920px', maxWidth: '100%', maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>➕ Havuza Soru Ekle</h2>
+                {!poolImporting && (
+                  <button onClick={() => { setShowPoolImport(false); setPoolExcelRows([]); setPoolPdfFiles(new Map()); setPoolImportErrors([]); }} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+                )}
+              </div>
+
+              {/* --- 1) YÜKLEME BÖLÜMÜ --- */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap', margin: '6px 0 8px' }}>
+                <h3 style={{ fontSize: '0.95rem', margin: 0 }}>Havuza Soru Yükle</h3>
+                <button onClick={() => { setPoolEditorRow(null); setShowPoolEditor(true); }} disabled={poolImporting} style={{ fontSize: '0.8rem', padding: '7px 14px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#2563eb', cursor: 'pointer', fontWeight: 'bold' }}>✏️ Soru Yaz</button>
+              </div>
+              <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '10px' }}>
+                Sütun sırası: 1. Soru PDF (dosya adı), 2. Çözüm PDF (dosya adı, opsiyonel), 3. Doğru Cevap (A-E), 4. Soru Grubu (opsiyonel; ortak metne bağlı sorulara aynı kod: G1, G1, G1).
+                İlk satır başlık kabul edilir. Her PDF zaten TEK bir soru (1 sayfa) olmalı -- InDesign'da "Create Separate PDF Files" ile böldüğünüz dosyalar.
+                Ders/Konu/Kazanım burada YOK -- yükledikten sonra aşağıdaki "Etiketlenmemiş Sorular" bölümünden dropdown ile atanır.
+              </div>
+
+              <div style={{ marginBottom: '14px' }}>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Grup Adı <span style={{ fontWeight: 'normal', color: '#64748b' }}>(bu yüklemeyi daha sonra bu isimle bulacaksınız -- ör. "Biyoloji Kitabı 1")</span></label>
+                <input
+                  type="text"
+                  value={poolGroupName}
+                  onChange={(e) => setPoolGroupName(e.target.value)}
+                  disabled={poolImporting}
+                  placeholder="Örn. Biyoloji Kitabı 1"
+                  className="yt-input"
+                  style={{ width: '100%', maxWidth: '360px', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={downloadPoolImportTemplate}
+                style={{ alignSelf: 'flex-start', marginBottom: '14px', padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f8fafc', color: '#334155', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}
+              >
+                📥 Boş Excel Şablonu İndir
+              </button>
+
+              <div style={{ display: 'flex', gap: '16px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                <div style={{ flex: '1 1 300px' }}>
+                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>1. Excel Dosyası</label>
+                  <input type="file" accept=".xlsx,.xls" onChange={handlePoolExcelSelect} disabled={poolImporting} style={{ fontSize: '0.8rem', width: '100%' }} />
+                  {poolExcelRows.length > 0 && <div style={{ fontSize: '0.76rem', color: '#16a34a', marginTop: '4px' }}>✓ {poolExcelRows.length} satır okundu.</div>}
+                </div>
+                <div style={{ flex: '1 1 300px' }}>
+                  <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>2. PDF Dosyaları (soru + çözüm, hepsi bir arada)</label>
+                  <input type="file" accept="application/pdf" multiple onChange={handlePoolPdfSelect} disabled={poolImporting} style={{ fontSize: '0.8rem', width: '100%' }} />
+                  {poolPdfFiles.size > 0 && <div style={{ fontSize: '0.76rem', color: '#16a34a', marginTop: '4px' }}>✓ {poolPdfFiles.size} dosya seçildi.</div>}
+                </div>
+              </div>
+
+              {poolExcelRows.length > 0 && (
+                <div style={{ overflowY: 'auto', maxHeight: '220px', border: '1px solid #f1f5f9', borderRadius: '8px', marginBottom: '10px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Soru PDF</th>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Çözüm PDF</th>
+                        <th style={{ textAlign: 'left', padding: '6px 8px' }}>Cevap</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {poolExcelRows.map((row, i) => {
+                        const soruOk = row.soruPdfName && poolPdfFiles.has(row.soruPdfName.toLowerCase());
+                        const cozumOk = !row.cozumPdfName || poolPdfFiles.has(row.cozumPdfName.toLowerCase());
+                        const cevapOk = ['A', 'B', 'C', 'D', 'E'].includes(row.cevap);
+                        return (
+                          <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
+                            <td style={{ padding: '5px 8px', color: soruOk ? '#16a34a' : '#dc2626' }}>
+                              {row.soruPdfName ? (soruOk ? '✓ ' : '✗ ') + row.soruPdfName : '—'}
+                            </td>
+                            <td style={{ padding: '5px 8px', color: cozumOk ? '#16a34a' : '#dc2626' }}>
+                              {row.cozumPdfName ? (cozumOk ? '✓ ' : '✗ ') + row.cozumPdfName : '—'}
+                            </td>
+                            <td style={{ padding: '5px 8px', fontFamily: 'monospace', color: cevapOk ? '#16a34a' : '#dc2626' }}>{row.cevap || '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {poolImportErrors.length > 0 && (
+                <div style={{ marginBottom: '10px', padding: '10px', backgroundColor: '#fef2f2', borderRadius: '6px', maxHeight: '120px', overflowY: 'auto' }}>
+                  {poolImportErrors.map((err, i) => (
+                    <div key={i} style={{ fontSize: '0.74rem', color: '#dc2626' }}>{err}</div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '10px' }}>
+                {poolImporting && (
+                  <span style={{ fontSize: '0.82rem', color: '#334155' }}>
+                    {poolImportProgress.current} / {poolImportProgress.total} işleniyor...
+                  </span>
+                )}
+                <button
+                  onClick={runPoolImport}
+                  disabled={poolImporting || poolExcelRows.length === 0 || !poolGroupName.trim()}
+                  className="yt-btn yt-btn-primary"
+                  style={{ opacity: (poolImporting || poolExcelRows.length === 0 || !poolGroupName.trim()) ? 0.5 : 1 }}
+                >
+                  {poolImporting ? 'Yükleniyor...' : `${poolExcelRows.length || ''} Soruyu Havuza Ekle`}
+                </button>
+              </div>
+
+              {/* --- 2) ETİKETLEME BÖLÜMÜ --- */}
+              <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '16px' }}>
+                <h3 style={{ fontSize: '0.95rem', margin: '0 0 10px' }}>Etiketlenmemiş Sorular</h3>
+
+                {/* Yükleme grubu seçici -- farklı oturumlarda yüklenmiş etiketsiz
+                    gruplar birbirine KARIŞMASIN diye, önce hangi grubu
+                    etiketleyeceğinizi seçiyorsunuz. "Tümüne Uygula" ve satır
+                    satır tablo SADECE aşağıda seçtiğiniz gruba uygulanır. */}
+                {poolTaggingLoading && poolBatches.length === 0 ? (
+                  <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Yükleniyor...</p>
+                ) : poolBatches.length === 0 ? (
+                  <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Etiketlenmeyi bekleyen soru yok -- havuzdaki her soruya Ders/Konu/Kazanım atanmış.</p>
+                ) : (
+                  <div style={{ marginBottom: '14px' }}>
+                    <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>
+                      Hangi yükleme grubunu etiketlemek istiyorsunuz?
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      {poolBatches.map((b) => (
+                        <button
+                          key={b.batch_id || 'grupsuz'}
+                          type="button"
+                          onClick={() => { setSelectedPoolBatch(b.batch_id || 'grupsuz'); fetchUnlabeledPoolQuestions(b.batch_id || 'grupsuz'); }}
+                          style={{
+                            padding: '8px 14px', borderRadius: '8px', cursor: 'pointer', fontSize: '0.8rem',
+                            border: selectedPoolBatch === (b.batch_id || 'grupsuz') ? '2px solid #0f172a' : '1px solid #cbd5e1',
+                            backgroundColor: selectedPoolBatch === (b.batch_id || 'grupsuz') ? '#f1f5f9' : '#fff',
+                            fontWeight: selectedPoolBatch === (b.batch_id || 'grupsuz') ? 'bold' : 'normal',
+                          }}
+                        >
+                          {b.batch_id || 'İsimsiz Grup'} · {b.count} soru <span style={{ opacity: 0.6, fontSize: '0.72rem' }}>({new Date(b.created_at).toLocaleDateString('tr-TR')})</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {poolTaggingLoading ? (
+                  <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Yükleniyor...</p>
+                ) : !selectedPoolBatch ? (
+                  poolBatches.length > 0 && <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Etiketlemek için yukarıdan bir grup seçin.</p>
+                ) : poolUntagged.length === 0 ? (
+                  <p style={{ color: '#64748b', fontSize: '0.85rem' }}>Bu grupta etiketlenmeyi bekleyen soru kalmadı.</p>
+                ) : (
+                  <>
+                    {/* ⚡ Tek Kazanım Uygula -- SEÇİLİ GRUPTAKİ tüm sorular aynı kazanımdansa. */}
+                    <div style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px', marginBottom: '14px' }}>
+                      <div style={{ fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '8px' }}>⚡ Tek Kazanım Uygula (bu grubun tüm soruları aynı konuysa)</div>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                        <CategoryPicker
+                          layout="row"
+                          lessons={lessonCategories} topics={topics} outcomes={learningOutcomes}
+                          dersId={quickPoolIds.dersId} konuId={quickPoolIds.konuId} kazanimId={quickPoolIds.kazanimId}
+                          onChange={(v) => setQuickPoolIds(v)}
+                          onCreateLesson={createLessonForPicker} onCreateTopic={createTopicForPicker} onCreateOutcome={createOutcomeForPicker}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => applyQuickKazanimToPool(quickPoolIds)}
+                          disabled={!quickPoolIds.dersId || !quickPoolIds.konuId || !quickPoolIds.kazanimId}
+                          className="yt-btn yt-btn-primary"
+                          style={{ fontSize: '0.78rem', padding: '6px 12px', opacity: (!quickPoolIds.dersId || !quickPoolIds.konuId || !quickPoolIds.kazanimId) ? 0.5 : 1 }}
+                        >
+                          Tümüne Uygula ({poolUntagged.length})
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Satır satır -- karışık bir grup yüklendiyse (aynı anda birden fazla kazanıma ait sorular varsa) her satır kendi Ders/Konu/Kazanım'ını dropdown'dan seçer. */}
+                    <div style={{ overflowY: 'auto', maxHeight: '320px', border: '1px solid #f1f5f9', borderRadius: '8px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem' }}>
+                        <thead>
+                          <tr style={{ backgroundColor: '#f8fafc', position: 'sticky', top: 0 }}>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Soru</th>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Ders / Konu / Kazanım</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {poolUntagged.map((row) => {
+                            return (
+                              <tr key={row.id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                                <td style={{ padding: '5px 8px', color: '#334155' }}>#{row.id}{row.source_label ? ` (${row.source_label})` : ''}</td>
+                                <td style={{ padding: '5px 8px' }}>
+                                  <CategoryPicker
+                                    layout="row"
+                                    lessons={lessonCategories} topics={topics} outcomes={learningOutcomes}
+                                    dersId={row.lesson_category_id} konuId={row.topic_id} kazanimId={row.outcome_id}
+                                    onChange={(v) => updatePoolRowTags(row.id, v)}
+                                    onCreateLesson={createLessonForPicker} onCreateTopic={createTopicForPicker} onCreateOutcome={createOutcomeForPicker}
+                                    selectStyle={{ padding: '4px 6px', fontSize: '0.76rem' }}
+                                  />
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+
+        {showPoolBrowser && (
+          <div
+            style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15, 23, 42, 0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
+            onClick={() => setShowPoolBrowser(false)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ backgroundColor: '#ffffff', borderRadius: '12px', padding: '20px', width: '1040px', maxWidth: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflowY: 'auto' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🗂️ Soru Havuzu</h2>
+                <button onClick={() => setShowPoolBrowser(false)} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+              </div>
+
+              {!selectedPoolQuestionId ? (
+                <>
+                  <div style={{ display: 'flex', gap: '10px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <select
+                      value={poolBrowserGroup}
+                      onChange={(e) => { setPoolBrowserGroup(e.target.value); fetchPoolBrowserRows({ group: e.target.value }); }}
+                      style={{ padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.82rem', maxWidth: '260px' }}
+                    >
+                      <option value="">Tüm Gruplar</option>
+                      {poolBrowserGroups.filter((g) => g.tagged > 0).map((g) => (
+                        <option key={g.key} value={g.key}>{g.key === '__none__' ? 'İsimsiz Grup' : g.key} ({g.tagged})</option>
+                      ))}
+                    </select>
+                    <button onClick={() => { fetchPoolBrowserRows(); fetchPoolBrowserGroups(); }} className="yt-btn yt-btn-primary" style={{ fontSize: '0.8rem', padding: '7px 14px' }}>Yenile</button>
+                    {poolBrowserGroup && (
+                      <button
+                        onClick={deletePoolGroup}
+                        style={{ fontSize: '0.8rem', padding: '7px 14px', borderRadius: '6px', border: '1px solid #dc2626', backgroundColor: '#fff', color: '#dc2626', cursor: 'pointer', fontWeight: 'bold' }}
+                      >
+                        🗑️ Bu Grubu Tümden Sil
+                      </button>
+                    )}
+                    <button onClick={() => { const o = {}; poolBrowserRows.forEach((r) => { const dn = poolNm(lessonCategories, r.lesson_category_id, 'Dersi belirsiz'), tn = poolNm(topics, r.topic_id, 'Konusuz'), on = poolNm(learningOutcomes, r.outcome_id, 'Kazanımsız'); o[`d:${dn}`] = true; o[`t:${dn}:${tn}`] = true; o[`o:${dn}:${tn}:${on}`] = true; }); setPoolTreeOpen(o); }} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini aç</button>
+                    <button onClick={() => setPoolTreeOpen({})} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Hepsini kapat</button>
+                    <button onClick={() => setFr({ lesson: '', topic: '', outcome: '', find: '', repl: '', part: 'both', matchCase: false, whole: false, results: null, sel: {}, busy: false, msg: '' })} style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#1d4ed8', cursor: 'pointer', fontWeight: 'bold' }} title="Havuzdaki sorularda metin bul ve değiştir">🔎 Bul / Değiştir</button>
+                    <button onClick={cleanOrphanFiles} disabled={cleanBusy} title="Hiçbir soruya/sınava bağlı olmayan PDF dosyalarını depodan siler" style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #fca5a5', backgroundColor: '#fef2f2', color: '#b91c1c', cursor: cleanBusy ? 'wait' : 'pointer' }}>{cleanBusy ? 'Taranıyor…' : '🧹 Artık dosyaları temizle'}</button>
+                    <button onClick={exportPoolForReview} title="Soruları ders/konu/kazanım ve metniyle CSV olarak indirir (kazanım kontrolü için)" style={{ fontSize: '0.8rem', padding: '7px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>📄 Kontrol dosyası indir</button>
+                    <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+                      <input value={poolGoId} onChange={(e) => setPoolGoId(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') goPoolId(false); }} placeholder="Soru no" inputMode="numeric" style={{ width: '82px', padding: '7px 8px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '0.8rem' }} />
+                      <button onClick={() => goPoolId(false)} title="Soru numarasıyla soruya git" style={{ fontSize: '0.8rem', padding: '7px 10px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: 'pointer' }}>Git</button>
+                      <button onClick={() => goPoolId(true)} title="Soru numarasıyla doğrudan düzenleme ekranını aç" style={{ fontSize: '0.8rem', padding: '7px 10px', borderRadius: '6px', border: '1px solid #c7d2fe', backgroundColor: '#eef2ff', cursor: 'pointer' }}>✏️ Düzenle</button>
+                    </span>
+                    <label style={{ fontSize: '0.78rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px' }} title="Kazanım başlığındaki 🔍 butonuyla yapılan benzer soru kontrolünde bu orandan yüksek benzerlikteki sorular listelenir. Düşürürseniz daha çok (daha az kesin) sonuç gelir.">
+                      Benzerlik en az %
+                      <input type="number" min="40" max="100" value={dupMin} onChange={(e) => setDupMin(Number(e.target.value) || 85)} style={{ width: '58px', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
+                    </label>
+                    <span style={{ fontSize: '0.78rem', color: '#64748b', marginLeft: 'auto' }}>{poolBrowserRows.length} soru</span>
+                  </div>
+
+                  {poolBrowserLoading ? (
+                    <p style={{ color: '#64748b' }}>Yükleniyor...</p>
+                  ) : poolBrowserRows.length === 0 ? (
+                    <p style={{ color: '#64748b' }}>Kriterlere uyan soru bulunamadı.</p>
+                  ) : (
+                    <div style={{ overflowY: 'auto', flex: 1, border: '1px solid #f1f5f9', borderRadius: '8px', padding: '6px' }}>
+                      {(() => {
+                        const toggle = (k) => setPoolTreeOpen((prev) => ({ ...prev, [k]: !prev[k] }));
+                        // poolBrowserRows zaten ağaç sırasında; ders > konu > kazanım olarak grupluyoruz
+                        const dersler = [];
+                        poolBrowserRows.forEach((r) => {
+                          const dn = poolNm(lessonCategories, r.lesson_category_id, 'Dersi belirsiz');
+                          const tn = poolNm(topics, r.topic_id, 'Konusuz');
+                          const on = poolNm(learningOutcomes, r.outcome_id, 'Kazanımsız');
+                          let d = dersler[dersler.length - 1];
+                          if (!d || d.id !== dn) { d = { id: dn, konular: [], n: 0 }; dersler.push(d); }
+                          d.n += 1;
+                          let t = d.konular[d.konular.length - 1];
+                          if (!t || t.id !== tn) { t = { id: tn, kazanimlar: [], n: 0 }; d.konular.push(t); }
+                          t.n += 1;
+                          let o = t.kazanimlar[t.kazanimlar.length - 1];
+                          if (!o || o.id !== on) { o = { id: on, rows: [] }; t.kazanimlar.push(o); }
+                          o.rows.push(r);
+                        });
+                        const head = (open, label, n, level, onClick, color, extra) => (
+                          <div onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '7px 10px', marginLeft: level * 18, cursor: 'pointer', borderRadius: '6px', backgroundColor: level === 0 ? '#f1f5f9' : 'transparent', fontWeight: level < 2 ? 'bold' : 'normal', color: color || '#0f172a', fontSize: level === 0 ? '0.9rem' : '0.84rem' }}
+                            onMouseEnter={(e) => { if (level > 0) e.currentTarget.style.backgroundColor = '#f8fafc'; }}
+                            onMouseLeave={(e) => { if (level > 0) e.currentTarget.style.backgroundColor = 'transparent'; }}>
+                            <span style={{ width: '12px', color: '#64748b', fontSize: '0.7rem' }}>{open ? '▼' : '▶'}</span>
+                            <span style={{ flex: 1 }}>{label}</span>
+                            {extra}
+                            <span style={{ color: '#64748b', fontWeight: 'normal', fontSize: '0.76rem' }}>{n} soru</span>
+                          </div>
+                        );
+                        return dersler.map((d) => {
+                          const dk = `d:${d.id}`;
+                          return (
+                            <div key={dk} style={{ marginBottom: '4px' }}>
+                              {head(!!poolTreeOpen[dk], d.id, d.n, 0, () => toggle(dk))}
+                              {poolTreeOpen[dk] && d.konular.map((t) => {
+                                const tk = `t:${d.id}:${t.id}`;
+                                return (
+                                  <div key={tk}>
+                                    {head(!!poolTreeOpen[tk], t.id, t.n, 1, () => toggle(tk))}
+                                    {poolTreeOpen[tk] && t.kazanimlar.map((o) => {
+                                      const ok = `o:${d.id}:${t.id}:${o.id}`;
+                                      return (
+                                        <div key={ok}>
+                                          {head(!!poolTreeOpen[ok], o.id, o.rows.length, 2, () => toggle(ok), undefined,
+                                            o.rows.length > 0 ? (
+                                              <span style={{ display: 'inline-flex', gap: '6px' }}>
+                                                <button
+                                                  onClick={(e) => { e.stopPropagation(); setRev({ name: o.id, ids: o.rows.map((r) => r.id), part: 0, size: 30, paste: '', parsed: {}, idx: 0, onlyIssues: false, showSol: false, error: '', copied: 0, pasteMode: false }); }}
+                                                  title="Bu kazanımın sorularını Gemini/Claude sitesinde kontrol ettirip sonucu burada soru soru incelersiniz"
+                                                  style={{ fontSize: '0.72rem', padding: '3px 9px', borderRadius: '6px', border: '1px solid #c7d2fe', backgroundColor: '#eef2ff', color: '#3730a3', cursor: 'pointer', fontWeight: 'normal' }}
+                                                >🧐 Soru incele</button>
+                                                {o.rows.length > 1 && (
+                                                  <button
+                                                    onClick={(e) => { e.stopPropagation(); setPoolTreeOpen((prev) => ({ ...prev, [ok]: true })); runDupCheck(ok, o.rows); }}
+                                                    title="Bu kazanımın altındaki soruları birbiriyle karşılaştırır"
+                                                    style={{ fontSize: '0.72rem', padding: '3px 9px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', color: '#0f172a', cursor: 'pointer', fontWeight: 'normal' }}
+                                                  >🔍 Benzer soruları bul</button>
+                                                )}
+                                              </span>
+                                            ) : null)}
+                                          {poolTreeOpen[ok] && dupState.key === ok && dupState.pairs && renderDupPanel()}
+                                          {poolTreeOpen[ok] && (
+                                            <table style={{ width: 'calc(100% - 72px)', marginLeft: 72, borderCollapse: 'collapse', fontSize: '0.8rem' }}>
+                                              <tbody>
+                                                {o.rows.map((row) => (
+                                                  <tr
+                                                    key={row.id}
+                                                    onClick={() => openPoolQuestionDetail(row.id)}
+                                                    style={{ borderTop: '1px solid #f1f5f9', cursor: 'pointer' }}
+                                                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8fafc'}
+                                                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                                  >
+                                                    <td style={{ padding: '5px 10px', color: '#334155', fontWeight: 'bold' }}>#{row.id}</td>
+                                                    <td style={{ padding: '5px 10px', fontFamily: 'monospace' }}>Cevap: {row.correct_answer || '—'}</td>
+                                                    <td style={{ padding: '5px 10px' }}>Kullanım: {row.used_count || 0}</td>
+                                                    <td style={{ padding: '5px 10px', color: '#64748b' }}>{row.upload_batch_id || '—'}</td>
+                                                  </tr>
+                                                ))}
+                                              </tbody>
+                                            </table>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        });
+                      })()}
+                    </div>
+                  )}
+                </>
+              ) : (
+                (() => {
+                  const navIds = poolNavRef.current || poolBrowserRows.map((r) => r.id);
+                  const idx = navIds.indexOf(selectedPoolQuestionId);
+                  const row = poolBrowserRows.find((r) => r.id === selectedPoolQuestionId);
+                  if (!row) return <p style={{ color: '#64748b' }}>Soru bulunamadı.</p>;
+                  const ders = lessonCategories.find((lc) => lc.id === row.lesson_category_id);
+                  const konu = topics.find((t) => t.id === row.topic_id);
+                  const goTo = (newIdx) => {
+                    if (newIdx < 0 || newIdx >= navIds.length) return;
+                    openPoolQuestionDetail(navIds[newIdx]);
+                  };
+                  return (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 360px', gap: '20px', alignItems: 'start' }}>
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPoolQuestionId(null)}
+                          style={{ marginBottom: '10px', padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer', fontSize: '0.8rem' }}
+                        >
+                          ◀ Listeye Dön
+                        </button>
+                        <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px' }}>
+                          <SecurePdfViewer poolId={row.id} type="pool-question" pageNumber={1} version={poolPdfVersions[`pdf_file:${row.id}`]} />
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                            <button
+                              type="button"
+                              onClick={() => goTo(idx - 1)}
+                              disabled={idx <= 0}
+                              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: idx <= 0 ? 'not-allowed' : 'pointer', opacity: idx <= 0 ? 0.4 : 1, fontWeight: 'bold' }}
+                            >
+                              ◀ Önceki Soru
+                            </button>
+                            <span style={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#334155' }}>{idx + 1} / {navIds.length}</span>
+                            <button
+                              type="button"
+                              onClick={() => goTo(idx + 1)}
+                              disabled={idx >= navIds.length - 1}
+                              style={{ padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', cursor: idx >= navIds.length - 1 ? 'not-allowed' : 'pointer', opacity: idx >= navIds.length - 1 ? 0.4 : 1, fontWeight: 'bold' }}
+                            >
+                              Sonraki Soru ▶
+                            </button>
+                          </div>
+                        </div>
+
+                        <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px', marginTop: '14px' }}>
+                          <div style={{ fontWeight: 'bold', fontSize: '0.85rem', color: '#334155', marginBottom: '10px' }}>💡 Çözüm</div>
+                          {row.solution_pdf_file ? (
+                            <SecurePdfViewer poolId={row.id} type="pool-solution" pageNumber={1} version={poolPdfVersions[`solution_pdf_file:${row.id}`]} />
+                          ) : (
+                            <p style={{ margin: 0, fontSize: '0.8rem', color: '#64748b' }}>Bu soru için çözüm PDF'i yüklenmemiş. Sağdaki "Çözüm PDF'i" alanından ekleyebilirsiniz.</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                          <h3 style={{ margin: 0, fontSize: '1rem' }}>#{row.id}</h3>
+                          <button type="button" onClick={deletePoolQuestion} style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.82rem' }}>Sil ✕</button>
+                        </div>
+                        <p style={{ margin: '0 0 14px', fontSize: '0.76rem', color: '#94a3b8' }}>Grup: {row.upload_batch_id || '—'} · Kullanım: {row.used_count || 0}</p>
+
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Ders</label>
+                        {row.source_json ? (
+                          <div style={{ width: '100%', marginBottom: '10px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', fontSize: '0.88rem', color: '#334155', boxSizing: 'border-box' }}>{ders ? lcKey(ders) : '—'}</div>
+                        ) : (
+                        <select
+                          value={ders ? lcKey(ders) : ''}
+                          onChange={(e) => handlePoolDetailDersChange(e.target.value)}
+                          className="yt-input"
+                          style={{ width: '100%', marginBottom: '10px' }}
+                        >
+                          <option value="">Ders Seçin</option>
+                          {lessonUniq.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
+                        </select>
+                        )}
+
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Konu</label>
+                        {row.source_json ? (
+                          <div style={{ width: '100%', marginBottom: '10px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', fontSize: '0.88rem', color: '#334155', boxSizing: 'border-box' }}>{konu ? konu.name : '—'}</div>
+                        ) : (
+                        <select
+                          value={konu ? konu.name : ''}
+                          onChange={(e) => handlePoolDetailKonuChange(row.lesson_category_id, e.target.value)}
+                          disabled={!row.lesson_category_id}
+                          className="yt-input"
+                          style={{ width: '100%', marginBottom: '10px' }}
+                        >
+                          <option value="">{row.lesson_category_id ? 'Konu Seçin' : 'Önce Ders seçin'}</option>
+                          {topics.filter((t) => t.lesson_category_id === row.lesson_category_id).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                        </select>
+                        )}
+
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Kazanım</label>
+                        {row.source_json ? (
+                          <div style={{ width: '100%', marginBottom: '10px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', fontSize: '0.88rem', color: '#334155', boxSizing: 'border-box' }}>{learningOutcomes.find((lo) => lo.id === row.outcome_id)?.name || '—'}</div>
+                        ) : (
+                        <select
+                          value={learningOutcomes.find((lo) => lo.id === row.outcome_id)?.name || ''}
+                          onChange={(e) => handlePoolDetailKazanimChange(row.topic_id, e.target.value)}
+                          disabled={!row.topic_id}
+                          className="yt-input"
+                          style={{ width: '100%', marginBottom: '10px' }}
+                        >
+                          <option value="">{row.topic_id ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
+                          {learningOutcomes.filter((lo) => lo.topic_id === row.topic_id).map((lo) => <option key={lo.id} value={lo.name}>{lo.name}</option>)}
+                        </select>
+                        )}
+
+                        {Array.isArray(row.extra_outcome_ids) && row.extra_outcome_ids.length > 0 && (
+                          <div style={{ marginBottom: '10px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#eff6ff', border: '1px dashed #93c5fd', fontSize: '0.78rem', color: '#1e3a8a' }}>
+                            <div style={{ fontWeight: 'bold', marginBottom: '3px' }}>Ek etiketler (bu soru buralarda da kullanılır)</div>
+                            {row.extra_outcome_ids.map((oid) => {
+                              const lo = learningOutcomes.find((x) => String(x.id) === String(oid));
+                              const tp = lo && topics.find((t) => String(t.id) === String(lo.topic_id));
+                              const dr = tp && lessonCategories.find((lc) => String(lc.id) === String(tp.lesson_category_id));
+                              return <div key={String(oid)}>• {dr ? lcKey(dr) : '?'} / {tp ? tp.name : '?'} / {lo ? lo.name : '?'}</div>;
+                            })}
+                          </div>
+                        )}
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Doğru Cevap</label>
+                        {row.source_json ? (
+                          <div style={{ width: '100%', marginBottom: '16px', padding: '8px 10px', borderRadius: '6px', backgroundColor: '#f1f5f9', border: '1px solid #e2e8f0', fontSize: '0.88rem', fontWeight: 'bold', color: '#334155', boxSizing: 'border-box' }}>{row.correct_answer || '—'}</div>
+                        ) : (
+                        <select
+                          value={row.correct_answer || ''}
+                          onChange={(e) => handlePoolDetailCevapChange(e.target.value)}
+                          className="yt-input"
+                          style={{ width: '100%', marginBottom: '16px' }}
+                        >
+                          <option value="">Seçin</option>
+                          {['A', 'B', 'C', 'D', 'E'].map((c) => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                        )}
+
+                        {row.source_json ? (
+                          <button
+                            onClick={() => openPoolEditor(row)}
+                            style={{ width: '100%', marginBottom: '14px', padding: '9px', borderRadius: '6px', border: '1px solid #2563eb', backgroundColor: '#eff6ff', color: '#2563eb', fontWeight: 'bold', cursor: 'pointer' }}
+                          >
+                            ✏️ Soruyu Düzenle (metin, şık, şekil)
+                          </button>
+                        ) : (
+                          <div style={{ marginBottom: '14px', fontSize: '0.75rem', color: '#64748b' }}>Bu soru Soru Yaz ile yazılmadığı için metni düzenlenemez; Ders/Konu/Kazanım/Doğru Cevap'ı buradan, PDF'i aşağıdan değiştirebilirsiniz.</div>
+                        )}
+                        <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Soru Grubu Kodu (ortak metne bağlı sorular)</label>
+                        <input
+                          key={row.id}
+                          defaultValue={row.set_key ? row.set_key.split('::').slice(1).join('::') : ''}
+                          onBlur={(e) => handlePoolDetailSetChange(row, e.target.value)}
+                          placeholder="Boş = tek başına soru. Bağlı sorulara aynı kod (ör. G1)"
+                          className="yt-input"
+                          style={{ width: '100%', marginBottom: '16px', boxSizing: 'border-box' }}
+                        />
+
+                        {row.source_json ? (
+                          <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '12px', marginBottom: '14px', fontSize: '0.74rem', color: '#64748b', lineHeight: 1.5 }}>
+                            Ders, Konu, Kazanım, Doğru Cevap ve PDF'ler bu soruda yalnızca <b>✏️ Soruyu Düzenle</b> ekranından değiştirilir; böylece PDF ile kayıt birbirinden ayrılmaz.
+                          </div>
+                        ) : (
+                        <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '14px', marginBottom: '14px' }}>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>Soru PDF'i</label>
+                          <input type="file" accept="application/pdf" onChange={(e) => handlePoolDetailPdfReplace('pdf_file', e)} disabled={poolDetailUploading} style={{ fontSize: '0.78rem' }} />
+                          {poolDetailUploading && <div style={{ fontSize: '0.74rem', color: '#64748b', marginTop: '4px' }}>Yükleniyor...</div>}
+
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', margin: '12px 0 6px' }}>Çözüm PDF'i {row.solution_pdf_file ? '' : '(yok)'}</label>
+                          <input type="file" accept="application/pdf" onChange={(e) => handlePoolDetailPdfReplace('solution_pdf_file', e)} disabled={poolDetailUploading} style={{ fontSize: '0.78rem' }} />
+                        </div>
+                        )}
+
+                        <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '14px' }}>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '6px' }}>Kullanıldığı Testler</label>
+                          {poolDetailUsageLoading ? (
+                            <p style={{ fontSize: '0.78rem', color: '#64748b' }}>Yükleniyor...</p>
+                          ) : poolDetailUsage.length === 0 ? (
+                            <p style={{ fontSize: '0.78rem', color: '#16a34a' }}>Bu soru henüz hiçbir testte kullanılmadı -- düzeltmeler risksiz.</p>
+                          ) : (
+                            <div style={{ fontSize: '0.78rem', color: '#92400e', backgroundColor: '#fffbeb', padding: '10px', borderRadius: '6px' }}>
+                              <p style={{ margin: '0 0 6px' }}>⚠️ Bu soru şu testlerde kullanıldı. Buradaki düzeltme o testleri OTOMATİK düzeltmez, gerekirse oraya da gitmeniz gerekir:</p>
+                              <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                                {poolDetailUsage.map((u) => (
+                                  <li key={u.id}>{u.exams?.name || `Sınav #${u.exams?.id || '?'}`}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
+            </div>
+          </div>
+        )}
+
+
+
+        {showPoolGenerate && (() => {
+          const genParent = exams.find((e) => e.id === poolGenParentId);
+          const selStyle = { width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' };
+          const lblStyle = { display: 'block', fontSize: '0.85rem', fontWeight: 'bold', marginBottom: '4px', color: '#334155' };
+          const konularOf = (dersName) => { const d = lcByKey(dersName); return d ? topics.filter((t) => t.lesson_category_id === d.id) : []; };
+          const kazanimlarOf = (dersName, konuName) => { const d = lcByKey(dersName); const k = d && topics.find((t) => t.name === konuName && t.lesson_category_id === d.id); return k ? learningOutcomes.filter((lo) => lo.topic_id === k.id) : []; };
+          const updateRow = (idx, patch) => setPoolGenDenemeRows((rows) => rows.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
+          const denemeTotal = poolGenDenemeRows.reduce((s, r) => s + (Number(r.count) || 0), 0);
+          return (
+            <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
+              <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '24px', width: '760px', maxWidth: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <h2 style={{ margin: 0, fontSize: '1.15rem' }}>🎯 Havuzdan Oluştur</h2>
+                  {!poolGenLoading && (
+                    <button onClick={() => setShowPoolGenerate(false)} style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Kapat</button>
+                  )}
+                </div>
+                <p style={{ margin: '0 0 14px', color: '#64748b', fontSize: '0.9rem' }}>
+                  Üretilen sınavlar <b>{genParent ? genParent.name : ''}</b> paketine alt test olarak eklenir. Aynı üretim içinde bir soru iki kez kullanılmaz.
+                </p>
+
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                  <button onClick={() => setPoolGenMode('test')} disabled={poolGenLoading}
+                    style={{ flex: 1, padding: '10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', border: '2px solid #be185d', backgroundColor: poolGenMode === 'test' ? '#be185d' : '#fff', color: poolGenMode === 'test' ? '#fff' : '#be185d' }}>
+                    📝 Test Üret (aynı kazanımdan, çok sayıda)
+                  </button>
+                  <button onClick={() => setPoolGenMode('deneme')} disabled={poolGenLoading}
+                    style={{ flex: 1, padding: '10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', border: '2px solid #be185d', backgroundColor: poolGenMode === 'deneme' ? '#be185d' : '#fff', color: poolGenMode === 'deneme' ? '#fff' : '#be185d' }}>
+                    🏆 Deneme Üret (karma, tek deneme)
+                  </button>
+                </div>
+
+                {poolGenMode === 'test' ? (
+                  <div style={{ display: 'grid', gap: '12px' }}>
+                    <div>
+                      <label style={lblStyle}>Test adı öneki (boşsa kazanım adı kullanılır)</label>
+                      <input className="yt-input" style={selStyle} value={poolGenNamePrefix} onChange={(e) => setPoolGenNamePrefix(e.target.value)} placeholder="Örn: Sözcükte Anlam Testi" />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                      <div>
+                        <label style={lblStyle}>Ders</label>
+                        <select className="yt-input" style={selStyle} value={poolGenTestDers} onChange={(e) => { setPoolGenTestDers(e.target.value); setPoolGenTestKonu(''); setPoolGenTestKazanim(''); }}>
+                          <option value="">Seçin</option>
+                          {lessonUniq.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={lblStyle}>Konu</label>
+                        <select className="yt-input" style={selStyle} value={poolGenTestKonu} disabled={!poolGenTestDers} onChange={(e) => { setPoolGenTestKonu(e.target.value); setPoolGenTestKazanim(''); }}>
+                          <option value="">Seçin</option>
+                          {konularOf(poolGenTestDers).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={lblStyle}>Kazanım</label>
+                        <select className="yt-input" style={selStyle} value={poolGenTestKazanim} disabled={!poolGenTestKonu} onChange={(e) => setPoolGenTestKazanim(e.target.value)}>
+                          <option value="">Seçin</option>
+                          {kazanimlarOf(poolGenTestDers, poolGenTestKonu).map((lo) => <option key={lo.id} value={lo.name}>{lo.name}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                      <div>
+                        <label style={lblStyle}>Kaç test üretilsin?</label>
+                        <input type="number" min="1" className="yt-input" style={selStyle} value={poolGenTestCount} onChange={(e) => setPoolGenTestCount(e.target.value)} />
+                      </div>
+                      <div>
+                        <label style={lblStyle}>Her testte kaç soru?</label>
+                        <input type="number" min="1" className="yt-input" style={selStyle} value={poolGenTestSize} onChange={(e) => setPoolGenTestSize(e.target.value)} />
+                      </div>
+                    </div>
+                    <div style={{ fontSize: '0.9rem', color: '#be185d', fontWeight: 'bold' }}>
+                      Toplam gereken soru: {(Number(poolGenTestCount) || 0) * (Number(poolGenTestSize) || 0)}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gap: '12px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px' }}>
+                      <div>
+                        <label style={lblStyle}>Deneme adı</label>
+                        <input className="yt-input" style={selStyle} value={poolGenNamePrefix} onChange={(e) => setPoolGenNamePrefix(e.target.value)} placeholder="Örn: Biyoloji Deneme 1" />
+                      </div>
+                      <div>
+                        <label style={lblStyle}>Süre (dakika)</label>
+                        <input type="number" min="0" className="yt-input" style={selStyle} value={poolGenDuration} onChange={(e) => setPoolGenDuration(e.target.value)} />
+                      </div>
+                    </div>
+                    {poolGenDenemeRows.map((row, idx) => (
+                      <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 80px 1fr 32px', gap: '6px', alignItems: 'end' }}>
+                        <div>
+                          {idx === 0 && <label style={lblStyle}>Ders</label>}
+                          <select className="yt-input" style={selStyle} value={row.ders} onChange={(e) => updateRow(idx, { ders: e.target.value, konu: '', kazanim: '' })}>
+                            <option value="">Ders</option>
+                            {lessonUniq.map((lc) => <option key={lc.id} value={lcKey(lc)}>{lcKey(lc)}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          {idx === 0 && <label style={lblStyle}>Konu</label>}
+                          <select className="yt-input" style={selStyle} value={row.konu} disabled={!row.ders} onChange={(e) => updateRow(idx, { konu: e.target.value, kazanim: '' })}>
+                            <option value="">Konu</option>
+                            {konularOf(row.ders).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          {idx === 0 && <label style={lblStyle}>Kazanım</label>}
+                          <select className="yt-input" style={selStyle} value={row.kazanim} disabled={!row.konu} onChange={(e) => updateRow(idx, { kazanim: e.target.value })}>
+                            <option value="">Kazanım</option>
+                            {kazanimlarOf(row.ders, row.konu).map((lo) => <option key={lo.id} value={lo.name}>{lo.name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          {idx === 0 && <label style={lblStyle}>Soru</label>}
+                          <input type="number" min="1" className="yt-input" style={selStyle} value={row.count} onChange={(e) => updateRow(idx, { count: e.target.value })} />
+                        </div>
+                        <div>
+                          {idx === 0 && <label style={lblStyle}>Bölüm (ops.)</label>}
+                          <input className="yt-input" style={selStyle} value={row.bolum || ''} placeholder="Örn: Genel Yetenek" onChange={(e) => updateRow(idx, { bolum: e.target.value })} />
+                        </div>
+                        <button onClick={() => setPoolGenDenemeRows((rows) => rows.length > 1 ? rows.filter((_, i) => i !== idx) : rows)}
+                          style={{ padding: '8px 0', borderRadius: '6px', border: '1px solid #fecaca', backgroundColor: '#fef2f2', color: '#dc2626', cursor: 'pointer' }}>✕</button>
+                      </div>
+                    ))}
+                    <div>
+                      <button onClick={() => setPoolGenDenemeRows((rows) => [...rows, { ders: '', konu: '', kazanim: '', count: 10, bolum: '' }])}
+                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px dashed #be185d', backgroundColor: '#fff', color: '#be185d', cursor: 'pointer', fontWeight: 'bold' }}>
+                        + Satır Ekle
+                      </button>
+                    </div>
+                    <div style={{ fontSize: '0.9rem', color: '#be185d', fontWeight: 'bold' }}>Toplam soru: {denemeTotal}</div>
+                  </div>
+                )}
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '16px', fontSize: '0.9rem', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={poolGenIncludeUsed} onChange={(e) => setPoolGenIncludeUsed(e.target.checked)} disabled={poolGenLoading} />
+                  Daha önce kullanılmış soruları da dahil et
+                </label>
+
+                <div style={{ marginTop: '18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                  <div style={{ fontSize: '0.85rem', color: '#64748b' }}>
+                    {poolGenLoading && `${poolGenProgress.current} / ${poolGenProgress.total} hazırlanıyor... (PDF'ler birleştiriliyor, bekleyin)`}
+                  </div>
+                  <button
+                    onClick={poolGenMode === 'test' ? runGeneratePoolTests : runGeneratePoolDeneme}
+                    disabled={poolGenLoading}
+                    style={{ padding: '10px 20px', borderRadius: '6px', border: 'none', backgroundColor: poolGenLoading ? '#94a3b8' : '#be185d', color: '#fff', fontWeight: 'bold', cursor: poolGenLoading ? 'not-allowed' : 'pointer' }}>
+                    {poolGenLoading ? 'Hazırlanıyor...' : (poolGenMode === 'test' ? 'Testleri Oluştur' : 'Denemeyi Oluştur')}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {bpExam && (
+          <ExamBlueprintEditor
+            exam={bpExam}
+            lessonCategories={lessonCategories}
+            topics={topics}
+            learningOutcomes={learningOutcomes}
+            onClose={() => setBpExam(null)}
+            onSaved={() => { fetchCategoryLists(); }}
+          />
+        )}
+        {fr && renderFrModal()}
+        {rev && renderReviewModal()}
+
+        {showPoolEditor && (
+          <PoolQuestionEditor
+            lessonCategories={lessonCategories}
+            topics={topics}
+            learningOutcomes={learningOutcomes}
+            existingGroups={poolBrowserGroups.filter((g) => g.key !== '__none__').map((g) => g.key)}
+            editRow={poolEditorRow}
+            onCreateLesson={createLessonForPicker}
+            onCreateTopic={createTopicForPicker}
+            onCreateOutcome={createOutcomeForPicker}
+            onClose={() => { setShowPoolEditor(false); setPoolEditorRow(null); }}
+            onSaved={(editedId) => {
+              if (editedId) {
+                // Düzenlenen sorunun önizleme önbelleğini atlat
+                const t = Date.now();
+                setPoolPdfVersions((prev) => ({ ...prev, [`pdf_file:${editedId}`]: t, [`solution_pdf_file:${editedId}`]: t }));
+                // Kazanım vb. yeni değerleri hemen göster (tüm liste yenilenene kadar eski görünmesin)
+                supabase.from('question_pool').select('id, pdf_file, solution_pdf_file, correct_answer, lesson_category_id, topic_id, outcome_id, extra_outcome_ids, upload_batch_id, set_key, used_count, created_at').eq('id', editedId).single()
+                  .then(({ data }) => { if (data) setPoolBrowserRows((prev) => prev.map((r) => (r.id === editedId ? { ...r, ...data } : r))); });
+              }
+              fetchPoolBrowserRows(); fetchPoolBrowserGroups(); if (showPoolImport) fetchPoolBatches();
+            }}
+          />
+        )}
+
+        {frJob && (
+          <PoolQuestionEditor
+            lessonCategories={lessonCategories}
+            topics={topics}
+            learningOutcomes={learningOutcomes}
+            existingGroups={[]}
+            editRow={frJob.rows[0]}
+            rerenderJob={frJob.rows}
+            onCreateLesson={createLessonForPicker}
+            onCreateTopic={createTopicForPicker}
+            onCreateOutcome={createOutcomeForPicker}
+            onSaved={(id) => { const t = Date.now(); setPoolPdfVersions((prev) => ({ ...prev, [`pdf_file:${id}`]: t, [`solution_pdf_file:${id}`]: t })); }}
+            onJobDone={(log) => {
+              const okIds = new Set(log.filter((l) => l.ok).map((l) => l.id));
+              if (frJob.isUndo) setFrUndo(null);
+              else setFrUndo({ label: frJob.label, rows: frJob.undoRows.filter((r) => okIds.has(r.id)) });
+              setFr((f) => (f ? { ...f, results: null, msg: '' } : f));
+            }}
+            onClose={() => { setFrJob(null); fetchPoolBrowserRows(); fetchPoolBrowserGroups(); }}
+          />
+        )}
+
+        {authLoading && (
+          <div style={{ textAlign: 'center', padding: '10px', backgroundColor: 'var(--yt-mustard-bg)', color: 'var(--yt-mustard-deep)', marginBottom: '16px', borderRadius: '6px', fontWeight: 'bold' }}>
+            ⏳ İşlem yapılıyor, lütfen bekleyin...
+          </div>
+        )}
+
+
+        {!adminActiveExam && !isCreatingExam ? (
+          <div>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h2 style={{ margin: 0 }}>Tüm Sınavlar ve Paketler</h2>
+              <button onClick={handleStartCreateExam} className="yt-btn yt-btn-primary">
+                + Yeni Sınav / Paket Oluştur
+              </button>
+            </div>
+
+            {exams.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '60px', backgroundColor: '#f8fafc', borderRadius: '12px', border: '1px dashed #cbd5e1' }}>
+                <p style={{ color: '#64748b' }}>Henüz sisteme yüklenmiş bir içerik yok.</p>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: '16px' }}>
+                {exams.filter(e => !e.parentId).map(parentExam => (
+                  <div key={parentExam.id} className="exam-card" style={{ backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', overflow: 'hidden' }}>
+                    
+                    <div className="exam-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', backgroundColor: '#f8fafc' }}>
+                      <div>
+                        <h3 style={{ margin: '0 0 8px 0', color: '#0f172a' }}>
+                          📦 {parentExam.name || 'İsimsiz İçerik'}
+                        </h3>
+                        <div style={{ display: 'flex', gap: '12px', fontSize: '0.85rem', color: '#64748b' }}>
+                          <span style={{ color: parentExam.isPublished ? '#16a34a' : '#ef4444', fontWeight: 'bold' }}>
+                            {parentExam.isPublished ? '● Yayında' : '○ Taslak'}
+                          </span>
+                          <span>₺{parentExam.price || 0}</span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <button 
+                          className="btn-define-exam" 
+                          onClick={() => handleOpenDefinitionScreen(parentExam.id)}
+                          style={{ padding: '8px 12px', borderRadius: '6px', backgroundColor: '#e0e7ff', color: '#4338ca', cursor: 'pointer', fontWeight: 'bold', border: '1px dashed #4338ca' }}
+                        >
+                          📝 Testleri Yönet
+                        </button>
+                        <button onClick={() => togglePublish(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: parentExam.isPublished ? '#f59e0b' : '#16a34a', color: '#fff', cursor: 'pointer', fontWeight: 'bold' }}>
+                          {parentExam.isPublished ? 'Yayından Kaldır' : 'Yayınla'}
+                        </button>
+                        <button onClick={() => handleOpenSettingsScreen(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#f1f5f9', cursor: 'pointer' }}>Ayarlar</button>
+                        <button onClick={() => deleteExam(parentExam.id)} style={{ padding: '8px 12px', borderRadius: '6px', border: 'none', backgroundColor: '#ef4444', color: '#fff', cursor: 'pointer' }}>Sil</button>
+                      </div>
+                    </div>
+
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : isCreatingExam ? (
+          <div style={{ maxWidth: '600px', margin: '0 auto', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '24px' }}>
+            <h3 style={{ margin: '0 0 16px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>{activeAdminExamId ? 'İçerik Ayarları' : 'Yeni İçerik Ayarları'}</h3>
+            
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav / Oturum Adı:</label>
+              <input 
+                type="text" 
+                placeholder="Yeni Sınav / Paket"
+                value={newExamForm.name} 
+                onChange={(e) => setNewExamForm({ ...newExamForm, name: e.target.value })} 
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+              />
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>
+                Açıklama <span style={{ fontWeight: 'normal', color: '#64748b' }}>(sınav detay sayfasında, puanların altında gösterilir)</span>:
+              </label>
+              <textarea
+                placeholder="Örn: Sınav öncesi son tekrar için hazırlanmış, gerçek sınav formatında 3 deneme."
+                value={newExamForm.description}
+                onChange={(e) => setNewExamForm({ ...newExamForm, description: e.target.value })}
+                rows={3}
+                maxLength={400}
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontFamily: 'inherit', resize: 'vertical' }}
+              />
+              <div style={{ textAlign: 'right', fontSize: '0.72rem', color: '#94a3b8', marginTop: '2px' }}>
+                {(newExamForm.description || '').length}/400
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+              <div>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Güncel Fiyat (₺):</label>
+                <input 
+                  type="number" 
+                  min="0"
+                  step="0.01"
+                  value={newExamForm.price} 
+                  onChange={(e) => setNewExamForm({ ...newExamForm, price: Number(e.target.value) })} 
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Eski Fiyat (Üstü Çizili):</label>
+                <input 
+                  type="number" 
+                  min="0"
+                  step="0.01"
+                  placeholder="İsteğe bağlı"
+                  value={newExamForm.originalPrice} 
+                  onChange={(e) => setNewExamForm({ ...newExamForm, originalPrice: Number(e.target.value) })} 
+                  style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }} 
+                />
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Sınav Türü (Kategori):</label>
+              <select
+                value={newExamForm.categoryExamType}
+                onChange={(e) => {
+                  if (e.target.value === '__new__') {
+                    setShowNewExamCategoryInput(true);
+                    return;
+                  }
+                  setNewExamForm({ ...newExamForm, categoryExamType: e.target.value });
+                }}
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', boxSizing: 'border-box' }}
+              >
+                <option value="">Sınav Türü Seçin</option>
+                {examCategories.map((cat) => (
+                  <option key={cat.id} value={cat.name}>{cat.name}</option>
+                ))}
+                <option value="__new__">＋ Yeni sınav türü ekle…</option>
+              </select>
+              {showNewExamCategoryInput && (
+                <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                  <input
+                    type="text"
+                    autoFocus
+                    placeholder="Örn: KPSS"
+                    value={newExamCategoryName}
+                    onChange={(e) => setNewExamCategoryName(e.target.value)}
+                    style={{ flex: 1, padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box' }}
+                  />
+                  <button type="button" onClick={handleAddExamCategory} className="yt-btn yt-btn-primary" style={{ padding: '8px 14px' }}>Ekle</button>
+                  <button type="button" onClick={() => { setShowNewExamCategoryInput(false); setNewExamCategoryName(''); }} className="yt-btn" style={{ padding: '8px 14px' }}>Vazgeç</button>
+                </div>
+              )}
+            </div>
+
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.85rem', marginBottom: '4px' }}>Ders Türü (Kategori):</label>
+              <select
+                value={newExamForm.categoryLesson}
+                onChange={(e) => setNewExamForm({ ...newExamForm, categoryLesson: e.target.value })}
+                style={{ width: '100%', padding: '8px', borderRadius: '6px', border: '1px solid #cbd5e1', backgroundColor: '#fff', boxSizing: 'border-box' }}
+              >
+                <option value="">Ders Türü Seçin</option>
+                {lessonUniq
+                  .map((lc) => (
+                    <option key={lc.id} value={lc.name}>{lc.name}</option>
+                  ))}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
+              <button
+                type="button"
+                onClick={handleSaveNewExam}
+                className="yt-btn yt-btn-primary"
+                style={{ flex: 1, padding: '12px', fontSize: '0.95rem' }}
+              >
+                Kaydet
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreatingExam(false);
+                  setActiveAdminExamId(null);
+                  setActiveSubExamId(null);
+                }}
+                style={{ flex: 1, padding: '12px', fontSize: '0.95rem', fontWeight: 'bold', color: '#334155', backgroundColor: '#f1f5f9', borderRadius: '6px', border: '1px solid #cbd5e1', cursor: 'pointer' }}
+              >
+                Listeye Dön
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: (activeSubExamId && currentPreviewExam?.pdfFile) ? '1fr 380px' : '1fr', gap: '24px', alignItems: 'start' }}>
+            {activeSubExamId && currentPreviewExam?.pdfFile && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                <div style={{ backgroundColor: '#f1f5f9', padding: '16px', borderRadius: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '12px' }}>
+                    <strong>Toplam Soru Sayısı/Sayfa: {currentPreviewExam.numPages || '0'}</strong>
+                  </div>
+                  {(() => {
+                    const previewPageNum = adminPreviewPage.examId === currentPreviewExam.id ? adminPreviewPage.page : 1;
+                    const totalPreviewPages = currentPreviewExam.numPages || 1;
+                    const goToPreviewPage = (p) => {
+                      const clamped = Math.min(Math.max(p, 1), totalPreviewPages);
+                      setAdminPreviewPage({ examId: currentPreviewExam.id, page: clamped });
+                    };
+                    return (
+                      <>
+                        <SecurePdfViewer
+                          examId={currentPreviewExam.id}
+                          type="exam"
+                          pageNumber={previewPageNum}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                          <button
+                            type="button"
+                            onClick={() => goToPreviewPage(previewPageNum - 1)}
+                            disabled={previewPageNum <= 1}
+                            className="yt-btn"
+                            style={{
+                              padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1',
+                              backgroundColor: '#fff', cursor: previewPageNum <= 1 ? 'not-allowed' : 'pointer',
+                              opacity: previewPageNum <= 1 ? 0.4 : 1, fontWeight: 'bold'
+                            }}
+                          >
+                            ◀ Önceki Soru
+                          </button>
+                          <span style={{ fontFamily: 'monospace', fontWeight: 'bold', color: '#334155' }}>
+                            {previewPageNum} / {totalPreviewPages}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => goToPreviewPage(previewPageNum + 1)}
+                            disabled={previewPageNum >= totalPreviewPages}
+                            className="yt-btn"
+                            style={{
+                              padding: '8px 16px', borderRadius: '6px', border: '1px solid #cbd5e1',
+                              backgroundColor: '#fff', cursor: previewPageNum >= totalPreviewPages ? 'not-allowed' : 'pointer',
+                              opacity: previewPageNum >= totalPreviewPages ? 0.4 : 1, fontWeight: 'bold'
+                            }}
+                          >
+                            Sonraki Soru ▶
+                          </button>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+                {editingExam && (() => {
+                  // ÖNEMLİ: Alt testlerde (Test 1, Test 2, Test 3...) kendi
+                  // categoryExamType alanı boştur -- bu bilgi sadece üst
+                  // pakette (ana sınavda) tutulur. Kazanım Haritası'ndaki
+                  // Ders Türü listesi bu yüzden editingExam bir alt testse
+                  // üst paketin Sınav Türü'nden (parentId üzerinden) miras
+                  // alıyor; aksi halde dropdown boş kalıyordu.
+                  const parentExam = editingExam.parentId
+                    ? exams.find((e) => e.id === editingExam.parentId)
+                    : null;
+                  // ÖNEMLİ: formatExamData, veritabanında category_exam_type
+                  // boş olan kayıtlara otomatik "Genel" varsayılan değeri
+                  // veriyor (bkz. satır ~728). Alt testlerde bu alan
+                  // veritabanında zaten hep boştur, yani editingExam.categoryExamType
+                  // burada "" değil, hep "Genel" olarak gelir -- bu yüzden
+                  // önceki "|| parentExam" mantığı hiç devreye girmiyordu.
+                  // Bu alt test ekranında editingExam HER ZAMAN bir üst
+                  // pakete bağlıdır, o yüzden üst paketin kategorisini
+                  // önceliklendiriyoruz; kendi değerine sadece üst paket
+                  // bulunamazsa (beklenmedik durum) geri dönüyoruz.
+                  const effectiveExamType = parentExam?.categoryExamType || editingExam.categoryExamType || '';
+                  return (
+              <div style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px' }}>
+                <h3 style={{ margin: '0 0 12px 0', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>📊 Kazanım Haritası</h3>
+
+                {editingExam.topicMap && Object.keys(editingExam.topicMap).length > 0 && (
+                  <div style={{ marginTop: '14px' }}>
+                    <div style={{ marginBottom: '8px' }}>
+                      <span style={{ fontSize: '0.8rem', color: '#16a34a', fontWeight: 'bold' }}>
+                        ✓ {Object.keys(editingExam.topicMap).length} soru için kazanım eklendi.
+                      </span>
+                    </div>
+
+                    <div style={{ maxHeight: '420px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '6px' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                        <thead style={{ position: 'sticky', top: 0, backgroundColor: '#f8fafc' }}>
+                          <tr>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', width: '60px' }}>Soru</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', width: '28%' }}>Ders</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'left', width: '28%' }}>Konu</th>
+                            <th style={{ padding: '6px 10px', textAlign: 'left' }}>Kazanım</th>
+                            <th style={{ width: '36px' }}></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.keys(editingExam.topicMap)
+                            .map(Number)
+                            .sort((a, b) => a - b)
+                            .map((soruNo) => {
+                              const entry = editingExam.topicMap[soruNo];
+                              // Konu, kazanımın Kategori Yönetimi'ndeki GÜNCEL kaydından
+                              // canlı okunuyor -- entry.konu sadece eşleşme bulunamazsa
+                              // (kazanım silinmiş/adı değişmişse) yedek olarak kullanılır.
+                              const liveKonu = resolveLiveKonuForEntry(entry);
+                              return (
+                                <tr key={soruNo} style={{ borderTop: '1px solid #f1f5f9' }}>
+                                  <td style={{ padding: '5px 10px', fontWeight: 'bold' }}>{soruNo}</td>
+                                  <td style={{ padding: '5px 6px' }}>
+                                    <select
+                                      value={entry.ders}
+                                      onChange={(e) => {
+                                        if (e.target.value === '__new__') {
+                                          const name = window.prompt('Yeni Ders Türü adı:');
+                                          if (name && name.trim()) {
+                                            addLessonCategoryForExamType(effectiveExamType, name, (created) => {
+                                              applyTopicMapPatch(editingExam.id, (tm) => ({
+                                                ...tm,
+                                                [soruNo]: { ders: created.name, konu: '', kazanim: '' }
+                                              }), { persist: true });
+                                            });
+                                          }
+                                          return;
+                                        }
+                                        applyTopicMapPatch(editingExam.id, (tm) => ({
+                                          ...tm,
+                                          [soruNo]: { ders: e.target.value, konu: '', kazanim: '' }
+                                        }), { persist: true });
+                                      }}
+                                      style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: '#fff' }}
+                                    >
+                                      <option value="">Ders Seçin</option>
+                                      {lessonUniq
+                        .map((lc) => (
+                                          <option key={lc.id} value={lc.name}>{lc.name}</option>
+                                        ))}
+                                    </select>
+                                  </td>
+                                  <td style={{ padding: '5px 6px' }}>
+                                    <select
+                                      value={liveKonu}
+                                      disabled={!entry.ders}
+                                      onChange={(e) => {
+                                        if (e.target.value === '__new__') {
+                                          const ders = lcForEntry(entry.ders, entry.konu);
+                                          if (!ders) { alert('Önce Ders seçin.'); return; }
+                                          const name = window.prompt('Yeni Konu adı:');
+                                          if (name && name.trim()) {
+                                            addTopicForLessonCategoryId(ders.id, name, (created) => {
+                                              applyTopicMapPatch(editingExam.id, (tm) => ({
+                                                ...tm,
+                                                [soruNo]: { ...tm[soruNo], konu: created.name, kazanim: '' }
+                                              }), { persist: true });
+                                            });
+                                          }
+                                          return;
+                                        }
+                                        applyTopicMapPatch(editingExam.id, (tm) => ({
+                                          ...tm,
+                                          [soruNo]: { ...tm[soruNo], konu: e.target.value, kazanim: '' }
+                                        }), { persist: true });
+                                      }}
+                                      style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: entry.ders ? '#fff' : '#f1f5f9' }}
+                                    >
+                                      <option value="">{entry.ders ? 'Konu Seçin' : 'Önce Ders seçin'}</option>
+                                      {topics
+                                        .filter((t) => {
+                                          const ders = lcForEntry(entry.ders, entry.konu);
+                                          return ders && t.lesson_category_id === ders.id;
+                                        })
+                                        .map((t) => (
+                                          <option key={t.id} value={t.name}>{t.name}</option>
+                                        ))}
+                                    </select>
+                                  </td>
+                                  <td style={{ padding: '5px 6px' }}>
+                                    <select
+                                      value={entry.kazanim}
+                                      disabled={!liveKonu}
+                                      onChange={(e) => {
+                                        if (e.target.value === '__new__') {
+                                          const ders = lcForEntry(entry.ders, entry.konu);
+                                          const konu = ders && topics.find((t) => t.name === liveKonu && t.lesson_category_id === ders.id);
+                                          if (!konu) { alert('Önce Konu seçin.'); return; }
+                                          const name = window.prompt('Yeni Kazanım adı:');
+                                          if (name && name.trim()) {
+                                            handleAddLearningOutcome(konu.id, name, (created) => {
+                                              applyTopicMapPatch(editingExam.id, (tm) => ({
+                                                ...tm,
+                                                [soruNo]: { ...tm[soruNo], kazanim: created.name }
+                                              }), { persist: true });
+                                            });
+                                          }
+                                          return;
+                                        }
+                                        applyTopicMapPatch(editingExam.id, (tm) => ({
+                                          ...tm,
+                                          [soruNo]: { ...tm[soruNo], kazanim: e.target.value }
+                                        }), { persist: true });
+                                      }}
+                                      style={{ width: '100%', fontSize: '0.82rem', padding: '5px 6px', border: '1px solid #e2e8f0', borderRadius: '4px', boxSizing: 'border-box', backgroundColor: liveKonu ? '#fff' : '#f1f5f9' }}
+                                    >
+                                      <option value="">{liveKonu ? 'Kazanım Seçin' : 'Önce Konu seçin'}</option>
+                                      {learningOutcomes
+                                        .filter((lo) => {
+                                          const ders = lcForEntry(entry.ders, entry.konu);
+                                          const konu = ders && topics.find((t) => t.name === liveKonu && t.lesson_category_id === ders.id);
+                                          return konu && lo.topic_id === konu.id;
+                                        })
+                                        .map((lo) => (
+                                          <option key={lo.id} value={lo.name}>{lo.name}</option>
+                                        ))}
+                                    </select>
+                                  </td>
+                                  <td style={{ padding: '5px 10px', textAlign: 'center' }}>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        applyTopicMapPatch(editingExam.id, (tm) => {
+                                          const next = { ...tm };
+                                          delete next[soruNo];
+                                          return next;
+                                        }, { persist: true });
+                                      }}
+                                      style={{ border: 'none', background: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '0.95rem' }}
+                                      title="Bu soruyu kazanım listesinden sil"
+                                    >
+                                      ✕
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '10px', alignItems: 'center' }}>
+                      <input
+                        type="number"
+                        value={newKazanimSoruNo}
+                        onChange={(e) => setNewKazanimSoruNo(e.target.value)}
+                        placeholder="Soru No"
+                        style={{ width: '100px', fontSize: '0.82rem', padding: '6px 8px', border: '1px solid #e2e8f0', borderRadius: '4px' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const soruNo = Number(newKazanimSoruNo);
+                          if (!soruNo || soruNo < 1) { alert("Geçerli bir soru numarası girin."); return; }
+                          if (editingExam.topicMap[soruNo]) { alert("Bu soru numarası zaten listede var."); return; }
+                          applyTopicMapPatch(editingExam.id, (tm) => {
+                            if (tm[soruNo]) return tm;
+                            return { ...tm, [soruNo]: { ders: '', konu: '', kazanim: '' } };
+                          }, { persist: true });
+                          setNewKazanimSoruNo('');
+                        }}
+                        className="yt-btn"
+                        style={{ fontSize: '0.8rem', padding: '6px 14px' }}
+                      >
+                        + Soru Ekle
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* Sağ Panel - İçerik ve PDF Tanımlama Ayarları */}
+            <div className="sidebar-content-settings" style={{ backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '20px', position: 'sticky', top: '20px', maxHeight: '85vh', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', borderBottom: '1px solid #e2e8f0', paddingBottom: '8px' }}>
+                <h3 style={{ margin: 0 }}>İçerik Ayarları</h3>
+              </div>
+              
+              {activeSubExamId && childExams.find(e => e.id === activeSubExamId) ? (
+                (() => {
+                  return (
+                    <div style={{ marginBottom: '16px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setActiveSubExamId(null)}
+                        className="yt-btn yt-btn-outline"
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '16px' }}
+                      >
+                        ◀ Test Listesine Dön
+                      </button>
+
+                      <div className="yt-admin-panel" style={{ padding: '14px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                          <strong style={{ color: '#0f172a', fontSize: '0.95rem' }}>Test {editingIndex + 1}</strong>
+                          <button
+                            onClick={() => { deleteExam(editingExam.id); setActiveSubExamId(null); }}
+                            style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}
+                          >
+                            Sil ✕
+                          </button>
+                        </div>
+
+                        <div className="form-group" style={{ marginBottom: '10px' }}>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>İçerik Adı:</label>
+                          <input
+                            type="text"
+                            value={editingExam.name}
+                            onChange={(e) => updateExamInDb(editingExam.id, { name: e.target.value })}
+                            style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
+                          />
+                        </div>
+
+                        <div className="form-group" style={{ marginBottom: '10px' }}>
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>
+                            Soru / Sayfa Sayısı <span style={{ fontWeight: 'normal', color: '#64748b' }}>(PDF yüklenince otomatik dolar)</span>:
+                          </label>
+                          <input
+                            type="number"
+                            value={editingExam.numPages || 0}
+                            onChange={(e) => updateExamInDb(editingExam.id, { numPages: Number(e.target.value) || 0 })}
+                            style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
+                          />
+                        </div>
+
+
+                        {adminActiveExam.examType === 'deneme' && (
+                          <div className="form-group" style={{ marginBottom: '10px' }}>
+                            <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>⏱️ Süre (Dakika) — Deneme Sınavı:</label>
+                            <input
+                              type="number"
+                              value={editingExam.duration || 0}
+                              onChange={(e) => updateExamInDb(editingExam.id, { duration: Number(e.target.value) })}
+                              style={{ width: '100%', padding: '6px', borderRadius: '6px', border: '1px solid #cbd5e1', boxSizing: 'border-box', fontSize: '0.85rem' }}
+                            />
+                          </div>
+                        )}
+
+
+                        <div className="form-group">
+                          <label style={{ display: 'block', fontWeight: 'bold', fontSize: '0.8rem', marginBottom: '4px' }}>Hızlı Cevap Anahtarı</label>
+                          <textarea
+                            placeholder="ÖRN: ABCDECAD..."
+                            value={
+                              Array.from(
+                                { length: editingExam.numPages || 120 },
+                                (_, i) => (editingExam.answerKey && editingExam.answerKey[i + 1]) ? editingExam.answerKey[i + 1] : ''
+                              ).join('').toUpperCase()
+                            }
+                            onChange={(e) => handleFastKeyEntryForExam(editingExam.id, e.target.value)}
+                            style={{
+                              width: '100%',
+                              height: '80px',
+                              padding: '8px',
+                              borderRadius: '6px',
+                              border: '1px solid #cbd5e1',
+                              fontSize: '0.85rem',
+                              letterSpacing: '2px',
+                              fontFamily: 'monospace',
+                              textTransform: 'uppercase',
+                              resize: 'none',
+                              boxSizing: 'border-box'
+                            }}
+                          />
+                          <div style={{ fontSize: '0.75rem', color: '#16a34a', fontWeight: 'bold', marginTop: '4px', textAlign: 'right' }}>
+                            Girilen: {Object.keys(editingExam.answerKey || {}).length} / {editingExam.numPages || 0}
+                          </div>
+                        </div>
+
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setActiveSubExamId(null)}
+                        style={{ width: '100%', padding: '10px', fontSize: '0.9rem', fontWeight: 'bold', color: '#ffffff', backgroundColor: '#16a34a', borderRadius: '6px', border: 'none', cursor: 'pointer', marginTop: '16px' }}
+                      >
+                        ✓ Kaydet ve Listeye Dön
+                      </button>
+                    </div>
+                  );
+                })()
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '16px' }}>
+                  {childExams.length === 0 && (
+                    <div style={{ textAlign: 'center', padding: '24px 12px', color: '#94a3b8', fontSize: '0.85rem', border: '1px dashed #cbd5e1', borderRadius: '8px' }}>
+                      Bu ürünün altında henüz test eklenmedi.<br />Başlamak için aşağıdaki &quot;Havuzdan Test Ekle&quot; butonuna tıklayın.
+                    </div>
+                  )}
+                  {childExams.map((subExam, index) => {
+                    const answeredCount = Object.keys(subExam.answerKey || {}).length;
+                    // Bir sorunun kazanımı "tam" sayılması için Ders/Konu/Kazanım
+                    // üçünün de dolu olması gerekir -- sadece konu seçilip kazanım
+                    // boş bırakılmışsa (ya da hiç satırı yoksa) eksik sayılır.
+                    const kazanimCompleteCount = Object.values(subExam.topicMap || {})
+                      .filter((e) => e && e.ders && e.konu && e.kazanim).length;
+                    const kazanimTotal = subExam.numPages || 0;
+                    const kazanimOk = kazanimTotal > 0 && kazanimCompleteCount === kazanimTotal;
+                    return (
+                      <div
+                        key={subExam.id}
+                        onClick={() => setActiveSubExamId(subExam.id)}
+                        style={{
+                          padding: '12px 14px',
+                          borderRadius: '8px',
+                          border: '1px solid #e2e8f0',
+                          backgroundColor: '#f8fafc',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: '10px'
+                        }}
+                      >
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flexShrink: 0 }}>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleMoveSubTest(childExams, subExam.id, 'up'); }}
+                            disabled={index === 0}
+                            title="Yukarı Taşı"
+                            style={{ width: '22px', height: '18px', lineHeight: '18px', padding: 0, border: '1px solid #cbd5e1', borderRadius: '4px', backgroundColor: index === 0 ? '#f1f5f9' : '#ffffff', color: index === 0 ? '#cbd5e1' : '#334155', cursor: index === 0 ? 'not-allowed' : 'pointer', fontSize: '0.7rem' }}
+                          >
+                            ▲
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleMoveSubTest(childExams, subExam.id, 'down'); }}
+                            disabled={index === childExams.length - 1}
+                            title="Aşağı Taşı"
+                            style={{ width: '22px', height: '18px', lineHeight: '18px', padding: 0, border: '1px solid #cbd5e1', borderRadius: '4px', backgroundColor: index === childExams.length - 1 ? '#f1f5f9' : '#ffffff', color: index === childExams.length - 1 ? '#cbd5e1' : '#334155', cursor: index === childExams.length - 1 ? 'not-allowed' : 'pointer', fontSize: '0.7rem' }}
+                          >
+                            ▼
+                          </button>
+                        </div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            Test {index + 1}: {subExam.name || 'İsimsiz'}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '2px' }}>
+                            {subExam.pdfFile ? '✓ PDF' : '✗ PDF yok'} · Cevap {answeredCount}/{subExam.numPages || 0}
+                            {subExam.solutionPdfFile ? ' · ✓ Çözüm' : ''}
+                            {' · '}
+                            <span style={{ color: kazanimOk ? '#16a34a' : '#dc2626', fontWeight: kazanimOk ? 'normal' : 'bold' }}>
+                              {kazanimOk ? '✓ Kazanım' : `✗ Kazanım ${kazanimCompleteCount}/${kazanimTotal}`}
+                            </span>
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+                          <span className="yt-edit-link">Düzenle ▸</span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteExam(subExam.id); }}
+                            style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 'bold' }}
+                          >
+                            Sil ✕
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Yeni Test Ekle Butonu - sadece liste görünümünde */}
+              {!activeSubExamId && (
+                <button
+                  type="button"
+                  onClick={() => openPoolGenerate(activeAdminExamId)}
+                  className="yt-btn-add-dashed"
+                >
+                  🎯 Havuzdan Test Ekle
+                </button>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '16px', borderTop: '1px solid #e2e8f0' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveAdminExamId(null);
+                    setActiveSubExamId(null);
+                  }}
+                  className="yt-btn-full-primary"
+                >
+                  Listeye Dön
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ==========================================
+  // RENDER: ÖĞRENCİ EKRANI
+  // ==========================================
+  if (appMode === 'student') {
+    
+    const renderAuthModal = () => {
+    if (!showAuthModal) return null;
+    return (
+      <div className="yt-modal-overlay">
+        <div className="yt-modal-card">
+          <button onClick={() => setShowAuthModal(false)} className="yt-modal-close">✕</button>
+
+          <h2 className="yt-modal-title">
+            {authMode === 'login' && '🔑 Kullanıcı Girişi'}
+            {authMode === 'register' && '📝 Yeni Hesap Oluştur'}
+            {authMode === 'forgot' && '🔒 Şifremi Unuttum'}
+          </h2>
+
+          {authMode !== 'forgot' && (
+            <>
+              <button type="button" onClick={handleGoogleSignIn} className="yt-google-btn">
+                <span style={{ fontSize: '1.1rem' }}>G</span> Google ile Devam Et
+              </button>
+              <div className="yt-divider-row">
+                <div className="line"></div>
+                <span className="word">veya</span>
+                <div className="line"></div>
+              </div>
+            </>
+          )}
+
+          <form onSubmit={handleAuth}>
+            <div className="yt-field">
+              <label className="yt-label">E-posta Adresi:</label>
+              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ornek@mail.com" className="yt-input" />
+            </div>
+
+            {authMode !== 'forgot' && (
+              <div className="yt-field">
+                <div className="yt-field-row">
+                  <label className="yt-label" style={{ marginBottom: 0 }}>Şifre:</label>
+                  {authMode === 'login' && (
+                    <button type="button" onClick={() => setAuthMode('forgot')} className="yt-link-btn" style={{ fontSize: '0.75rem' }}>Şifremi Unuttum?</button>
+                  )}
+                </div>
+                <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="yt-input" />
+              </div>
+            )}
+
+            <button type="submit" disabled={authLoading} className="yt-btn yt-btn-primary yt-btn-block">
+              {authLoading ? 'İşleniyor...' : (authMode === 'login' ? 'Giriş Yap' : authMode === 'register' ? 'Kayıt Ol' : 'Sıfırlama Bağlantısı Gönder')}
+            </button>
+          </form>
+
+          <div className="yt-form-foot">
+            {authMode === 'login' && (
+              <span>Hesabınız yok mu? <button onClick={() => setAuthMode('register')} className="yt-link-btn">Kayıt Olun</button></span>
+            )}
+            {authMode === 'register' && (
+              <span>Zaten hesabınız var mı? <button onClick={() => setAuthMode('login')} className="yt-link-btn">Giriş Yapın</button></span>
+            )}
+            {authMode === 'forgot' && (
+              <span><button onClick={() => setAuthMode('login')} className="yt-link-btn">◀ Giriş Ekranına Dön</button></span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Sepet çekmecesi -- daha önce sadece ana sayfa listesinde render
+  // ediliyordu, bu yüzden ürün detay sayfasındayken sepet ikonuna
+  // basınca (showCart true oluyordu ama çekmece hiç DOM'a girmiyordu)
+  // hiçbir şey görünmüyordu. Artık paylaşılan bir fonksiyon, her sayfada
+  // çağrılıyor.
+  // Kazanım Analizi'ndeki öneri kartlarında tek bir test satırı --
+  // sahip olunan/ücretsiz bir testse direkt "Çöz", değilse fiyat +
+  // "Sepete Ekle" gösterir. Hem konu hem ders seviyesindeki öneri
+  // listelerinde ortak kullanılıyor.
+  // Bir önerilen test için "sahiplik durumu"nu (ücretsiz mi, sahip mi,
+  // hangi kayda (kendi/üst paket) yönlendirilecek, fiyatı ne) tek yerden
+  // hesaplar -- hem satır görünümü (renderOneriTestSatiri) hem de kazanım
+  // satırının yanına gömülen kompakt buton (renderKazanimTestPill) AYNI
+  // mantığı kullansın diye ayrı bir fonksiyona çıkarıldı.
+  const resolveOneriTestDurumu = (ex) => {
+    const owned = !!(studentPurchases[ex.id] || (ex.parentId && studentPurchases[ex.parentId]));
+    // ÖNEMLİ (bug fix): price=0 sadece ÜST SEVİYE (paketsiz) sınavlarda
+    // gerçekten "ücretsiz" demektir. Bir alt testte price=0, "tek başına
+    // satılmaz, sadece üst paketi satın alan erişir" demektir.
+    const free = !ex.parentId && (!ex.price || ex.price <= 0);
+    // Öneri motoru artık öğrencinin sahip olmadığı, tek başına satılamayan
+    // (parentId dolu + price=0) alt testleri de önerebiliyor -- amaç
+    // öğrenciyi satın almaya yönlendirmek. Bu durumda "Sepete Ekle" butonu,
+    // kendi (anlamsız ₺0) fiyatı yerine ÜST PAKETİN fiyatını göstermeli ve
+    // sepete üst paketi eklemeli -- öğrenci gerçekte üst paketi satın alarak
+    // bu alt teste erişebiliyor.
+    const needsParentForPurchase = !owned && !free && ex.parentId && (!ex.price || ex.price <= 0);
+    const parentExam = needsParentForPurchase ? exams.find((e) => e.id === ex.parentId) : null;
+    // Üst paket bulunamazsa (veri tutarsızlığı gibi beklenmedik bir durum)
+    // eski davranışa dönüyoruz -- hiç buton göstermemek yerine, en azından
+    // kendi fiyatıyla (varsa) göstermeye devam ediyoruz.
+    const purchaseTargetId = parentExam ? parentExam.id : ex.id;
+    const purchaseTargetPrice = parentExam ? parentExam.price : ex.price;
+    // BUG FİX: `free` yukarıda SADECE ex'in KENDİ fiyatına bakarak
+    // hesaplanıyordu -- bir alt test üst pakete yönlendirildiğinde (yukarıki
+    // needsParentForPurchase dalı), üst paketin GÜNCEL fiyatı da (örn. o gün
+    // "Soru Başı Fiyat" 0'a çekildiği için) 0 olabiliyordu. Böyle bir durumda
+    // sistem hâlâ "ücretli" sanıp sepete ekletiyordu -- oysa gerçek satın
+    // alma hedefinin (purchaseTargetPrice) kendisi 0 ise, bu KESİNLİKLE
+    // ücretsizdir ve sepete hiç girmeden direkt çözülebilmelidir.
+    const effectivelyFree = free || !purchaseTargetPrice || purchaseTargetPrice <= 0;
+    const inCart = cartItems.includes(purchaseTargetId);
+    return { owned, effectivelyFree, purchaseTargetId, purchaseTargetPrice, inCart };
+  };
+
+  const renderOneriTestSatiri = (ex) => {
+    const { owned, effectivelyFree, purchaseTargetId, purchaseTargetPrice, inCart } = resolveOneriTestDurumu(ex);
+    return (
+      <div key={ex.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 10px', border: '1px solid var(--yt-line)', borderRadius: '8px', backgroundColor: '#fff' }}>
+        <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--yt-ink)' }}>
+          {ex.name || 'İsimsiz Test'}
+          {ex.numPages > 0 && (
+            <span style={{ color: 'var(--yt-graphite-soft)', fontWeight: 'normal' }}> · {ex.numPages} soru</span>
+          )}
+        </span>
+        {owned || effectivelyFree ? (
+          <button
+            onClick={() => { setShowResults(false); startExam(ex); }}
+            className="yt-btn yt-btn-primary"
+            style={{ fontSize: '0.74rem', padding: '5px 10px' }}
+          >
+            ▶ {owned ? 'Çöz' : 'Ücretsiz Çöz'}
+          </button>
+        ) : (
+          <>
+            <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.76rem', fontWeight: 'bold', color: 'var(--yt-mustard-deep)' }}>₺{purchaseTargetPrice}</span>
+            <button
+              onClick={() => toggleCartItem(purchaseTargetId)}
+              className={`yt-add-cart-btn${inCart ? ' in-cart' : ''}`}
+              style={{ fontSize: '0.74rem', padding: '5px 10px' }}
+            >
+              {inCart ? '✓ Sepette' : '+ Sepete Ekle'}
+            </button>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  // Kazanım satırının (Ders Notu / Video pill'lerinin) YANINA gömülen
+  // kompakt test önerisi -- artık ayrı, uzayan bir liste olarak konu
+  // seviyesinde gösterilmiyor; her kazanım kendi eşleşen testini kendi
+  // satırında, aynı pill görünümüyle taşıyor.
+  const renderKazanimTestPill = (ex) => {
+    const { owned, effectivelyFree, purchaseTargetId, purchaseTargetPrice, inCart } = resolveOneriTestDurumu(ex);
+    if (owned || effectivelyFree) {
+      return (
+        <button
+          key={ex.id}
+          type="button"
+          onClick={() => { setShowResults(false); startExam(ex); }}
+          className="yt-resource-pill yt-resource-pill-dark"
+        >
+          ▶ {owned ? 'Çöz' : 'Ücretsiz Çöz'}{ex.numPages > 0 ? ` · ${ex.numPages} Soru` : ''}
+        </button>
+      );
+    }
+    return (
+      <button
+        key={ex.id}
+        type="button"
+        onClick={() => toggleCartItem(purchaseTargetId)}
+        className="yt-resource-pill"
+      >
+        {inCart ? '✓ Sepette' : `+ Sepete Ekle · ₺${purchaseTargetPrice}`}
+      </button>
+    );
+  };
+
+  const renderCartDrawer = () => {
+    const cartExams = exams.filter(e => cartItems.includes(e.id));
+    const cartTotal = cartExams.reduce((sum, e) => sum + (e.price || 0), 0);
+    return showCart && (
+      <div className="yt-cart-overlay" onClick={() => setShowCart(false)}>
+        <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+            <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Sepetim</h3>
+            <button onClick={() => setShowCart(false)} className="yt-btn yt-btn-ghost">✕</button>
+          </div>
+
+          {cartExams.length === 0 ? (
+            <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Sepetiniz boş. Ücretli içeriklerin yanındaki "Sepete Ekle" butonuyla ekleyebilirsiniz.</p>
+          ) : (
+            <>
+              {cartExams.map(ce => (
+                <div key={ce.id} className="yt-cart-item">
+                  <span style={{ fontSize: '0.88rem', color: 'var(--yt-ink)', flex: 1 }}>{ce.name || 'İsimsiz İçerik'}</span>
+                  <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.85rem', color: 'var(--yt-ink)' }}>₺{ce.price}</span>
+                  <button onClick={() => toggleCartItem(ce.id)} className="yt-btn yt-btn-ghost" style={{ padding: '4px 8px' }}>✕</button>
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '18px 0' }}>
+                <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.8rem', color: 'var(--yt-graphite)' }}>TOPLAM</span>
+                <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '1.2rem', fontWeight: '600', color: 'var(--yt-ink)' }}>₺{cartTotal.toLocaleString('tr-TR')}</span>
+              </div>
+              <button onClick={handleCartCheckout} className="yt-btn yt-btn-buy" style={{ width: '100%' }}>Ödemeye Geç →</button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ÖDEME ÖNCESİ ZORUNLU FATURA MODALI: showBillingGateModal true olduğunda
+  // (hasCompleteBillingInfo false iken ödeme başlatılmaya çalışıldığında)
+  // açılır. Form kaydedilince pendingPaymentAction neyse (tekli sınav ya da
+  // sepet) o ödeme akışı otomatik devam eder. Kapatma (✕) butonu YOK --
+  // bilerek: fatura bilgisi olmadan ödemeye izin vermiyoruz; öğrenci
+  // "Vazgeç" ile modalı kapatıp ödemeden tamamen vazgeçebilir ama fatura
+  // bilgisini atlayıp direkt ödemeye geçemez.
+  const renderBillingGateModal = () => showBillingGateModal && (
+    <div className="yt-cart-overlay" onClick={() => { setShowBillingGateModal(false); setPendingPaymentAction(null); }}>
+      <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+          <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Fatura Bilgileriniz Gerekli</h3>
+        </div>
+        <p style={{ color: 'var(--yt-graphite)', fontSize: '0.86rem', margin: '0 0 18px' }}>
+          Satın aldığınız içerik için size fatura kesebilmemiz için ödemeden önce
+          aşağıdaki bilgileri doldurmanız gerekiyor. Bu bilgiler yalnızca fatura
+          düzenlemek amacıyla kullanılır.
+        </p>
+        <div style={{ display: 'grid', gap: '12px', marginBottom: '16px' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>Ad Soyad</label>
+            <input
+              type="text"
+              value={billingDraft.fullName}
+              onChange={(e) => setBillingDraft(prev => ({ ...prev, fullName: e.target.value }))}
+              className="yt-input"
+              style={{ width: '100%', boxSizing: 'border-box' }}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>TC Kimlik No</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={11}
+              value={billingDraft.tcKimlikNo}
+              onChange={(e) => setBillingDraft(prev => ({ ...prev, tcKimlikNo: e.target.value.replace(/\D/g, '').slice(0, 11) }))}
+              className="yt-input"
+              style={{ width: '100%', boxSizing: 'border-box' }}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>Fatura E-posta Adresi</label>
+            <input
+              type="email"
+              value={billingDraft.invoiceEmail}
+              onChange={(e) => setBillingDraft(prev => ({ ...prev, invoiceEmail: e.target.value }))}
+              className="yt-input"
+              style={{ width: '100%', boxSizing: 'border-box' }}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>Adres</label>
+            <textarea
+              value={billingDraft.address}
+              onChange={(e) => setBillingDraft(prev => ({ ...prev, address: e.target.value }))}
+              rows={2}
+              className="yt-input"
+              style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }}
+            />
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <button
+            onClick={() => { setShowBillingGateModal(false); setPendingPaymentAction(null); }}
+            className="yt-btn yt-btn-outline"
+            style={{ flex: 1 }}
+          >
+            Vazgeç
+          </button>
+          <button
+            onClick={async () => {
+              const ok = await saveMyBillingInfo(true);
+              if (!ok) return;
+              setShowBillingGateModal(false);
+              const action = pendingPaymentAction;
+              setPendingPaymentAction(null);
+              if (action?.type === 'single') proceedIyzicoPayment(action.exam);
+              else if (action?.type === 'cart') proceedCartCheckout();
+            }}
+            disabled={savingBillingInfo}
+            className="yt-btn yt-btn-buy"
+            style={{ flex: 1 }}
+          >
+            {savingBillingInfo ? 'Kaydediliyor...' : 'Kaydet ve Devam Et'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderNotifDrawer = () => showStudentNotifs && (
+    <div className="yt-cart-overlay" onClick={() => setShowStudentNotifs(false)}>
+      <div className="yt-cart-drawer" onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+          <h3 style={{ margin: 0, fontSize: '1.1rem' }}>🔔 Bildirimler</h3>
+          <button onClick={() => setShowStudentNotifs(false)} className="yt-btn yt-btn-ghost">✕</button>
+        </div>
+
+        {studentNotifLoading ? (
+          <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Yükleniyor...</p>
+        ) : studentNotifItems.length === 0 ? (
+          <p style={{ color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Henüz bir bildiriminiz yok.</p>
+        ) : (
+          <div style={{ display: 'grid', gap: '10px' }}>
+            {studentNotifItems.map(item => (
+              <div key={item.id} style={{ border: '1px solid var(--yt-line)', borderRadius: '8px', padding: '12px', backgroundColor: item.kind === 'reply' ? 'var(--yt-mustard-bg)' : 'var(--yt-paper-2)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '4px' }}>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 'bold', color: 'var(--yt-ink)' }}>
+                    {item.kind === 'reply' ? '↩ ' : '📢 '}{item.title}
+                  </span>
+                </div>
+                {item.kind === 'reply' && (
+                  <p style={{ margin: '0 0 6px 0', fontSize: '0.78rem', color: 'var(--yt-graphite)', fontStyle: 'italic' }}>"{item.originalMessage}"</p>
+                )}
+                <p style={{ margin: '0 0 6px 0', fontSize: '0.86rem', color: 'var(--yt-ink)', whiteSpace: 'pre-wrap' }}>{item.message}</p>
+                <span style={{ fontSize: '0.72rem', color: 'var(--yt-graphite-soft)' }}>{new Date(item.date).toLocaleString('tr-TR')}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  // Tüm sayfalarda aynı şekilde görünen üst menü: Sınavlarım, Sepet, Bildirim, Hesap (e-posta) menüsü
+  const renderHeaderRight = () => (
+    <>
+      {user && (
+        <button
+          onClick={() => { setInspectingExamId(null); setActiveStudentExamId(null); setAccountTab('exams'); setShowAccountPage(true); setShowAccountMenu(false); fetchMyBillingInfo(); }}
+          className="yt-btn yt-btn-ghost"
+        >
+          Sınavlarım
+        </button>
+      )}
+      {false && user && appMode !== 'admin' && studentBalance !== null && ( /* hediye bakiye rozeti şimdilik kapalı */
+        <div
+          title="Bakiyeniz -- ödemelerde kullanılabilir"
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 14px', borderRadius: '8px', border: '1.5px solid var(--yt-line)', backgroundColor: 'var(--yt-paper-2)', whiteSpace: 'nowrap' }}
+        >
+          <span style={{ fontSize: '1rem' }}>🎁</span>
+          <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.85rem', fontWeight: 'bold', color: 'var(--yt-ink)' }}>₺{studentBalance}</span>
+          <BalanceGiftModal balance={studentBalance} studentEmail={user.email} />
+        </div>
+      )}
+      <button onClick={() => setShowCart(true)} className="yt-cart-btn yt-cart-btn-wide" title="Sepet">
+        <span style={{ fontSize: '1.15rem' }}>🛒</span>
+        <span>Sepet{cartItems.length > 0 ? ` (${cartItems.length})` : ''}</span>
+      </button>
+      {user && (
+        <button onClick={openStudentNotifs} className="yt-cart-btn" title="Bildirimler">
+          🔔
+          {studentUnreadCount > 0 && <span className="yt-cart-badge">{studentUnreadCount}</span>}
+        </button>
+      )}
+      {user ? (
+        <div style={{ position: 'relative' }}>
+          <button
+            onClick={() => setShowAccountMenu(v => !v)}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: 'var(--yt-paper)', padding: '6px 12px', borderRadius: '20px', border: '1px solid var(--yt-line)', cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            <span style={{ fontSize: '0.95rem' }}>👤</span>
+            <span style={{ fontSize: '0.85rem', fontWeight: '500', color: 'var(--yt-ink)' }}>{user.email}</span>
+          </button>
+          {showAccountMenu && (
+            <>
+              <div onClick={() => setShowAccountMenu(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }}></div>
+              <div style={{ position: 'absolute', top: 'calc(100% + 8px)', right: 0, width: '280px', backgroundColor: 'var(--yt-paper-2)', border: '1px solid var(--yt-line)', borderRadius: '10px', boxShadow: 'var(--yt-shadow)', padding: '16px', zIndex: 50 }}>
+                <h4 className="yt-admin-section-title" style={{ marginTop: 0 }}>Şifre Değiştir</h4>
+                <form onSubmit={handleChangePassword}>
+                  <div className="yt-field">
+                    <label className="yt-label">Yeni Şifre</label>
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      value={newPasswordInput}
+                      onChange={(e) => setNewPasswordInput(e.target.value)}
+                      placeholder="••••••••"
+                      className="yt-input"
+                    />
+                  </div>
+                  <div className="yt-field">
+                    <label className="yt-label">Yeni Şifre (Tekrar)</label>
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      value={confirmPasswordInput}
+                      onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                      placeholder="••••••••"
+                      className="yt-input"
+                    />
+                  </div>
+                  {passwordChangeMessage && (
+                    <div style={{
+                      padding: '10px 12px', borderRadius: '8px', fontSize: '0.85rem', marginBottom: '12px',
+                      backgroundColor: passwordChangeMessage.type === 'success' ? 'var(--yt-correct-bg)' : 'var(--yt-wrong-bg)',
+                      color: passwordChangeMessage.type === 'success' ? 'var(--yt-correct)' : 'var(--yt-wrong)'
+                    }}>
+                      {passwordChangeMessage.text}
+                    </div>
+                  )}
+                  <button type="submit" disabled={passwordChangeLoading} className="yt-btn yt-btn-primary yt-btn-block">
+                    {passwordChangeLoading ? 'Güncelleniyor...' : 'Şifreyi Güncelle'}
+                  </button>
+                </form>
+                <div style={{ borderTop: '1px solid var(--yt-line)', margin: '14px 0' }}></div>
+                <button onClick={handleLogout} className="yt-btn yt-btn-ghost yt-btn-block" style={{ color: 'var(--yt-wrong)' }}>
+                  Çıkış Yap
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+        <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="yt-btn yt-btn-outline">
+          Giriş Yap
+        </button>
+      )}
+    </>
+  );
+
+  if (showAccountPage && user) {
+    const myPurchases = exams.filter(e => studentPurchases[e.id]);
+    const mySolved = exams.filter(e => studentResultsMap[e.id]?.is_finished);
+
+    return (
+      <div className="yt-shell">
+        <TopBanner />
+        <header className="yt-header">
+          <div className="yt-header-inner">
+            <div className="yt-brand" style={{ cursor: 'pointer' }} onClick={() => setShowAccountPage(false)}>
+              <img src={sualinkLogo} alt="Sualink" className="yt-brand-logo" />
+            </div>
+            <div style={{ flex: 1 }}></div>
+            {renderHeaderRight()}
+          </div>
+        </header>
+
+        <div className="wrap" style={{ maxWidth: '840px', margin: '0 auto', padding: '32px 24px 60px' }}>
+          <h1 style={{ fontFamily: 'var(--yt-font-display)', fontWeight: '600', fontSize: '1.5rem', color: 'var(--yt-ink)', margin: '0 0 4px' }}>Sınavlarım</h1>
+          <p style={{ color: 'var(--yt-graphite)', fontSize: '0.88rem', margin: '0 0 24px' }}>{user.email}</p>
+
+          <div>
+            <div className="yt-session-card" style={{ marginBottom: '20px' }}>
+              <h3 className="yt-admin-section-title">Satın Aldıklarım ({myPurchases.length})</h3>
+              {myPurchases.length === 0 ? (
+                <div style={{ color: 'var(--yt-graphite-soft)', fontSize: '0.9rem', textAlign: 'center', padding: '20px 0' }}>
+                  Henüz satın aldığınız bir içerik yok.
+                </div>
+              ) : (
+                <div className="yt-subtest-list">
+                  {myPurchases.map(e => (
+                    <div key={e.id} className="yt-subtest-row">
+                      <div style={{ flex: 1, minWidth: '160px' }}>
+                        <strong style={{ color: 'var(--yt-ink)' }}>{e.name || 'İsimsiz'}</strong>
+                        <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px' }}>
+                          {e.categoryLesson} · {e.categoryExamType}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => { setInspectingExamId(e.id); setShowAccountPage(false); }}
+                        className="yt-btn yt-btn-outline"
+                      >
+                        İçeriği Gör
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="yt-session-card">
+              <h3 className="yt-admin-section-title">Çözdüğüm Testler ({mySolved.length})</h3>
+              {mySolved.length === 0 ? (
+                <div style={{ color: 'var(--yt-graphite-soft)', fontSize: '0.9rem', textAlign: 'center', padding: '20px 0' }}>
+                  Henüz tamamladığınız bir test yok.
+                </div>
+              ) : (
+                <div className="yt-subtest-list">
+                  {mySolved.map(e => {
+                    const res = studentResultsMap[e.id];
+                    return (
+                      <div key={e.id} className="yt-subtest-row">
+                        <div className="yt-subtest-bubble done">✓</div>
+                        <div style={{ flex: 1, minWidth: '160px' }}>
+                          <strong style={{ color: 'var(--yt-ink)' }}>{e.name || 'İsimsiz Test'}</strong>
+                          <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px', display: 'flex', gap: '10px' }}>
+                            <span style={{ color: 'var(--yt-correct)' }}>D: {res.correct}</span>
+                            <span style={{ color: 'var(--yt-wrong)' }}>Y: {res.wrong}</span>
+                            <span>Net: {res.net}</span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setActiveStudentExamId(e.id);
+                            setInspectingExamId(null);
+                            setStudentAnswers(res.answers || {});
+                            setStudentCurrentPage(1);
+                            setIsExamFinished(true);
+                            setShowResults(true);
+                            setViewingSolutionQ(false);
+                            setShowAccountPage(false);
+                            fetchAnswerKeyForReview(e.id);
+                          }}
+                          className="yt-btn yt-btn-outline"
+                        >
+                          Sonucu İncele
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="yt-session-card" style={{ marginTop: '20px' }}>
+              <h3 className="yt-admin-section-title">Fatura Bilgilerim</h3>
+              <p style={{ color: 'var(--yt-graphite)', fontSize: '0.84rem', margin: '0 0 16px' }}>
+                Satın aldığınız içerikler için fatura kesilebilmesi amacıyla bu bilgileri
+                doldurmanız gerekiyor. Bilgileriniz yalnızca fatura düzenlemek için kullanılır.
+              </p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', marginBottom: '14px' }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>Ad Soyad</label>
+                  <input
+                    type="text"
+                    value={billingDraft.fullName}
+                    onChange={(e) => setBillingDraft(prev => ({ ...prev, fullName: e.target.value }))}
+                    className="yt-input"
+                    style={{ width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>TC Kimlik No</label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={11}
+                    value={billingDraft.tcKimlikNo}
+                    onChange={(e) => setBillingDraft(prev => ({ ...prev, tcKimlikNo: e.target.value.replace(/\D/g, '').slice(0, 11) }))}
+                    className="yt-input"
+                    style={{ width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>Fatura E-posta Adresi</label>
+                  <input
+                    type="email"
+                    value={billingDraft.invoiceEmail}
+                    onChange={(e) => setBillingDraft(prev => ({ ...prev, invoiceEmail: e.target.value }))}
+                    className="yt-input"
+                    style={{ width: '100%', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={{ display: 'block', fontSize: '0.78rem', fontWeight: 'bold', color: 'var(--yt-ink)', marginBottom: '4px' }}>Adres</label>
+                  <textarea
+                    value={billingDraft.address}
+                    onChange={(e) => setBillingDraft(prev => ({ ...prev, address: e.target.value }))}
+                    rows={2}
+                    className="yt-input"
+                    style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }}
+                  />
+                </div>
+              </div>
+              <button
+                onClick={() => saveMyBillingInfo(false)}
+                disabled={savingBillingInfo}
+                className="yt-btn yt-btn-primary"
+              >
+                {savingBillingInfo ? 'Kaydediliyor...' : (myBillingInfo ? 'Bilgilerimi Güncelle' : 'Kaydet')}
+              </button>
+            </div>
+          </div>
+        </div>
+      <Footer />
+      {renderCartDrawer()}
+      {renderBillingGateModal()}
+      {renderNotifDrawer()}
+      {renderAuthModal()}
+      </div>
+    );
+  }
+
+  if (inspectingExamId) {
+      const inspectExam = exams.find(e => e.id === inspectingExamId);
+      if (!inspectExam) return null;
+
+      const childExams = exams.filter(e => e.parentId === inspectingExamId).sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+      const ratingInfo = examRatingsMap[inspectExam.id] || { average: '0,0', count: '0' };
+      const ratingBreakdown = examRatingBreakdownMap[inspectExam.id] || { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      const totalRatingCount = Object.values(ratingBreakdown).reduce((a, b) => a + b, 0);
+      const solvedCount = solvedCountMap[inspectExam.id] || 0;
+      const campaignCountdown = getCampaignCountdown(inspectExam);
+      const isPaid = inspectExam.price && inspectExam.price > 0;
+      const isPurchased = studentPurchases[inspectExam.id];
+      const resData = studentResultsMap[inspectExam.id];
+      const isCompleted = resData?.is_finished;
+      const inCart = cartItems.includes(inspectExam.id);
+      // ÖNEMLİ (bug fix): Bu sayfa şimdiye kadar SADECE "alt testleri olan
+      // paket" senaryosunu destekliyordu (childExams.length > 0). Kendi
+      // PDF'i/soru sayısı olan, hiç alt testi olmayan TEK BAŞINA bir sınav
+      // (childExams.length === 0 ama inspectExam'in kendi numPages/pdfFile'ı
+      // var) için ne satın alma butonu ne de "Teste Başla" seçeneği hiç
+      // gösterilmiyordu -- her zaman "henüz test eklenmedi" mesajı çıkıyordu,
+      // satın alınmış olsa bile. Bu bayrak, aşağıdaki üç noktada bu durumu
+      // ayırt edip doğru arayüzü göstermek için kullanılıyor.
+      const isStandalone = childExams.length === 0 && !!(inspectExam.pdfFile || (inspectExam.numPages && inspectExam.numPages > 0));
+      const relatedExams = exams
+        .filter(e => e.isPublished && !e.parentId && e.id !== inspectExam.id && e.categoryLesson === inspectExam.categoryLesson)
+        .slice(0, 3);
+
+      return (
+        <div className="yt-shell">
+          <TopBanner />
+          <header className="yt-header">
+            <div className="yt-header-inner">
+              <div className="yt-brand" style={{ cursor: 'pointer' }} onClick={() => setInspectingExamId(null)}>
+                <img src={sualinkLogo} alt="Sualink" className="yt-brand-logo" />
+              </div>
+              <div style={{ flex: 1 }}></div>
+              <button
+                onClick={() => {
+                  const shareUrl = `${window.location.origin}${window.location.pathname}?exam=${inspectExam.id}`;
+                  navigator.clipboard.writeText(shareUrl)
+                    .then(() => alert('Bağlantı kopyalandı: ' + shareUrl))
+                    .catch(() => prompt('Bağlantıyı kopyalayın:', shareUrl));
+                }}
+                className="yt-btn yt-btn-ghost"
+                title="Bu ürünün linkini kopyala"
+              >
+                🔗 Paylaş
+              </button>
+              {renderHeaderRight()}
+            </div>
+          </header>
+
+          <main style={{ maxWidth: '760px', margin: '40px auto', padding: '0 24px' }}>
+            <div className="yt-detail-panel">
+
+              <div style={{ marginBottom: '12px' }}>
+                <span className="yt-tag">{inspectExam.categoryExamType} · {inspectExam.categoryLesson}</span>
+              </div>
+
+              <h1 style={{ margin: '0 0 12px 0', fontSize: '1.6rem' }}>
+                {inspectExam.name || 'İsimsiz İçerik'}
+              </h1>
+
+              {(() => {
+                const totalQuestions = childExams.length > 0
+                  ? childExams.reduce((sum, t) => sum + (t.numPages || 0), 0)
+                  : (inspectExam.numPages || 0);
+                return (
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+                    <span className="yt-chip">{totalQuestions} SORU</span>
+                    {childExams.length > 0 && <span className="yt-chip">{childExams.length} TEST</span>}
+                  </div>
+                );
+              })()}
+
+              <div style={{ marginBottom: '10px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <div className="yt-rating" style={{ fontSize: '0.85rem' }}>
+                  <span className="stars">
+                    {'★'.repeat(Math.round(Number(ratingInfo.average.replace(',', '.')))).padEnd(5, '☆')}
+                  </span>
+                  {ratingInfo.average} <span className="count">({ratingInfo.count} değerlendirme)</span>
+                </div>
+                {solvedCount > 0 && (
+                  <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.78rem', color: 'var(--yt-graphite)' }}>
+                    · {solvedCount.toLocaleString('tr-TR')} kişi çözdü
+                  </span>
+                )}
+                {campaignCountdown && <span className="yt-countdown">⏳ Kampanya: {campaignCountdown}</span>}
+              </div>
+
+              {totalRatingCount > 0 && (
+                <details style={{ marginBottom: '16px' }}>
+                  <summary style={{ cursor: 'pointer', fontSize: '0.75rem', color: 'var(--yt-mustard-deep)', fontFamily: 'var(--yt-font-mono)', width: 'fit-content' }}>
+                    Puan dağılımını gör
+                  </summary>
+                  <div className="yt-rating-histogram" style={{ marginTop: '10px', maxWidth: '280px' }}>
+                    {[5, 4, 3, 2, 1].map(star => {
+                      const pct = totalRatingCount > 0 ? Math.round((ratingBreakdown[star] / totalRatingCount) * 100) : 0;
+                      return (
+                        <div key={star} className="yt-hist-row">
+                          <span>{star}★</span>
+                          <div className="yt-hist-track"><div className="yt-hist-fill" style={{ width: `${pct}%` }}></div></div>
+                          <span>{pct}%</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
+              )}
+
+              {inspectExam.description && (
+                <p style={{ fontSize: '0.9rem', color: 'var(--yt-graphite)', lineHeight: 1.6, margin: '0 0 20px', paddingBottom: '20px', borderBottom: '1px solid var(--yt-line)' }}>
+                  {inspectExam.description}
+                </p>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '16px' }}>
+                <div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--yt-graphite)', marginBottom: '4px', fontFamily: 'var(--yt-font-mono)' }}>SINAV FİYATI</div>
+                  <div className="yt-price" style={{ display: 'flex', alignItems: 'baseline', gap: '10px' }}>
+                    {(isPaid || (inspectExam.originalPrice && inspectExam.originalPrice > 0)) ? (
+                      <>
+                        <span className="now" style={{ fontSize: '1.5rem' }}>
+                          ₺{(inspectExam.price || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                        {inspectExam.originalPrice && inspectExam.originalPrice > inspectExam.price ? (
+                          <span className="old">
+                            ₺{inspectExam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </span>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span className="free" style={{ fontSize: '1.3rem' }}>Ücretsiz</span>
+                    )}
+                  </div>
+                </div>
+
+                {isPaid && !isPurchased && (childExams.length > 0 || isStandalone) && (
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => toggleCartItem(inspectExam.id)} className={`yt-add-cart-btn${inCart ? ' in-cart' : ''}`}>
+                      {inCart ? '✓ Sepette' : '+ Sepete Ekle'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (!user) {
+                          alert("Satın alabilmek için lütfen giriş yapın veya üye olun.");
+                          setAuthMode('login');
+                          setShowAuthModal(true);
+                          return;
+                        }
+                        handleIyzicoPayment(inspectExam);
+                      }}
+                      className="yt-btn yt-btn-buy"
+                    >
+                      Hemen Satın Al (₺{inspectExam.price}) →
+                    </button>
+                  </div>
+                )}
+
+                {childExams.length === 0 && !isStandalone && (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--yt-graphite-soft)', fontStyle: 'italic' }}>
+                    Test eklendiğinde burada &quot;Teste Başla&quot; seçeneği görünecek.
+                  </div>
+                )}
+              </div>
+
+
+              {productReviews.length > 0 && (
+                <div style={{ marginBottom: '24px' }}>
+                  <h3 style={{ margin: '0 0 12px 0', fontSize: '0.95rem' }}>Öğrenci Yorumları ({productReviews.length})</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {productReviews.map((rev, idx) => {
+                      const namePart = (rev.student_email || 'ogrenci').split('@')[0];
+                      const maskedName = namePart.length > 2
+                        ? namePart.slice(0, 2) + '*'.repeat(Math.max(3, namePart.length - 2))
+                        : namePart + '***';
+                      return (
+                        <div key={idx} style={{ backgroundColor: 'var(--yt-paper-2)', border: '1px solid var(--yt-line)', borderRadius: '10px', padding: '12px 14px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <span style={{ fontWeight: '600', fontSize: '0.85rem', color: 'var(--yt-ink)', textTransform: 'capitalize' }}>{maskedName}</span>
+                            <span style={{ color: 'var(--yt-mustard-deep)', fontSize: '0.85rem' }}>{'★'.repeat(rev.rating)}{'☆'.repeat(5 - rev.rating)}</span>
+                          </div>
+                          <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--yt-graphite)', lineHeight: 1.5 }}>{rev.review_text}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {(() => {
+                if (!isPaid || isPurchased || childExams.length === 0) {
+                  // Tek testlik / eski tip ürünlerde eski davranış: tek önizleme paneli
+                  const previewSourceExam = childExams.length > 0 ? childExams[0] : inspectExam;
+                  return isPaid && !isPurchased && previewSourceExam.pdfFile ? (
+                    <div className="yt-preview-panel" style={{ marginBottom: '24px' }}>
+                      <span className="yt-preview-label">Ücretsiz Önizleme — 1. Soru</span>
+                      <SecurePdfViewer examId={previewSourceExam.id} type="exam-preview" pageNumber={1} />
+                    </div>
+                  ) : null;
+                }
+
+                // Çoklu test varsa, farklı testlerden örnek gösterecek şekilde
+                // 3 test seçiyoruz (baştan, ortadan, sondan) — kalite sürekliliğini
+                // göstermek için tek testten değil, çeşitli testlerden örnek.
+                const sampleCount = Math.min(3, childExams.length);
+                const sampleIndexes = sampleCount === 1
+                  ? [0]
+                  : Array.from({ length: sampleCount }, (_, i) => Math.round(i * (childExams.length - 1) / (sampleCount - 1)));
+                const uniqueIndexes = [...new Set(sampleIndexes)];
+                const sampleTests = uniqueIndexes.map(i => childExams[i]).filter(t => t.pdfFile);
+
+                if (sampleTests.length === 0) return null;
+
+                const activeIdx = Math.min(previewTestIndex, sampleTests.length - 1);
+                const activeTest = sampleTests[activeIdx];
+
+                return (
+                  <div className="yt-preview-panel" style={{ marginBottom: '24px' }}>
+                    <span className="yt-preview-label">Ücretsiz Önizleme — Farklı Testlerden Örnek Sorular</span>
+                    {sampleTests.length > 1 && (
+                      <div style={{ display: 'flex', gap: '6px', marginBottom: '10px', flexWrap: 'wrap' }}>
+                        {sampleTests.map((t, idx) => (
+                          <button
+                            key={t.id}
+                            onClick={() => setPreviewTestIndex(idx)}
+                            className={`yt-chip${idx === activeIdx ? ' active' : ''}`}
+                            style={{ fontSize: '0.7rem', padding: '5px 10px' }}
+                          >
+                            {t.name || `Test ${idx + 1}`}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <SecurePdfViewer examId={activeTest.id} type="exam-preview" pageNumber={1} />
+                  </div>
+                );
+              })()}
+
+
+              <div style={{ marginBottom: '24px' }}>
+                <h3 style={{ margin: '0 0 12px 0', fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>Testler</h3>
+
+                {inspectExam.sections && inspectExam.sections.length > 0 ? (
+                  <div className="yt-subtest-list">
+                    {inspectExam.sections.map((sec, index) => (
+                      <div key={index} className="yt-subtest-row">
+                        <strong style={{ color: 'var(--yt-ink)', flex: 1 }}>{sec.name}</strong>
+                        <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.78rem', color: 'var(--yt-graphite)' }}>
+                          Soru Aralığı: {sec.start} - {sec.end}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : childExams.length > 0 ? (
+                  <div className="yt-subtest-list">
+                    {childExams.map((child, index) => {
+                      const childRes = studentResultsMap[child.id];
+                      const childCompleted = childRes?.is_finished;
+                      const answeredCount = childRes?.answers ? Object.keys(childRes.answers).length : 0;
+                      const childInProgress = !childCompleted && answeredCount > 0;
+                      const totalQ = child.numPages || 0;
+                      const progressPct = totalQ > 0 ? Math.round((answeredCount / totalQ) * 100) : 0;
+
+                      // Bir alt test, üst paket satın alınmışsa YA DA kendisi ayrı
+                      // ayrı satın alınmışsa erişilebilir. Kendi fiyatı (price) 0
+                      // ise tek başına satılmıyor demektir -- sadece üst paket
+                      // yoluyla açılır.
+                      const childOwnPrice = child.price || 0;
+                      const childIndividuallyPurchased = !!studentPurchases[child.id];
+                      const childUnlocked = !isPaid || isPurchased || childIndividuallyPurchased;
+                      const childIndividuallySellable = childOwnPrice > 0;
+                      const childInCart = cartItems.includes(child.id);
+
+                      const ctaClass = childCompleted ? 'yt-btn-ghost' : (childInProgress ? 'yt-btn-primary' : (childUnlocked ? 'yt-btn-outline' : 'yt-btn-locked'));
+                      return (
+                        <div key={child.id} className="yt-subtest-row">
+                          <div className={`yt-subtest-bubble${childCompleted ? ' done' : (childInProgress ? ' in-progress' : '')}`}>
+                            {childCompleted ? '✓' : (childInProgress ? '…' : index + 1)}
+                          </div>
+                          <div style={{ flex: 1, minWidth: '160px' }}>
+                            <strong style={{ color: 'var(--yt-ink)' }}>{child.name || 'İsimsiz Test'}</strong>
+                            <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px', display: 'flex', gap: '12px' }}>
+                              <span>{child.numPages || '?'} SORU</span>
+                              {childCompleted && <span style={{ color: 'var(--yt-correct)' }}>Net: {childRes.net}</span>}
+                              {childInProgress && <span style={{ color: 'var(--yt-mustard-deep)' }}>{answeredCount}/{totalQ} soru yapıldı</span>}
+                              {!childUnlocked && childIndividuallySellable && (
+                                <span style={{ color: 'var(--yt-mustard-deep)', fontWeight: 'bold' }}>₺{childOwnPrice}</span>
+                              )}
+                            </div>
+                            {childInProgress && (
+                              <div className="yt-subtest-progress-track">
+                                <div className="yt-subtest-progress-fill" style={{ width: `${progressPct}%` }} />
+                              </div>
+                            )}
+                          </div>
+
+                          {!childUnlocked && childIndividuallySellable ? (
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                              <button
+                                onClick={() => toggleCartItem(child.id)}
+                                className={`yt-add-cart-btn${childInCart ? ' in-cart' : ''}`}
+                                style={{ fontSize: '0.76rem', padding: '6px 10px' }}
+                              >
+                                {childInCart ? '✓ Sepette' : '+ Sepete Ekle'}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (!user) {
+                                    alert("Satın alabilmek için lütfen giriş yapın veya üye olun.");
+                                    setAuthMode('login');
+                                    setShowAuthModal(true);
+                                    return;
+                                  }
+                                  handleIyzicoPayment(child);
+                                }}
+                                className="yt-btn yt-btn-buy"
+                                style={{ fontSize: '0.76rem', padding: '6px 10px' }}
+                              >
+                                Satın Al →
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                if (!user && !isFreeTrialExam(child)) {
+                                  alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
+                                  setAuthMode('login');
+                                  setShowAuthModal(true);
+                                  return;
+                                }
+                                if (childUnlocked) {
+                                  if (childCompleted) {
+                                    setActiveStudentExamId(child.id);
+                                    setInspectingExamId(null);
+                                    setStudentAnswers(childRes.answers || {});
+                                    setStudentCurrentPage(1);
+                                    setIsExamFinished(true);
+                                    setShowResults(true);
+                                    setViewingSolutionQ(false);
+                                    fetchAnswerKeyForReview(child.id);
+                                  } else {
+                                    startExam(child);
+                                  }
+                                } else {
+                                  // Bu test tek başına satılmıyor (fiyatı 0) -- tek
+                                  // seçenek üst paketin tamamını satın almak.
+                                  handleIyzicoPayment(inspectExam);
+                                }
+                              }}
+                              className={`yt-btn ${ctaClass}`}
+                            >
+                              {childCompleted ? 'Sonucu İncele' : (childInProgress ? 'Devam Et →' : (childUnlocked ? 'Teste Başla →' : '🔒 Kilitli'))}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : isStandalone ? (
+                  // ÖNEMLİ (bug fix): Alt testi olmayan, kendi PDF'i/soru
+                  // sayısı olan TEK BAŞINA bir sınav -- mantığı yukarıdaki
+                  // alt test satırıyla birebir aynı (tamamlandı/devam
+                  // ediyor/kilitli), sadece `child` yerine `inspectExam`
+                  // üzerinden çalışıyor.
+                  (() => {
+                    const ownRes = studentResultsMap[inspectExam.id];
+                    const ownCompleted = ownRes?.is_finished;
+                    const ownAnsweredCount = ownRes?.answers ? Object.keys(ownRes.answers).length : 0;
+                    const ownInProgress = !ownCompleted && ownAnsweredCount > 0;
+                    const ownTotalQ = inspectExam.numPages || 0;
+                    const ownProgressPct = ownTotalQ > 0 ? Math.round((ownAnsweredCount / ownTotalQ) * 100) : 0;
+                    const ownUnlocked = !isPaid || isPurchased;
+                    const ctaClass = ownCompleted ? 'yt-btn-ghost' : (ownInProgress ? 'yt-btn-primary' : (ownUnlocked ? 'yt-btn-outline' : 'yt-btn-locked'));
+                    return (
+                      <div className="yt-subtest-list">
+                        <div className="yt-subtest-row">
+                          <div className={`yt-subtest-bubble${ownCompleted ? ' done' : (ownInProgress ? ' in-progress' : '')}`}>
+                            {ownCompleted ? '✓' : (ownInProgress ? '…' : 1)}
+                          </div>
+                          <div style={{ flex: 1, minWidth: '160px' }}>
+                            <strong style={{ color: 'var(--yt-ink)' }}>{inspectExam.name || 'İsimsiz Test'}</strong>
+                            <div style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.74rem', color: 'var(--yt-graphite)', marginTop: '3px', display: 'flex', gap: '12px' }}>
+                              <span>{inspectExam.numPages || '?'} SORU</span>
+                              {ownCompleted && <span style={{ color: 'var(--yt-correct)' }}>Net: {ownRes.net}</span>}
+                              {ownInProgress && <span style={{ color: 'var(--yt-mustard-deep)' }}>{ownAnsweredCount}/{ownTotalQ} soru yapıldı</span>}
+                            </div>
+                            {ownInProgress && (
+                              <div className="yt-subtest-progress-track">
+                                <div className="yt-subtest-progress-fill" style={{ width: `${ownProgressPct}%` }} />
+                              </div>
+                            )}
+                          </div>
+
+                          <button
+                            onClick={() => {
+                              if (!user && !isFreeTrialExam(inspectExam)) {
+                                alert("Sınava katılabilmek için lütfen giriş yapın veya üye olun.");
+                                setAuthMode('login');
+                                setShowAuthModal(true);
+                                return;
+                              }
+                              if (ownUnlocked) {
+                                if (ownCompleted) {
+                                  setActiveStudentExamId(inspectExam.id);
+                                  setInspectingExamId(null);
+                                  setStudentAnswers(ownRes.answers || {});
+                                  setStudentCurrentPage(1);
+                                  setIsExamFinished(true);
+                                  setShowResults(true);
+                                  setViewingSolutionQ(false);
+                                  fetchAnswerKeyForReview(inspectExam.id);
+                                } else {
+                                  setShowResults(false);
+                                  startExam(inspectExam);
+                                }
+                              } else {
+                                handleIyzicoPayment(inspectExam);
+                              }
+                            }}
+                            className={`yt-btn ${ctaClass}`}
+                          >
+                            {ownCompleted ? 'Sonucu İncele' : (ownInProgress ? 'Devam Et →' : (ownUnlocked ? 'Teste Başla →' : '🔒 Kilitli'))}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()
+                ) : (
+                  <div style={{ textAlign: 'center', padding: '20px', color: 'var(--yt-graphite-soft)', fontSize: '0.9rem' }}>
+                    Bu içerik için henüz test eklenmedi. Yakında yayında olacak.
+                  </div>
+                )}
+              </div>
+
+            </div>
+
+            {relatedExams.length > 0 && (
+              <div style={{ marginTop: '32px' }}>
+                <h3 style={{ margin: '0 0 14px 0', fontSize: '1rem', color: 'var(--yt-ink)', fontFamily: 'var(--yt-font-display)' }}>Bunlar da İlgini Çekebilir</h3>
+                <div className="yt-related-scroll">
+                  {relatedExams.map((re, idx) => {
+                    const reRating = examRatingsMap[re.id] || { average: '0,0', count: '0' };
+                    const reChildren = exams.filter(e => e.parentId === re.id);
+                    const reQuestions = reChildren.length > 0
+                      ? reChildren.reduce((sum, t) => sum + (t.numPages || 0), 0)
+                      : (re.numPages || 0);
+                    const reIsFree = !re.price || re.price <= 0;
+                    const reOnCampaign = re.originalPrice && re.originalPrice > re.price;
+                    const tileTone = ['ink', 'mustard', 'graphite'][idx % 3];
+                    return (
+                      <div key={re.id} className="yt-related-card-v2" onClick={() => setInspectingExamId(re.id)}>
+                        <div className={`yt-related-tile tone-${tileTone}`}>
+                          {(reIsFree && !(re.originalPrice > 0)) && <span className="yt-related-badge free">ÜCRETSİZ</span>}
+                          {reOnCampaign && <span className="yt-related-badge sale">İNDİRİMDE</span>}
+                          <div className="yt-related-rating">
+                            <span className="stars">{'★'.repeat(Math.round(Number(reRating.average.replace(',', '.')))).padEnd(5, '☆')}</span>
+                            <span>{reRating.average} ({reRating.count})</span>
+                          </div>
+                        </div>
+                        <div className="yt-related-body">
+                          <div className="yt-related-name">{re.name || 'İsimsiz İçerik'}</div>
+                          <div className="yt-related-meta">{reQuestions} soru{reChildren.length > 0 ? ` · ${reChildren.length} test` : ''}</div>
+                          <div className="yt-related-price">
+                            {(!reIsFree || (re.originalPrice && re.originalPrice > 0)) ? (
+                              <>
+                                {re.originalPrice && re.originalPrice > re.price ? <span className="old">₺{re.originalPrice}</span> : null}
+                                <span className="now">₺{re.price || 0}</span>
+                              </>
+                            ) : (
+                              <span className="free">Ücretsiz</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </main>
+          <Footer />
+          {renderCartDrawer()}
+      {renderBillingGateModal()}
+          {renderNotifDrawer()}
+          {renderAuthModal()}
+        </div>
+      );
+    }
+
+    if (!activeStudentExamId) {
+      // ---- Yeni ana sayfa: Google tarzı seçim ekranı. Eski ana sayfa için adres sonuna ?eski=1 ekleyin. ----
+      if (!new URLSearchParams(window.location.search).get('eski')) {
+        const sinavlar = [...examCategories].sort((x, y) => String(x.name).localeCompare(String(y.name), 'tr'));
+        const sinav = sinavlar.find((c) => String(c.id) === String(hs.exam)) || sinavlar.find((c) => /kpss/i.test(c.name)) || null; // varsayılan: KPSS
+        const uniq = (arr) => arr.filter((n, i, r) => n && r.indexOf(n) === i).sort((x, y) => String(x).localeCompare(String(y), 'tr'));
+        const lessonIdSet = new Set();
+        if (sinav) {
+          eclRows.filter((r) => String(r.exam_category_id) === String(sinav.id)).forEach((r) => lessonIdSet.add(r.lesson_category_id));
+          lessonCategories.filter((l) => String(l.exam_category_id) === String(sinav.id)).forEach((l) => lessonIdSet.add(l.id));
+        }
+        // Ders sırası: Tanımla > Sınavlar'da verilen sıra; sırası olmayanlar sona, alfabetik
+        const orderOf = {};
+        if (sinav) eclRows.filter((r) => String(r.exam_category_id) === String(sinav.id)).forEach((r) => { if (r.sort_order != null) orderOf[r.lesson_category_id] = r.sort_order; });
+        const dersler = lessonCategories
+          .filter((l) => lessonIdSet.has(l.id))
+          .map((l) => ({ name: l.name, o: orderOf[l.id] != null ? orderOf[l.id] : 9999 }))
+          .sort((x, y) => (x.o - y.o) || String(x.name).localeCompare(String(y.name), 'tr'))
+          .map((x) => x.name)
+          .filter((n, i, r) => n && r.indexOf(n) === i);
+        const ders = dersler.includes(hs.lesson) ? hs.lesson : '';
+        const dersIds = ders ? lessonCategories.filter((l) => l.name === ders).map((l) => l.id) : [];
+        // Konu / kazanım sırası: Tanımla > Sınavlar > İçerik ve dağılım'da verilen sıra; sırası olmayanlar sona, alfabetik
+        const sortOf = { topic: {}, outcome: {} };
+        if (sinav) distRows.filter((r) => String(r.exam_category_id) === String(sinav.id)).forEach((r) => { sortOf[r.level][r.ref_id] = r.sort_order || 0; });
+        const ordNames = (items, level) => items
+          .map((x) => ({ name: x.name, o: sortOf[level][x.id] != null ? sortOf[level][x.id] : 9999 }))
+          .sort((x, y) => (x.o - y.o) || String(x.name).localeCompare(String(y.name), 'tr'))
+          .map((x) => x.name)
+          .filter((n, i, r) => n && r.indexOf(n) === i);
+        // Bu sınavda sorulmayan (yönetici "çıkar" dediği) konu / kazanımlar
+        const offSet = { topic: new Set(), outcome: new Set() };
+        if (sinav) distRows.filter((r) => String(r.exam_category_id) === String(sinav.id) && r.excluded).forEach((r) => offSet[r.level].add(r.ref_id));
+        // Başka dersten bu sınava alınan konular (ör. Vatandaşlık > Anayasa, Mevzuat altında)
+        const borrowOf = {};
+        if (sinav) distRows.filter((r) => String(r.exam_category_id) === String(sinav.id) && r.level === 'topic' && r.parent_lesson_id).forEach((r) => { borrowOf[r.ref_id] = r.parent_lesson_id; });
+        const konuListe = topics.filter((t) => (borrowOf[t.id] ? dersIds.includes(borrowOf[t.id]) : dersIds.includes(t.lesson_category_id)) && !offSet.topic.has(t.id));
+        const hasBorrowed = Object.keys(borrowOf).some((k) => dersIds.includes(borrowOf[k]) || (topics.find((t) => String(t.id) === k) || {}).lesson_category_id && dersIds.includes((topics.find((t) => String(t.id) === k) || {}).lesson_category_id));
+        const konular = ordNames(konuListe, 'topic');
+        const konu = konular.includes(hs.topic) ? hs.topic : '';
+        const konuIds = konu ? konuListe.filter((t) => t.name === konu).map((t) => t.id) : [];
+        const kazanimListe = learningOutcomes.filter((o) => konuIds.includes(o.topic_id) && !offSet.outcome.has(o.id));
+        const kazanimlar = ordNames(kazanimListe, 'outcome');
+        const kazanim = kazanimlar.includes(hs.outcome) ? hs.outcome : '';
+        const mod = ders ? hs.mode : '';
+        const denemeler = sinav && mod === 'deneme'
+          ? exams.filter((e) => e.isPublished && !e.parentId && (e.categoryExamType || '').trim() === String(sinav.name).trim())
+          : [];
+        return (
+          <div className="yt-shell" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+            <TopBanner />
+            <style>{`
+              .sl-home-top { display: flex; justify-content: flex-end; align-items: center; gap: 10px; padding: 12px 20px; flex-wrap: wrap; }
+              .sl-home-main { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 15vh 20px 60px; }
+              .sl-tik { width: 22px; height: 22px; flex: none; }
+              .sl-slogan { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; margin: 18px 0 0; font-size: 1.12rem; font-weight: 600; color: var(--yt-ink); letter-spacing: 0.01em; text-align: center; }
+              .sl-logo-yeni { width: min(430px, 80vw); height: auto; display: block; }
+              @media (max-width: 520px) { .sl-home-main { padding-top: 10vh; } }
+              .sl-pill { display: flex; align-items: stretch; width: min(640px, 100%); margin: 0 auto; background: #fff; border: 1.5px solid var(--yt-line); border-radius: 32px; box-shadow: 0 1px 8px rgba(27,33,56,0.10); overflow: hidden; }
+              .sl-pill:hover { box-shadow: 0 2px 14px rgba(27,33,56,0.16); }
+              .sl-pill select { flex: 1 1 0; min-width: 0; border: none; background: transparent; padding: 16px 22px; font-size: 1rem; font-family: inherit; color: var(--yt-ink); cursor: pointer; outline: none; }
+              .sl-pill select:disabled { color: var(--yt-graphite-soft); cursor: not-allowed; }
+              .sl-pill-div { width: 1.5px; background: var(--yt-line); margin: 10px 0; flex: none; }
+              @media (max-width: 520px) { .sl-pill { flex-direction: column; border-radius: 22px; } .sl-pill-div { width: auto; height: 1.5px; margin: 0 14px; } }
+              .sl-home-tag { margin: 10px 0 26px; color: var(--yt-graphite); font-size: 0.95rem; text-align: center; }
+              .sl-home-card { width: min(920px, 100%); }
+              .sl-home-row { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+              .sl-sel { flex: 1 1 200px; max-width: 280px; min-width: 170px; padding: 13px 18px; border-radius: 28px; border: 1.5px solid var(--yt-line); background: #fff; font-size: 0.98rem; font-family: inherit; color: var(--yt-ink); box-shadow: 0 1px 6px rgba(27,33,56,0.08); cursor: pointer; }
+              .sl-sel:hover:not(:disabled) { box-shadow: 0 2px 10px rgba(27,33,56,0.16); }
+              .sl-sel:focus { outline: none; border-color: var(--yt-ink); }
+              .sl-sel:disabled { background: #f6f5f1; color: var(--yt-graphite-soft); cursor: not-allowed; box-shadow: none; }
+              .sl-mode { display: flex; gap: 12px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
+              .sl-mode button { padding: 12px 26px; border-radius: 24px; border: 1.5px solid var(--yt-line); background: #f8f9fa; font-size: 0.98rem; font-family: inherit; cursor: pointer; color: var(--yt-ink); }
+              .sl-mode button:hover { border-color: var(--yt-ink); }
+              .sl-mode button.on { background: var(--yt-ink); color: #fff; border-color: var(--yt-ink); }
+              .kt-spin-home { width: 34px; height: 34px; border-radius: 50%; border: 4px solid #e5e2da; border-top-color: #0b86f6; animation: kt-rot-home .8s linear infinite; }
+              @keyframes kt-rot-home { to { transform: rotate(360deg); } }
+              .sl-go { margin-top: 20px; display: flex; justify-content: center; }
+              .sl-go button { padding: 13px 40px; border-radius: 28px; border: none; background: #0b86f6; color: #fff; font-size: 1.02rem; font-weight: 700; cursor: pointer; font-family: inherit; }
+              .sl-dlist { margin-top: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+              @media (max-width: 640px) { .sl-dlist { grid-template-columns: 1fr; } .sl-sel { max-width: none; flex-basis: 100%; } }
+              .sl-d { text-align: left; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--yt-line); background: #fff; cursor: pointer; font-family: inherit; font-size: 0.95rem; color: var(--yt-ink); }
+              .sl-d:hover { border-color: var(--yt-ink); }
+            `}</style>
+            <div className="sl-home-top">{renderHeaderRight()}</div>
+            <div className="sl-home-main">
+              <img src={sualinkLogoYeni} alt="Sualink" className="sl-logo-yeni" />
+              <p className="sl-slogan">
+                Senin sınavın
+                <svg className="sl-tik" viewBox="0 0 24 24" aria-hidden="true">
+                  <defs><linearGradient id="slTikG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#12bfff" /><stop offset="1" stopColor="#0a78ff" /></linearGradient></defs>
+                  <circle cx="12" cy="12" r="12" fill="url(#slTikG)" />
+                  <path d="M6.6 12.4l3.6 3.7 7.2-7.8" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                Senin seçimin
+              </p>
+              <div className="sl-home-card">
+                <div className="sl-pill" style={{ marginTop: '22px' }}>
+                  <select value={sinav ? String(sinav.id) : ''} onChange={(e) => setHsP({ exam: e.target.value, lesson: '', mode: '', topic: '', outcome: '' })} aria-label="Sınav">
+                    <option value="">Sınav seçin</option>
+                    {sinavlar.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                  </select>
+                  <div className="sl-pill-div" />
+                  <select value={ders} disabled={!sinav} onChange={(e) => setHsP({ lesson: e.target.value, mode: '', topic: '', outcome: '' })} aria-label="Ders">
+                    <option value="">Ders seçin</option>
+                    {dersler.map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </div>
+                <div className="sl-home-row" style={{ marginTop: '14px' }}>
+                  {ders && mod === 'konu' && (
+                    <select className="sl-sel" value={konu} onChange={(e) => setHsP({ topic: e.target.value, outcome: '' })}>
+                      <option value="">Tüm konular</option>
+                      {konular.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  )}
+                  {ders && mod === 'konu' && konu && kazanimlar.length > 0 && (
+                    <select className="sl-sel" value={kazanim} onChange={(e) => setHsP({ outcome: e.target.value })}>
+                      <option value="">Tüm kazanımlar</option>
+                      {kazanimlar.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  )}
+                </div>
+                {sinav && ders && mod === 'konu' && (
+                  <div style={{ textAlign: 'center', marginTop: '14px' }}>
+                    <button onClick={() => setHsP({ mode: '', topic: '', outcome: '' })} style={{ border: 'none', background: 'none', color: 'var(--yt-graphite)', cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.9rem', textDecoration: 'underline' }}>‹ Geri</button>
+                  </div>
+                )}
+                {sinav && ders && mod !== 'konu' && (
+                  <div className="sl-mode">
+                    <button className={mod === 'konu' ? 'on' : ''} onClick={() => setHsP({ mode: 'konu' })}>Konu testi</button>
+                    <button className={mod === 'deneme' ? 'on' : ''} onClick={() => setHsP({ mode: 'deneme' })}>Deneme</button>
+                  </div>
+                )}
+                {mod === 'konu' && (
+                  <div className="sl-go">
+                    <select className="sl-sel" style={{ flex: 'none', width: 'auto', minWidth: 0, marginRight: '10px' }} value={solveCount} onChange={(e) => setSolveCount(Number(e.target.value))} aria-label="Soru sayısı">
+                      {[10, 20, 30].map((n) => <option key={n} value={n}>{n} soru</option>)}
+                    </select>
+                    <button onClick={() => {
+                      // Sınavdan çıkarılmış konu/kazanım varsa "tümü" seçiminde de yalnız izinli olanlardan soru gelsin
+                      const anyTopicOff = hasBorrowed || topics.some((t) => dersIds.includes(t.lesson_category_id) && offSet.topic.has(t.id));
+                      const tIds = konu ? konuIds : (anyTopicOff ? konuListe.map((t) => t.id) : []);
+                      const anyOutOff = konu && learningOutcomes.some((o) => konuIds.includes(o.topic_id) && offSet.outcome.has(o.id));
+                      const oIds = kazanim ? kazanimListe.filter((o) => o.name === kazanim).map((o) => o.id) : (anyOutOff ? kazanimListe.map((o) => o.id) : []);
+                      setSolve({ title: [ders, konu, kazanim].filter(Boolean).join(' › '), lessonIds: dersIds, topicIds: tIds, outcomeIds: oIds });
+                    }}>Başla</button>
+                  </div>
+                )}
+                {mod === 'deneme' && (() => {
+                  const dRows = eclRows.filter((r) => sinav && String(r.exam_category_id) === String(sinav.id) && dersIds.includes(r.lesson_category_id));
+                  const dSoru = dRows.reduce((t, r) => t + (Number(r.question_count) || 0), 0);
+                  const topSoru = eclRows.filter((r) => sinav && String(r.exam_category_id) === String(sinav.id)).reduce((t, r) => t + (Number(r.question_count) || 0), 0);
+                  const dSure = sinav && sinav.duration_min && topSoru > 0 ? Math.max(1, Math.round(sinav.duration_min * dSoru / topSoru)) : (dSoru ? Math.round(dSoru * 1.2) : 0);
+                  return (
+                    <div className="sl-go" style={{ flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+                      {dSoru > 0 ? (
+                        <>
+                          <p style={{ margin: 0, color: 'var(--yt-graphite)', fontSize: '0.95rem' }}>{ders} denemesi · {dSoru} soru · {dSure} dk</p>
+                          <button disabled={denemeBusy} style={{ opacity: denemeBusy ? 0.7 : 1 }} onClick={async () => {
+                            if (!user) { alert('Deneme çözmek için lütfen giriş yapın veya üye olun.'); setAuthMode('login'); setShowAuthModal(true); return; }
+                            setDenemeBusy(true);
+                            try {
+                              const { data: sd } = await supabase.auth.getSession();
+                              const r = await fetch('/api/make-deneme', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sd?.session?.access_token}` }, body: JSON.stringify({ examCategoryId: sinav.id, lessonIds: dersIds }) });
+                              const j = await r.json();
+                              if (!r.ok) { alert((j.error || 'Deneme hazırlanamadı.') + (j.detail ? '\n\n' + j.detail : '')); }
+                              else { const ex = formatExamData(j.exam); setExams((prev) => [ex, ...prev.filter((x) => x.id !== ex.id)]); startExam(ex); }
+                            } catch (e) { alert('Deneme hazırlanamadı, tekrar deneyin.'); }
+                            setDenemeBusy(false);
+                          }}>{denemeBusy ? 'Denemen hazırlanıyor…' : 'Denemeyi başlat'}</button>
+                          {denemeBusy && <div className="kt-spin-home" aria-label="Hazırlanıyor" />}
+                        </>
+                      ) : (
+                        <p style={{ textAlign: 'center', color: 'var(--yt-graphite)', margin: 0 }}>Bu ders için sınav tanımında soru sayısı girilmemiş.</p>
+                      )}
+                    </div>
+                  );
+                })()}
+                {mod === 'deneme' && denemeler.length > 0 && (
+                  <p style={{ textAlign: 'center', color: 'var(--yt-graphite)', margin: '22px 0 8px', fontSize: '0.9rem' }}>Hazır denemeler</p>
+                )}
+                {mod === 'deneme' && (
+                  denemeler.length > 0 ? (
+                    <div className="sl-dlist">
+                      {denemeler.map((e) => (
+                        <button key={e.id} className="sl-d" onClick={() => setInspectingExamId(e.id)}>{e.name}</button>
+                      ))}
+                    </div>
+                  ) : null
+                )}
+              </div>
+            </div>
+            <Footer />
+            {solve && (
+              <KonuTesti
+                title={solve.title}
+                lessonIds={solve.lessonIds}
+                topicIds={solve.topicIds}
+                outcomeIds={solve.outcomeIds}
+                round={solveCount}
+                user={user}
+                onNeedLogin={(mode) => { setAuthMode(mode); setShowAuthModal(true); }}
+                onClose={() => setSolve(null)}
+              />
+            )}
+            {renderCartDrawer()}
+            {renderBillingGateModal()}
+            {renderNotifDrawer()}
+            {renderAuthModal()}
+          </div>
+        );
+      }
+      const publishedExams = exams.filter(e => {
+        if (!e.isPublished) return false;
+        if (e.parentId) return false;
+        if (selectedCategory !== 'Tümü' && e.categoryExamType !== selectedCategory) {
+          return false;
+        }
+        if (searchQuery && e.name && !e.name.toLowerCase().includes(searchQuery.toLowerCase())) {
+          return false;
+        }
+        return true;
+      }).sort((a, b) => {
+        if (sortOption === 'ucuz') return (a.price || 0) - (b.price || 0);
+        if (sortOption === 'pahali') return (b.price || 0) - (a.price || 0);
+        if (sortOption === 'cozulen') return (solvedCountMap[b.id] || 0) - (solvedCountMap[a.id] || 0);
+        if (sortOption === 'yeni') return 0; // liste zaten created_at'e göre yeniden eskiye geliyor
+        // varsayılan: populer (puan ortalamasına göre)
+        const avgA = Number((examRatingsMap[a.id]?.average || '0').replace(',', '.'));
+        const avgB = Number((examRatingsMap[b.id]?.average || '0').replace(',', '.'));
+        return avgB - avgA;
+      });
+
+      // Ana sayfa hero'sundaki "X Test · Y Soru" güven göstergesi -- gerçekten
+      // çözülebilir (yayında ve kendi PDF'i olan) her sınavı sayıyoruz; salt
+      // klasör görevi gören, kendi PDF'i olmayan üst paketler dahil edilmiyor
+      // ki sayı şişirilmiş görünmesin.
+      const solvableExams = exams.filter(e => e.isPublished && e.pdfFile);
+      const totalTestCount = solvableExams.length;
+      const totalSoruCount = solvableExams.reduce((sum, e) => sum + (e.numPages || 0), 0);
+
+      const uniqueExamTypes = Array.from(
+        new Set(
+          exams
+            .filter(e => e.isPublished && !e.parentId && e.categoryExamType)
+            .map(e => e.categoryExamType.trim())
+        )
+      );
+      
+      const allCategories = ['Tümü', ...uniqueExamTypes];
+
+      const cartExams = exams.filter(e => cartItems.includes(e.id));
+      const cartTotal = cartExams.reduce((sum, e) => sum + (e.price || 0), 0);
+
+      return (
+        <div className="yt-shell">
+          <TopBanner />
+
+          <style>{`
+            .yt-header-modern {
+              box-shadow: 0 1px 0 rgba(27, 33, 56, 0.08), 0 2px 8px rgba(27, 33, 56, 0.04);
+            }
+          `}</style>
+          <header className="yt-header yt-header-modern">
+            <div className="yt-header-inner">
+              <div className="yt-brand">
+                <img src={sualinkLogo} alt="Sualink" className="yt-brand-logo" />
+              </div>
+
+              <div style={{ flex: '1 1 300px', maxWidth: '450px', display: 'flex', minWidth: '200px', border: '1.5px solid var(--yt-line)', borderRadius: '8px', overflow: 'hidden', backgroundColor: 'var(--yt-paper-2)' }}>
+                <input
+                  type="text"
+                  placeholder="Ne çözmek istiyorsunuz?"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{ flex: 1, minWidth: 0, padding: '10px 14px', border: 'none', backgroundColor: 'transparent', outline: 'none', fontSize: '0.9rem', fontFamily: 'var(--yt-font-body)', color: 'var(--yt-ink)', boxSizing: 'border-box' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {}}
+                  aria-label="Ara"
+                  style={{ flexShrink: 0, width: '42px', border: 'none', backgroundColor: 'var(--yt-ink)', color: '#fff', cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                >
+                  🔍
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0, marginLeft: 'auto' }}>
+                {renderHeaderRight()}
+              </div>
+            </div>
+          </header>
+
+          <div className="yt-hero">
+            <div className="yt-hero-blob one"></div>
+            <div className="yt-hero-blob two"></div>
+            <div className="yt-hero-inner">
+              <div className="yt-hero-text">
+                <h1 className="yt-hero-title">Sual buradan başlıyor!</h1>
+                {totalTestCount > 0 && (
+                  <p style={{ margin: '8px 0 20px', fontSize: '1.15rem', fontWeight: '700', color: 'var(--yt-ink)', lineHeight: 1.4 }}>
+                    {totalTestCount.toLocaleString('tr-TR')}+ test ve {totalSoruCount.toLocaleString('tr-TR')}+ soruluk içerikle hazırız.
+                  </p>
+                )}
+                <div className="yt-hero-actions">
+                  <button
+                    type="button"
+                    className="yt-hero-btn yt-hero-btn-primary"
+                    style={{ whiteSpace: 'normal', lineHeight: 1.3, textAlign: 'center' }}
+                    onClick={() => {
+                      // "KPSS Denemesi / Hemen Katıl!" -> ara sayfaya (sınav
+                      // özeti) uğramadan DOĞRUDAN sınav çözme ekranını açar.
+                      // id: 81, ihtiyaç belirleme/lansman sınavı için ayrılan
+                      // paket -- oynanan asıl içerik onun bir ALT testi
+                      // olabileceğinden (bkz. sınav özeti sayfasındaki
+                      // childExams mantığı), aynı çözümlemeyi burada da
+                      // yapıyoruz: alt testi varsa onu, yoksa (isStandalone)
+                      // sınavın kendisini başlatıyoruz. startExam zaten kendi
+                      // içinde giriş/erişim kontrolünü yapıyor, burada ekstra
+                      // bir şey yapmamıza gerek yok. Sınav bellekte henüz
+                      // yüklenmemişse (ör. çok erken tıklanmışsa) doğrudan
+                      // paylaşım linkine yönlendiririz.
+                      const targetExam = exams.find(e => String(e.id) === '81');
+                      if (targetExam) {
+                        const children = exams.filter(e => e.parentId === targetExam.id);
+                        const playableExam = children.length > 0 ? children[0] : targetExam;
+                        startExam(playableExam);
+                      } else {
+                        window.location.href = 'https://sualink.com/?exam=81';
+                      }
+                    }}
+                  >
+                    <span style={{ display: 'block' }}>KPSS Denemesi</span>
+                    <span style={{ display: 'block', fontWeight: 500, fontSize: '0.85em' }}>Hemen Katıl !</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="yt-hero-btn yt-hero-btn-outline"
+                    onClick={() => document.getElementById('yt-urun-listesi')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  >
+                    Test Satın Al
+                  </button>
+                </div>
+              </div>
+              <div className="yt-hero-visual">
+                <div className="yt-hero-visual-circle">
+                  <svg viewBox="0 0 120 120" width="72%" height="72%" aria-hidden="true">
+                    <rect x="14" y="10" width="92" height="100" rx="8" fill="var(--yt-paper-2)" stroke="var(--yt-ink)" strokeWidth="2.5" />
+                    {[0, 1, 2, 3].map((row) => (
+                      <g key={row} transform={`translate(0, ${row * 22})`}>
+                        <rect x="26" y="30" width="34" height="5" rx="2.5" fill="var(--yt-line)" />
+                        {[0, 1, 2].map((col) => (
+                          <circle
+                            key={col}
+                            cx={72 + col * 12}
+                            cy="32.5"
+                            r="4.5"
+                            fill={row === 1 && col === 1 ? 'var(--yt-mustard)' : 'none'}
+                            stroke="var(--yt-ink)"
+                            strokeWidth="1.6"
+                          />
+                        ))}
+                      </g>
+                    ))}
+                  </svg>
+                </div>
+                <div className="yt-hero-sticker check" aria-hidden="true">✓</div>
+                <div className="yt-hero-sticker star" aria-hidden="true">★</div>
+                <div className="yt-hero-sticker pencil" aria-hidden="true">✎</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="wrap" style={{ maxWidth: '920px', margin: '0 auto', padding: '0 24px' }}>
+            <div id="yt-kategori-filtre" className="yt-chip-row" style={{ padding: '18px 0' }}>
+              {allCategories.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`yt-chip${selectedCategory === cat ? ' active' : ''}`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <main id="yt-urun-listesi" style={{ maxWidth: '920px', margin: '0 auto', padding: '0 24px 60px' }}>
+            {publishedExams.length > 0 && (
+              <div className="yt-toolbar">
+                <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.76rem', color: 'var(--yt-graphite)' }}>{publishedExams.length} içerik listeleniyor</span>
+                <select className="yt-select" value={sortOption} onChange={(e) => setSortOption(e.target.value)}>
+                  <option value="populer">En Popüler</option>
+                  <option value="yeni">En Yeni</option>
+                  <option value="cozulen">En Çok Çözülen</option>
+                  <option value="ucuz">Fiyat: Artan</option>
+                  <option value="pahali">Fiyat: Azalan</option>
+                </select>
+              </div>
+            )}
+            {publishedExams.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '60px 20px', backgroundColor: 'var(--yt-paper-2)', borderRadius: '12px', border: '1.5px dashed var(--yt-line)' }}>
+                <h3 style={{ margin: '0 0 6px 0', color: 'var(--yt-ink)', fontSize: '1.1rem' }}>Aktif İçerik Bulunmuyor</h3>
+                <p style={{ margin: 0, color: 'var(--yt-graphite)', fontSize: '0.9rem' }}>Seçilen kriterlere uygun aktif bir sınav veya paket bulunmamaktadır.</p>
+              </div>
+            ) : (
+              <>
+              <style>{`
+                .yt-card-grid {
+                  display: grid;
+                  grid-template-columns: 1fr 1fr;
+                  gap: 14px;
+                }
+                @media (max-width: 640px) {
+                  .yt-card-grid {
+                    grid-template-columns: 1fr;
+                  }
+                }
+                .yt-exam-card {
+                  background-color: #fff;
+                  border: 1px solid var(--yt-line);
+                  border-radius: 12px;
+                  padding: 18px;
+                  display: flex;
+                  flex-direction: column;
+                  gap: 11px;
+                  cursor: pointer;
+                  min-height: 258px;
+                }
+                .yt-exam-card h3 {
+                  font-size: 1.02rem;
+                  font-weight: 700;
+                  line-height: 1.3;
+                  min-height: 3.9em;
+                  display: -webkit-box;
+                  -webkit-line-clamp: 3;
+                  -webkit-box-orient: vertical;
+                  overflow: hidden;
+                }
+                .yt-exam-card .yt-rating {
+                  display: flex;
+                  align-items: center;
+                  gap: 6px;
+                }
+                .yt-exam-card .yt-rating .avg {
+                  font-weight: 700;
+                  font-size: 0.88rem;
+                  color: #B8860B;
+                }
+                .yt-exam-card .yt-rating .stars {
+                  font-size: 1rem;
+                  letter-spacing: 1px;
+                  color: #E0A526;
+                }
+                .yt-exam-card .yt-rating .stars.empty {
+                  color: var(--yt-line);
+                }
+                .yt-exam-card .yt-rating .count {
+                  color: var(--yt-graphite);
+                  font-size: 0.78rem;
+                }
+                .yt-exam-card .yt-meta-box {
+                  display: flex;
+                  gap: 8px;
+                  flex-wrap: wrap;
+                }
+                .yt-exam-card .yt-meta-box span {
+                  background-color: #F3F0E7;
+                  color: #5C594C;
+                  font-family: var(--yt-font-mono);
+                  font-size: 0.72rem;
+                  font-weight: 600;
+                  padding: 5px 10px;
+                  border-radius: 6px;
+                }
+                .yt-exam-card .yt-btn-explore {
+                  background-color: #2F5D8A;
+                  color: #fff;
+                  border: none;
+                  padding: 9px 14px;
+                  border-radius: 7px;
+                  font-size: 0.78rem;
+                  font-weight: 600;
+                  cursor: pointer;
+                }
+                .yt-exam-card .yt-btn-cart {
+                  background-color: #FFF4E0;
+                  color: #8A5A00;
+                  border: 1px solid #E8C87A;
+                  padding: 9px 10px;
+                  border-radius: 7px;
+                  font-size: 0.78rem;
+                  font-weight: 600;
+                  cursor: pointer;
+                }
+                .yt-exam-card .yt-btn-cart.in-cart {
+                  background-color: #E8F3EC;
+                  color: #1F6B44;
+                  border-color: #9FCFB2;
+                }
+              `}</style>
+              <div className="yt-card-grid">
+                {publishedExams.map(exam => {
+                  const resData = studentResultsMap[exam.id];
+                  const isCompleted = resData?.is_finished;
+                  const isDeneme = exam.examType === 'deneme';
+                  const ratingInfo = examRatingsMap[exam.id] || { average: '0,0', count: '0' };
+                  const isPaid = !!(exam.price && exam.price > 0);
+                  const childTests = exams.filter(e => e.parentId === exam.id);
+                  const totalQuestions = childTests.length > 0
+                    ? childTests.reduce((sum, t) => sum + (t.numPages || 0), 0)
+                    : (exam.numPages || 0);
+                  const completedChildCount = childTests.length > 0
+                    ? childTests.filter(t => studentResultsMap[t.id]?.is_finished).length
+                    : 0;
+                  const childProgressPct = childTests.length > 0 ? Math.round((completedChildCount / childTests.length) * 100) : 0;
+                  const allChildDone = childTests.length > 0 && completedChildCount === childTests.length;
+
+                  return (
+                    <div
+                      key={exam.id}
+                      onClick={() => setInspectingExamId(exam.id)}
+                      className="yt-exam-card"
+                    >
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span className="yt-tag">{exam.categoryExamType} · {exam.categoryLesson}</span>
+                        <span className={`yt-tag ${isDeneme ? 'deneme' : 'test'}`}>
+                          {isDeneme ? 'Deneme Sınavı' : 'Test'}
+                        </span>
+                        {user && (isCompleted || allChildDone) ? (
+                          <span className="yt-tag done">Çözüldü</span>
+                        ) : null}
+                      </div>
+
+                      <h3 style={{ margin: 0 }}>{exam.name || 'İsimsiz İçerik'}</h3>
+
+                      <div className="yt-rating">
+                        <span className="avg">{ratingInfo.average}</span>
+                        <span className={`stars${Number(ratingInfo.count) === 0 ? ' empty' : ''}`}>
+                          {'★'.repeat(Math.round(Number(ratingInfo.average.replace(',', '.')))).padEnd(5, '☆')}
+                        </span>
+                        <span className="count">({ratingInfo.count})</span>
+                      </div>
+
+                      <div className="yt-meta-box">
+                        <span>{totalQuestions} SORU</span>
+                        {childTests.length > 0 && <span>{childTests.length} TEST</span>}
+                        {getCampaignCountdown(exam) && <span className="yt-countdown">⏳ {getCampaignCountdown(exam)}</span>}
+                      </div>
+
+                      {user && childTests.length > 0 && completedChildCount > 0 && (
+                        <div style={{ marginTop: '2px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', fontFamily: 'var(--yt-font-mono)', color: 'var(--yt-graphite)', marginBottom: '4px' }}>
+                            <span>{completedChildCount}/{childTests.length} test tamamlandı</span>
+                            <span>%{childProgressPct}</span>
+                          </div>
+                          <div className="yt-subtest-progress-track" style={{ maxWidth: 'none' }}>
+                            <div
+                              className="yt-subtest-progress-fill"
+                              style={{ width: `${childProgressPct}%`, backgroundColor: allChildDone ? 'var(--yt-correct)' : 'var(--yt-mustard)' }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      <div style={{ flex: 1 }} />
+
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+                        <div className="yt-price">
+                          {(isPaid || (exam.originalPrice && exam.originalPrice > 0)) ? (
+                            <>
+                              {exam.originalPrice && exam.originalPrice > exam.price ? (
+                                <span className="old">₺{exam.originalPrice.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                              ) : null}
+                              <span className="now">₺{(exam.price || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            </>
+                          ) : (
+                            <span className="free">Ücretsiz</span>
+                          )}
+                          {isCompleted && <span className="net"> · Net: {resData.net}</span>}
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          {isPaid && !isCompleted && !studentPurchases[exam.id] && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); toggleCartItem(exam.id); }}
+                              className={`yt-btn-cart${cartItems.includes(exam.id) ? ' in-cart' : ''}`}
+                            >
+                              {cartItems.includes(exam.id) ? '✓ Sepette' : '+ Sepete Ekle'}
+                            </button>
+                          )}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setInspectingExamId(exam.id);
+                            }}
+                            className="yt-btn-explore"
+                          >
+                            {isCompleted ? 'Sonucu İncele →' : 'İçeriği İncele →'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              </>
+            )}
+          </main>
+
+          <Footer />
+          {renderCartDrawer()}
+      {renderBillingGateModal()}
+          {renderNotifDrawer()}
+          {renderAuthModal()}
+        </div>
+      );
+    }
+
+    // Odak Modu aç/kapa: soru çözüm ekranında site header'ını (logo, menü,
+    // sepet vb.) gizleyip soru alanına daha fazla dikey yer açar. Bilerek
+    // native tarayıcı Fullscreen API'sini KULLANMIYORUZ -- o API elementi
+    // gerçekten tam ekran genişlik/yükseklikte büyütmediği durumlarda
+    // (ör. max-width sınırlı container'larda) geri kalan alanı siyah
+    // bırakıyor ve tarayıcıdan tarayıcıya tutarsız davranıyor. Bu CSS
+    // tabanlı yöntem her cihazda (iOS dahil) aynı ve öngörülebilir çalışır.
+    const toggleFocusMode = () => setFocusMode((f) => !f);
+
+    // Sınav / Test Çözüm Ekranı
+    if (!activeStudentExam) return null;
+
+    const answeredCount = Object.keys(studentAnswers).length;
+    const emptyCount = activeStudentExam.numPages - answeredCount;
+    const results = showResults ? (studentResultsMap[activeStudentExamId] || calculateResults()) : null;
+    const kazanimReport = showResults ? getKazanimReport() : null;
+    const isDeneme = activeStudentExam.examType === 'deneme';
+    const myActiveRating = studentResultsMap[activeStudentExamId]?.rating || 0;
+
+    return (
+      <div className="yt-shell" style={{ maxWidth: '1600px', margin: '0 auto', padding: focusMode ? '12px' : '24px' }}>
+        {!focusMode && (
+          <header className="yt-header" style={{ marginBottom: '20px' }}>
+            <div className="yt-header-inner">
+              <div
+                className="yt-brand"
+                style={{ cursor: 'pointer' }}
+                onClick={() => {
+                  const targetId = activeStudentExam.parentId || activeStudentExam.id;
+                  setActiveStudentExamId(null);
+                  setInspectingExamId(targetId);
+                }}
+              >
+                <img src={sualinkLogo} alt="Sualink" className="yt-brand-logo" />
+              </div>
+              {!showResults && (
+                <h1 style={{ margin: 0, fontSize: '1.1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h1>
+              )}
+              <div style={{ flex: 1 }}></div>
+              <button
+                onClick={() => {
+                  const targetId = activeStudentExam.parentId || activeStudentExam.id;
+                  setActiveStudentExamId(null);
+                  setInspectingExamId(targetId);
+                }}
+                className="yt-btn yt-btn-ghost"
+              >
+                İçerik Listesine Dön
+              </button>
+              {renderHeaderRight()}
+            </div>
+          </header>
+        )}
+
+        {showResults && results ? (
+          <div className="yt-session-card" style={{ maxWidth: '700px', margin: '0 auto 24px auto' }}>
+
+            <h2 style={{ fontFamily: 'var(--yt-font-display)', fontWeight: '600', fontSize: '1.2rem', color: 'var(--yt-ink)', textAlign: 'center', margin: '0 0 20px' }}>{activeStudentExam.name || 'İsimsiz İçerik'}</h2>
+
+            {user && (
+              <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: 'var(--yt-paper)', borderRadius: '10px', border: '1px solid var(--yt-line)', textAlign: 'center' }}>
+                <div style={{ fontSize: '0.9rem', fontWeight: '600', color: 'var(--yt-ink)', marginBottom: '8px' }}>Bu içeriği nasıl buldunuz? Puanlayın:</div>
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '6px' }}>
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <span
+                      key={star}
+                      onClick={() => handleRateExamInActiveScreen(star)}
+                      style={{
+                        cursor: 'pointer',
+                        fontSize: '2.2rem',
+                        color: myActiveRating >= star ? 'var(--yt-mustard)' : 'var(--yt-line)',
+                        padding: '0 4px',
+                        userSelect: 'none',
+                        display: 'inline-block'
+                      }}
+                      title={`${star} Yıldız Ver`}
+                    >
+                      ★
+                    </span>
+                  ))}
+                </div>
+                {myActiveRating > 0 && (
+                  <div style={{ fontSize: '0.82rem', color: 'var(--yt-correct)', fontWeight: '600', marginTop: '8px', fontFamily: 'var(--yt-font-mono)' }}>
+                    Puanınız kaydedildi ({myActiveRating} Yıldız)
+                  </div>
+                )}
+
+                <div style={{ marginTop: '14px', textAlign: 'left' }}>
+                  <textarea
+                    value={reviewTextInput || studentResultsMap[activeStudentExamId]?.reviewText || ''}
+                    onChange={(e) => setReviewTextInput(e.target.value)}
+                    placeholder="İsteğe bağlı: bu içerik hakkında kısa bir yorum bırakın..."
+                    style={{ width: '100%', minHeight: '60px', padding: '8px', borderRadius: '8px', border: '1px solid var(--yt-line)', fontFamily: 'var(--yt-font-body)', fontSize: '0.85rem', boxSizing: 'border-box', resize: 'vertical' }}
+                  />
+                  <button
+                    onClick={() => handleSubmitReview(reviewTextInput || studentResultsMap[activeStudentExamId]?.reviewText || '')}
+                    className="yt-btn yt-btn-outline"
+                    style={{ marginTop: '8px', fontSize: '0.8rem' }}
+                  >
+                    Yorumu Kaydet
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <h2 style={{ textAlign: 'center', marginTop: 0 }}>Sonuçlar</h2>
+            <div className="yt-stat-grid">
+              <div className="yt-stat-box correct"><span className="lbl">DOĞRU</span><div className="val">{results.correct}</div></div>
+              <div className="yt-stat-box wrong"><span className="lbl">YANLIŞ</span><div className="val">{results.wrong}</div></div>
+              <div className="yt-stat-box"><span className="lbl">BOŞ</span><div className="val">{results.empty}</div></div>
+              <div className="yt-stat-box net"><span className="lbl">NET</span><div className="val">{results.net}</div></div>
+            </div>
+
+            {user && (() => {
+              const usedResets = results.reset_count || 0;
+              const kalanHak = MAX_EXAM_RESETS - usedResets;
+              return kalanHak > 0 ? (
+                <div style={{ textAlign: 'center', marginTop: '16px' }}>
+                  <button onClick={resetExam} className="yt-btn yt-btn-outline" style={{ fontSize: '0.82rem' }}>
+                    ↺ Sınavı Sıfırla ve Baştan Çöz ({kalanHak} hak kaldı)
+                  </button>
+                </div>
+              ) : (
+                <div style={{ textAlign: 'center', marginTop: '16px', fontSize: '0.78rem', color: 'rgba(0,0,0,0.5)' }}>
+                  Bu sınav için sıfırlama hakkınızı kullandınız.
+                </div>
+              );
+            })()}
+
+            {kazanimReport && kazanimReport.hasData && (
+              <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid var(--yt-line)' }}>
+                <div style={{
+                  backgroundColor: '#E24B4A',
+                  color: '#fff',
+                  padding: '10px 14px',
+                  borderRadius: '8px',
+                  fontSize: '0.85rem',
+                  fontWeight: '600',
+                  lineHeight: 1.45,
+                  marginBottom: '14px'
+                }}>
+                  Uyarı: Gelişiminizi hızlandırmak için aşağıda yer alan soru paletinden yanlış cevapladığınız soruları ve cevaplarını inceleyiniz.
+                </div>
+                <h2 style={{
+                  margin: '0 0 4px 0',
+                  textAlign: 'center',
+                  fontFamily: 'var(--yt-font-display)',
+                  fontWeight: '700',
+                  background: 'linear-gradient(90deg, #1d4e89 0%, #2f7bc4 40%, #f2a93b 75%, #f28c1e 100%)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                  backgroundClip: 'text'
+                }}>
+                  Sualink Raporu
+                </h2>
+                <p style={{ margin: '0 0 16px 0', fontSize: '0.85rem', color: 'var(--yt-graphite)', textAlign: 'center' }}>
+                  Önce derse, sonra içindeki bir konuya tıkla -- kazanım bazlı ayrıntıyı ve sana özel önerimizi orada görürsün.
+                </p>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {Object.entries(kazanimReport.byDers).map(([ders, dersData]) => {
+                    const dersIsHedefDisi = dersData.tier === 'hedefDisi';
+                    const dersGreenWidth = getBaremGreenWidth(dersData.correct, dersData.total);
+                    const dersTextColor = dersIsHedefDisi ? '#94A3B8' : getBaremTextColor(dersData.correct, dersData.total);
+                    const dersMeta = KONU_TIER_META[dersData.tier] || { label: dersData.tier || '-', color: '#64748B', bg: '#F1F5F9' };
+                    const dersTavsiye = getDersTavsiyesi(ders, dersData);
+                    let dersCtaExams = [];
+                    if (dersTavsiye.aksiyon === 'deneme') {
+                      dersCtaExams = findOnerilenDenemeler(activeStudentExam.id, activeStudentExam.examType, dersData.lessonCategoryId);
+                    }
+                    return (
+                      <div key={ders} className="yt-kazanim-box">
+                        <div className="head" style={{ display: 'grid', gridTemplateColumns: '1fr auto 150px', alignItems: 'center', gap: '12px' }}>
+                          <span>{ders}</span>
+                          <span style={{ fontSize: '0.7rem', fontWeight: 'bold', padding: '3px 8px', borderRadius: '999px', color: dersMeta.color, backgroundColor: dersMeta.bg, whiteSpace: 'nowrap' }}>
+                            {dersMeta.label}
+                          </span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            {/* "Hedefte Değil" (hiç cevaplanmamış) tamamen kırmızı bir çubukla
+                                gösterilirse "başarısız oldu" izlenimi verir -- oysa hiç denenmemiş.
+                                Bu yüzden bu durumda çubuğu nötr gri yapıyoruz, kırmızı/yeşil sadece
+                                gerçekten cevaplanmış (riskli/iyi/harika) derslerde kullanılıyor. */}
+                            <div style={{ flex: 1, height: '16px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: dersIsHedefDisi ? 'var(--yt-line)' : '#E24B4A' }}>
+                              {!dersIsHedefDisi && <div style={{ height: '100%', width: `${dersGreenWidth}%`, backgroundColor: '#639922' }}></div>}
+                            </div>
+                            <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.8rem', fontWeight: 'bold', width: '38px', textAlign: 'right', color: dersTextColor }}>
+                              {dersData.correct}/{dersData.total}
+                            </span>
+                          </div>
+                        </div>
+
+                        <p style={{ margin: '8px 0 0 0', fontSize: '0.8rem', color: 'var(--yt-ink)' }}>{dersTavsiye.mesaj}</p>
+                        {dersTavsiye.aksiyon === 'deneme' && dersCtaExams.length > 0 && (
+                          <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {dersCtaExams.map((ex) => renderOneriTestSatiri(ex))}
+                          </div>
+                        )}
+
+                        <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          {Object.entries(dersData.konular).map(([konuName, konuEntry]) => {
+                            const konuKey = `${ders}::${konuName}`;
+                            const isOpen = !!expandedKonular[konuKey];
+                            const meta = KONU_TIER_META[konuEntry.tier] || { label: konuEntry.tier || '-', color: '#64748B', bg: '#F1F5F9' };
+                            const kGreenWidth = getBaremGreenWidth(konuEntry.correct, konuEntry.total);
+                            const tavsiye = getKonuTavsiyesi(konuName, konuEntry);
+
+                            // Konu içindeki HER (riskli/iyi) kazanım için ayrı ayrı test
+                            // arıyoruz ve kazanım ADI -> eşleşen test(ler) şeklinde bir
+                            // harita kuruyoruz. Eskiden bunlar konunun EN ÜSTÜNDE, ayrı ve
+                            // uzayan bir liste olarak gösteriliyordu -- artık her testi
+                            // İLGİLİ KAZANIM SATIRINA, "Ders Notu" pill'inin yanına
+                            // gömüyoruz ki liste uzamasın ve hangi testin hangi eksiğe
+                            // karşılık geldiği net olsun.
+                            const kazanimTestMap = {};
+                            let anyKazanimTestFound = false;
+                            if (tavsiye.aksiyon === 'konuTesti' || tavsiye.aksiyon === 'video') {
+                              const seenIds = new Set();
+                              Object.entries(konuEntry.kazanimlar).forEach(([kazanimAdi, k]) => {
+                                if (k.tier !== 'riskli' && k.tier !== 'iyi') return;
+                                const found = findKazanimTestleri(k.outcomeId, activeStudentExam.id)
+                                  .filter((ex) => !seenIds.has(ex.id));
+                                if (found.length > 0) {
+                                  found.forEach((ex) => seenIds.add(ex.id));
+                                  kazanimTestMap[kazanimAdi] = found;
+                                  anyKazanimTestFound = true;
+                                }
+                              });
+                              // Hiçbir kazanıma özel test bulunamadıysa, eskisi gibi konu
+                              // geneline en uygun TEK teste düşüyoruz -- ama artık onu da
+                              // ilk (riskli/iyi) kazanımın satırına iliştiriyoruz, ayrı bir
+                              // üst liste olarak değil.
+                              if (!anyKazanimTestFound) {
+                                const fallback = findKonuTestleri(konuEntry.topicId, activeStudentExam.id);
+                                if (fallback.length > 0) {
+                                  const firstEligible = Object.entries(konuEntry.kazanimlar)
+                                    .find(([, k]) => k.tier === 'riskli' || k.tier === 'iyi');
+                                  if (firstEligible) kazanimTestMap[firstEligible[0]] = fallback;
+                                }
+                              }
+                            }
+
+                            // Ders seviyesindeki "yeni deneme" önerisi (aksiyon: 'deneme')
+                            // kazanım kırılımına bağlı değil (belirli bir konu/kazanımla
+                            // ilgili değil, tüm ders için yeni bir deneme sınavı önerisi),
+                            // o yüzden bu tek durumda eski üst-liste davranışı korunuyor.
+                            let ctaExams = [];
+                            if (tavsiye.aksiyon === 'deneme') {
+                              ctaExams = findOnerilenDenemeler(activeStudentExam.id, activeStudentExam.examType, dersData.lessonCategoryId);
+                            }
+
+                            return (
+                              <div key={konuKey} style={{ border: '1px solid var(--yt-line)', borderRadius: '8px', overflow: 'hidden' }}>
+                                <button
+                                  onClick={() => setExpandedKonular((prev) => ({ ...prev, [konuKey]: !prev[konuKey] }))}
+                                  style={{
+                                    width: '100%',
+                                    display: 'grid',
+                                    gridTemplateColumns: '18px 1fr auto 110px',
+                                    alignItems: 'center',
+                                    gap: '10px',
+                                    padding: '9px 12px',
+                                    backgroundColor: '#fff',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    textAlign: 'left',
+                                    fontFamily: 'inherit',
+                                    fontSize: '0.85rem'
+                                  }}
+                                >
+                                  <span style={{ display: 'inline-block', transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', fontSize: '0.7rem', color: 'var(--yt-graphite)' }}>▶</span>
+                                  <span>{konuName}</span>
+                                  <span style={{ fontSize: '0.7rem', fontWeight: 'bold', padding: '3px 8px', borderRadius: '999px', color: meta.color, backgroundColor: meta.bg, whiteSpace: 'nowrap' }}>
+                                    {meta.label}
+                                  </span>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <div style={{ flex: 1, height: '10px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: '#E24B4A' }}>
+                                      <div style={{ height: '100%', width: `${kGreenWidth}%`, backgroundColor: '#639922' }}></div>
+                                    </div>
+                                    <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.72rem', fontWeight: 'bold', width: '32px', textAlign: 'right' }}>
+                                      {konuEntry.correct}/{konuEntry.total}
+                                    </span>
+                                  </div>
+                                </button>
+
+                                {isOpen && (
+                                  <div style={{ padding: '12px 14px', backgroundColor: '#FAFAF7', borderTop: '1px solid var(--yt-line)' }}>
+                                    <p style={{ margin: '0 0 10px 0', fontSize: '0.82rem', color: 'var(--yt-ink)' }}>{tavsiye.mesaj}</p>
+
+                                    {/* "deneme" aksiyonu (ders geneli için yeni bir deneme sınavı
+                                        önerisi) belirli bir kazanıma bağlı olmadığı için tek
+                                        istisna olarak eskisi gibi üstte, ayrı bir liste halinde
+                                        kalıyor. "konuTesti"/"video" aksiyonlarındaki testler artık
+                                        aşağıda, ilgili kazanım satırının yanında gösteriliyor. */}
+                                    {tavsiye.aksiyon === 'deneme' && ctaExams.length > 0 && (
+                                      <div style={{ marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                        {ctaExams.map((ex) => renderOneriTestSatiri(ex))}
+                                      </div>
+                                    )}
+
+                                    <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none' }}>
+                                      {Object.entries(konuEntry.kazanimlar).map(([kazanim, k]) => {
+                                        const kzGreenWidth = getBaremGreenWidth(k.correct, k.total);
+                                        const kzTextColor = getBaremTextColor(k.correct, k.total);
+                                        const resource = k.outcomeId ? learningOutcomeResources[k.outcomeId] : null;
+                                        const hasPdf = !!resource?.pdf_url;
+                                        const hasVideo = !!resource?.video_url;
+                                        const videoKey = `${konuKey}::${kazanim}`;
+                                        const isVideoOpen = !!expandedVideoKazanim[videoKey];
+                                        const embedUrl = hasVideo ? getYoutubeEmbedUrl(resource.video_url) : null;
+                                        const kazanimTests = kazanimTestMap[kazanim] || [];
+                                        const showResources = k.tier === 'riskli' && (hasPdf || hasVideo);
+                                        const showAnyPill = showResources || kazanimTests.length > 0;
+                                        return (
+                                          <li key={kazanim} style={{ padding: '4px 0' }}>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px', alignItems: 'center', gap: '10px' }}>
+                                              <span style={{ fontSize: '0.78rem' }}>{kazanim}</span>
+                                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                <div style={{ flex: 1, height: '11px', border: '1.5px solid #111', borderRadius: '3px', overflow: 'hidden', backgroundColor: '#E24B4A' }}>
+                                                  <div style={{ height: '100%', width: `${kzGreenWidth}%`, backgroundColor: '#639922' }}></div>
+                                                </div>
+                                                <span style={{ fontFamily: 'var(--yt-font-mono)', fontSize: '0.7rem', fontWeight: 'bold', width: '32px', textAlign: 'right', color: kzTextColor }}>
+                                                  {k.correct}/{k.total}
+                                                </span>
+                                              </div>
+                                            </div>
+
+                                            {showAnyPill && (
+                                              <div style={{ marginTop: '5px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                                {showResources && hasPdf && (
+                                                  <a
+                                                    href={resource.pdf_url}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="yt-resource-pill"
+                                                  >
+                                                    📄 Ders Notu
+                                                  </a>
+                                                )}
+                                                {showResources && hasVideo && (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() => setExpandedVideoKazanim((prev) => ({ ...prev, [videoKey]: !prev[videoKey] }))}
+                                                    className="yt-resource-pill"
+                                                  >
+                                                    {isVideoOpen ? '▲ Videoyu Kapat' : '🎥 Video Anlatım'}
+                                                  </button>
+                                                )}
+                                                {kazanimTests.map((ex) => renderKazanimTestPill(ex))}
+                                              </div>
+                                            )}
+
+                                            {showResources && isVideoOpen && hasVideo && (
+                                              embedUrl ? (
+                                                <div style={{ marginTop: '8px', position: 'relative', paddingBottom: '56.25%', height: 0, borderRadius: '8px', overflow: 'hidden' }}>
+                                                  <iframe
+                                                    src={embedUrl}
+                                                    title={`${kazanim} video anlatım`}
+                                                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' }}
+                                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                                    allowFullScreen
+                                                  />
+                                                </div>
+                                              ) : (
+                                                <p style={{ margin: '6px 0 0 0', fontSize: '0.76rem' }}>
+                                                  <a href={resource.video_url} target="_blank" rel="noopener noreferrer">▶ Videoyu izlemek için tıkla</a>
+                                                </p>
+                                              )
+                                            )}
+                                          </li>
+                                        );
+                                      })}
+                                    </ul>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : null}
+
+        <style>{`
+          .exam-layout {
+            display: grid;
+            grid-template-columns: 1fr 240px;
+            gap: 16px;
+            align-items: start;
+          }
+          @media (max-width: 900px) {
+            .exam-layout {
+              grid-template-columns: 1fr !important;
+            }
+          }
+
+          /* Önceki/Sonraki Soru butonları: masaüstünde şıklarla (A-E) aynı
+             satırda, dar ekranlarda (telefon) şıkların altında ayrı satırda. */
+          .yt-nav-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+          }
+          .yt-nav-row .yt-nav-middle {
+            flex: 1 1 auto;
+            display: flex;
+            justify-content: center;
+            min-width: 0;
+          }
+          .yt-nav-row .yt-nav-btn {
+            flex-shrink: 0;
+            white-space: nowrap;
+          }
+          @media (max-width: 640px) {
+            .yt-nav-row .yt-nav-middle {
+              order: 1;
+              flex-basis: 100%;
+            }
+            .yt-nav-row .yt-nav-btn-prev {
+              order: 2;
+            }
+            .yt-nav-row .yt-nav-btn-next {
+              order: 3;
+            }
+          }
+        `}</style>
+
+        <div className="exam-layout">
+
+          <div>
+            {!showResults && !examStarted && (
+              <div style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '10px',
+                padding: '12px 16px',
+                marginBottom: '12px',
+                borderRadius: '8px',
+                backgroundColor: 'var(--yt-mustard-bg)',
+                color: 'var(--yt-mustard-deep)',
+                fontSize: '0.85rem',
+                lineHeight: 1.5,
+                fontWeight: 600
+              }}>
+                <span style={{ fontSize: '1.1rem', lineHeight: 1 }}>ℹ️</span>
+                <span>
+                  Sınav sırasında istediğin zaman çıkabilirsin — cevapların otomatik olarak kaydedilir, geri döndüğünde tam kaldığın yerden devam edersin.
+                  Süre, aşağıdaki <b>"Başla"</b> butonuna bastığında işlemeye başlar.
+                </span>
+              </div>
+            )}
+
+            <div className="yt-exam-shell" style={{ padding: '14px 20px', marginBottom: '12px' }}>
+              <div className="yt-topbar" style={{ marginBottom: 0 }}>
+                <span>
+                  {(() => {
+                    const { number, sectionName } = getDisplayQuestionLabel(activeStudentExam, studentCurrentPage);
+                    if (sectionName) {
+                      const secs = activeStudentExam.sections || [];
+                      const sec = secs.find(s => studentCurrentPage >= s.start && studentCurrentPage <= s.end);
+                      return `${sectionName} · SORU ${number} / ${sec.end - sec.start + 1}`;
+                    }
+                    return `SORU ${number} / ${activeStudentExam.numPages}`;
+                  })()}
+                </span>
+                {!showResults && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <button
+                      onClick={() => {
+                        if (!examStarted) {
+                          setExamStarted(true);
+                          setIsPaused(false);
+                        } else {
+                          setIsPaused(p => !p);
+                        }
+                      }}
+                      style={{
+                        padding: '5px 12px',
+                        fontSize: '0.8rem',
+                        fontWeight: 'bold',
+                        borderRadius: '6px',
+                        border: '1px solid rgba(251,249,243,0.45)',
+                        backgroundColor: (isPaused || !examStarted) ? 'var(--yt-mustard)' : 'transparent',
+                        color: (isPaused || !examStarted) ? '#1a1a2e' : '#FBF9F3',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {!examStarted ? '▶ Başla' : (isPaused ? '▶ Devam Et' : '⏸ Mola Ver')}
+                    </button>
+                    <div className={`yt-timer${(examStarted && !isPaused && timeLeft < 300) ? ' urgent' : ''}`} style={{ fontSize: '1.15rem', padding: '5px 12px', opacity: (examStarted && isPaused) ? 0.6 : 1 }}>
+                      {examStarted && isPaused ? 'MOLADA' : formatTime(timeLeft)}
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span>İŞARETLENEN: <b style={{ color: studentAnswers[studentCurrentPage] ? 'var(--yt-mustard)' : 'rgba(251,249,243,0.5)' }}>{studentAnswers[studentCurrentPage] || 'BOŞ'}</b></span>
+                  <button
+                    onClick={toggleFocusMode}
+                    title={focusMode ? 'Odak Modundan Çık' : 'Odak Modu (Tam Ekran)'}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: '26px',
+                      height: '26px',
+                      padding: 0,
+                      borderRadius: '6px',
+                      border: '1px solid rgba(251,249,243,0.45)',
+                      backgroundColor: focusMode ? 'var(--yt-mustard)' : 'transparent',
+                      color: focusMode ? '#1a1a2e' : '#FBF9F3',
+                      fontSize: '0.9rem',
+                      cursor: 'pointer',
+                      lineHeight: 1
+                    }}
+                  >
+                    {focusMode ? '⤡' : '⤢'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ position: 'relative' }}>
+              {String(activeStudentExam?.pdfFile || '').startsWith('pool_gen_') && (
+                <div style={{ position: 'absolute', top: '10px', left: '10px', zIndex: 5, minWidth: '34px', height: '34px', padding: '0 8px', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', backgroundColor: '#1a1a2e', color: '#FBF9F3', fontWeight: 'bold', fontSize: '1rem', boxShadow: '0 1px 4px rgba(0,0,0,0.3)', pointerEvents: 'none' }}>
+                  {studentCurrentPage}
+                </div>
+              )}
+              <SecurePdfViewer
+                examId={activeStudentExamId}
+                type="exam"
+                pageNumber={studentCurrentPage}
+              />
+            </div>
+
+            <div className="yt-nav-row">
+              <button
+                disabled={studentCurrentPage <= 1}
+                onClick={() => { setStudentCurrentPage(p => p - 1); setViewingSolutionQ(false); }}
+                className="yt-btn yt-btn-outline yt-nav-btn yt-nav-btn-prev"
+                style={studentCurrentPage <= 1 ? { opacity: 0.4, cursor: 'not-allowed' } : {}}
+              >
+                ◀ Önceki Soru
+              </button>
+
+              <div className="yt-nav-middle">
+                {!isExamFinished && examStarted && (
+                  isPaused ? (
+                    <div style={{ textAlign: 'center', padding: '10px 14px', borderRadius: '8px', backgroundColor: 'var(--yt-mustard-bg)', color: 'var(--yt-mustard-deep)', fontWeight: 'bold', fontSize: '0.85rem' }}>
+                      Moladasın, cevap işaretleyemezsin. Devam etmek için "Devam Et"e bas.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                      {['A', 'B', 'C', 'D', 'E'].map(option => {
+                        const isSelected = studentAnswers[studentCurrentPage] === option;
+                        return (
+                          <button key={option} onClick={() => handleAnswerSelect(option)} className={`yt-abub${isSelected ? ' picked' : ''}`}>
+                            {option}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )
+                )}
+              </div>
+
+              <button
+                disabled={studentCurrentPage >= activeStudentExam.numPages}
+                onClick={() => { setStudentCurrentPage(p => p + 1); setViewingSolutionQ(false); }}
+                className="yt-btn yt-btn-primary yt-nav-btn yt-nav-btn-next"
+                style={studentCurrentPage >= activeStudentExam.numPages ? { opacity: 0.4, cursor: 'not-allowed' } : {}}
+              >
+                Sonraki Soru ▶
+              </button>
+            </div>
+          </div>
+
+          <div className="yt-exam-shell" style={{ padding: '16px' }}>
+            <h3 style={{ margin: '0 0 12px 0', fontSize: '0.78rem', fontFamily: 'var(--yt-font-mono)', letterSpacing: '0.06em', textTransform: 'uppercase', color: 'rgba(251,249,243,0.6)', textAlign: 'center' }}>Soru Paleti</h3>
+
+            {!showResults ? (
+              <div style={{ display: 'flex', justifyContent: 'space-around', marginBottom: '12px', padding: '6px', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: '6px', fontSize: '0.72rem', fontFamily: 'var(--yt-font-mono)' }}>
+                <span style={{ color: 'var(--yt-mustard)', fontWeight: 'bold' }}>ÇÖZÜLDÜ: {answeredCount}</span>
+                <span style={{ color: 'rgba(251,249,243,0.5)', fontWeight: 'bold' }}>BOŞ: {emptyCount}</span>
+              </div>
+            ) : null}
+
+            <div style={{ maxHeight: '420px', overflowY: 'auto', paddingRight: '2px', marginBottom: '14px' }}>
+              {(() => {
+                const secs = (activeStudentExam.sections && activeStudentExam.sections.length > 0)
+                  ? activeStudentExam.sections
+                  : [{ name: null, start: 1, end: activeStudentExam.numPages }];
+
+                return secs.map((sec, secIndex) => (
+                  <div key={secIndex} style={{ marginBottom: '10px' }}>
+                    {sec.name && (
+                      <div style={{ fontSize: '0.7rem', fontWeight: 'bold', color: 'rgba(251,249,243,0.55)', marginBottom: '4px', paddingLeft: '2px', fontFamily: 'var(--yt-font-mono)' }}>
+                        {sec.name}
+                      </div>
+                    )}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '4px' }}>
+                      {Array.from({ length: sec.end - sec.start + 1 }, (_, i) => {
+                        const qNum = sec.start + i;
+                        const localNum = i + 1;
+                        const isAnswered = !!studentAnswers[qNum];
+                        const isCurrent = studentCurrentPage === qNum;
+                        let cellClass = 'yt-pcell';
+
+                        if (showResults) {
+                          const studentAns = studentAnswers[qNum];
+                          const correctAns = activeStudentExam.answerKey[qNum];
+                          if (studentAns && studentAns === correctAns) {
+                            cellClass += ' correct';
+                          } else if (studentAns && studentAns !== correctAns) {
+                            cellClass += ' wrong';
+                          }
+                        } else {
+                          if (isAnswered) { cellClass += ' answered'; }
+                        }
+                        if (isCurrent) { cellClass += ' current'; }
+
+                        return (
+                          <button key={qNum} onClick={() => { setStudentCurrentPage(qNum); setViewingSolutionQ(false); }} className={cellClass} style={{ height: '26px', padding: 0 }}>
+                            {localNum}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ));
+              })()}
+            </div>
+
+            {showResults && (
+              <button onClick={() => setViewingSolutionQ(v => !v)} className={`yt-btn yt-btn-correct${viewingSolutionQ ? ' active' : ''}`} style={{ width: '100%', marginBottom: '10px' }}>
+                {viewingSolutionQ ? '✕ Çözümü Gizle' : `${getDisplayQuestionLabel(activeStudentExam, studentCurrentPage).number}. Çözümü Gör`}
+              </button>
+            )}
+
+            {!isExamFinished && (
+              <button onClick={finishExam} className="yt-btn yt-btn-buy" style={{ width: '100%' }}>
+                {isDeneme ? 'Sınavı Bitir' : 'Testi Bitir'}
+              </button>
+            )}
+          </div>
+
+        </div>
+
+        {(showResults && viewingSolutionQ) && (
+          <div ref={solutionRef} className="yt-session-card" style={{ marginTop: '20px', borderColor: 'var(--yt-correct)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'var(--yt-correct)', padding: '10px 14px', borderRadius: '8px', fontWeight: '600', marginBottom: '12px', color: '#fff', fontSize: '0.88rem' }}>
+              <span>
+                {getDisplayQuestionLabel(activeStudentExam, studentCurrentPage).number}.{' '}
+                {activeStudentExam.solutionPdfFile ? 'Soru Çözümü Aşağıda' : 'Sorunun Doğru Cevabı'}
+              </span>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                {reportedQuestions[reportKey(activeStudentExamId, studentCurrentPage)] ? (
+                  <button disabled style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: 'rgba(255,255,255,0.18)', color: '#fff', fontSize: '0.78rem', fontWeight: 'bold', cursor: 'not-allowed' }}>
+                    ✓ Bildirildi
+                  </button>
+                ) : (
+                  <button onClick={() => setShowReportModal(true)} style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: 'var(--yt-mustard)', color: '#1a1a2e', fontSize: '0.78rem', fontWeight: 'bold', cursor: 'pointer' }}>
+                    ⚠ Hata / Geri Bildirim
+                  </button>
+                )}
+                <button onClick={() => setViewingSolutionQ(false)} style={{ padding: '4px 10px', borderRadius: '4px', border: 'none', backgroundColor: 'rgba(0,0,0,0.2)', color: '#fff', cursor: 'pointer', fontSize: '0.78rem', fontWeight: 'bold' }}>Kapat</button>
+              </div>
+            </div>
+
+            {activeStudentExam.solutionPdfFile ? (
+              <div style={{ position: 'relative' }}>
+                {String(activeStudentExam?.pdfFile || '').startsWith('pool_gen_') && (
+                  <div style={{ position: 'absolute', top: '10px', left: '10px', zIndex: 5, minWidth: '34px', height: '34px', padding: '0 8px', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '8px', backgroundColor: '#1a1a2e', color: '#FBF9F3', fontWeight: 'bold', fontSize: '1rem', pointerEvents: 'none' }}>
+                    {studentCurrentPage}
+                  </div>
+                )}
+                <SecurePdfViewer examId={activeStudentExamId} type="solution" pageNumber={studentCurrentPage} />
+              </div>
+            ) : (
+              // Bu paket için açıklamalı çözüm PDF'i yüklenmemiş -- ama
+              // cevap anahtarı her zaman elimizde olduğu için (puanlama
+              // zaten ona dayanıyor), en azından doğru şıkkı ve
+              // öğrencinin kendi cevabını burada gösterebiliyoruz.
+              (() => {
+                const correctAns = activeStudentExam.answerKey[studentCurrentPage];
+                const studentAns = studentAnswers[studentCurrentPage];
+                const pillStyle = (bg) => ({
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: '30px', height: '30px', borderRadius: '50%', backgroundColor: bg,
+                  color: '#fff', fontWeight: 'bold', fontSize: '0.95rem', marginLeft: '8px'
+                });
+                return (
+                  <div style={{ padding: '18px 16px', fontSize: '0.95rem', color: '#1e293b' }}>
+                    <div style={{ marginBottom: '12px', display: 'flex', alignItems: 'center' }}>
+                      <strong>Doğru cevap:</strong>
+                      <span style={pillStyle('var(--yt-correct)')}>{correctAns || '—'}</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                      <strong>Senin cevabın:</strong>
+                      {studentAns ? (
+                        <span style={pillStyle(studentAns === correctAns ? 'var(--yt-correct)' : 'var(--yt-wrong)')}>{studentAns}</span>
+                      ) : (
+                        <span style={{ marginLeft: '8px', color: '#94a3b8', fontStyle: 'italic' }}>Boş bırakıldı</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()
+            )}
+          </div>
+        )}
+
+        {showReportModal && (
+          <div
+            onClick={() => !reportSubmitting && setShowReportModal(false)}
+            style={{
+              position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px'
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="yt-exam-shell"
+              style={{ width: '100%', maxWidth: '440px', padding: '20px' }}
+            >
+              <h3 style={{ margin: '0 0 6px 0', fontSize: '1rem' }}>
+                {getDisplayQuestionLabel(activeStudentExam, studentCurrentPage).number}. Soru İçin Bildirim
+              </h3>
+              <p style={{ margin: '0 0 12px 0', fontSize: '0.82rem', color: 'rgba(251,249,243,0.6)' }}>
+                Soruda veya çözümde bir hata mı var? Görüşünüzü kısaca yazın, ekibimiz inceleyecek.
+              </p>
+              <textarea
+                value={reportText}
+                onChange={(e) => setReportText(e.target.value.slice(0, 300))}
+                maxLength={300}
+                rows={4}
+                placeholder="Örn: C şıkkındaki çözüm hatalı, doğru cevap D olmalı..."
+                style={{
+                  width: '100%', boxSizing: 'border-box', padding: '10px', borderRadius: '8px',
+                  border: '1px solid rgba(251,249,243,0.25)', backgroundColor: 'rgba(255,255,255,0.06)',
+                  color: '#FBF9F3', fontSize: '0.88rem', resize: 'vertical', fontFamily: 'inherit'
+                }}
+              />
+              <div style={{ textAlign: 'right', fontSize: '0.72rem', color: 'rgba(251,249,243,0.5)', margin: '4px 0 14px' }}>
+                {reportText.length}/300
+              </div>
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={() => { setShowReportModal(false); setReportText(''); }}
+                  disabled={reportSubmitting}
+                  className="yt-btn yt-btn-outline"
+                >
+                  Vazgeç
+                </button>
+                <button
+                  onClick={handleSubmitQuestionReport}
+                  disabled={reportSubmitting || !reportText.trim()}
+                  className="yt-btn yt-btn-primary"
+                  style={(reportSubmitting || !reportText.trim()) ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                >
+                  {reportSubmitting ? 'Gönderiliyor...' : 'Gönder'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      {renderCartDrawer()}
+      {renderBillingGateModal()}
+      {renderNotifDrawer()}
+      {renderAuthModal()}
+      </div>
+    );
+  }
+
+  return null;
+}
