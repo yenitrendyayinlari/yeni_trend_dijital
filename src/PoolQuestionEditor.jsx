@@ -1164,7 +1164,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       });
       const nMissing = items.filter((x) => x.missing.length).length;
       if (nMissing) notes.push(`${nMissing} soruda resim dosyası bulunamadı (resim klasörünü bağlayın ya da 3. alandan ilgili PDF'leri seçin); bu sorular kaydedilmez, listede işaretli.`);
-      setBulk({ items, notes, from: 1, to: Math.min(items.length, 50), running: false, done: 0, log: [], finished: false, checking: false, checked: 0, editing: null, onlyBad: false });
+      setBulk({ items, notes, from: 1, to: Math.min(items.length, 50), running: false, done: 0, log: [], finished: false, checking: false, checked: 0, editing: null, onlyBad: false, groups: '' });
       setTimeout(() => runPrecheck(items), 300); // sığmayan soru/çözümleri kaydetmeden önce bul
     } catch (err) { alert('Dosya okunamadı: ' + err.message); }
   };
@@ -1220,6 +1220,18 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     qEditor.commands.clearContent(true); sEditor.commands.clearContent(true); setAnswer('');
     setBulk((b) => ({ ...b, editing: null }));
   };
+  // "650-651, 652-653, 654-656" -> {650:'G650',651:'G650',652:'G652',...}; ilk numara grubun kodu olur
+  const parseBulkGroups = (t) => {
+    const map = {}; const bad = [];
+    String(t || '').split(/[,;\n]+/).map((x) => x.trim()).filter(Boolean).forEach((part) => {
+      const m = part.match(/^(\d+)\s*[-–]\s*(\d+)$/);
+      if (!m) { bad.push(part); return; }
+      const a1 = parseInt(m[1], 10), b1 = parseInt(m[2], 10);
+      if (b1 <= a1) { bad.push(part); return; }
+      for (let k = a1; k <= b1; k++) { if (map[k]) bad.push(k + ' iki grupta'); else map[k] = 'G' + a1; }
+    });
+    return { map, bad };
+  };
   const runBulk = async () => {
     const batch = batchName.trim();
     if (!batch) { alert('Önce sağdaki "Grup Adı" alanını doldurun.'); return; }
@@ -1228,6 +1240,8 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
     if (!qEditor || !sEditor) return;
     const from = Math.max(1, bulk.from), to = Math.min(bulk.items.length, bulk.to);
     if (!(to >= from)) { alert('Aralığı kontrol edin.'); return; }
+    const grp = parseBulkGroups(bulk.groups);
+    if (grp.bad.length) { alert('Bağlı soru gruplarında hata: ' + grp.bad.join(', ') + '\nBiçim: 650-651, 652-653, 654-656'); return; }
     bulkStop.current = false;
     setBulk((b) => ({ ...b, running: true, finished: false, done: 0, log: [] }));
     const avail = contentPxH - PAD_Y * 2;
@@ -1255,7 +1269,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         if (hasSol) sName = await uploadPdf(await pageToPdfBytes(sPageRef.current), 'pool_sol');
         const { error } = await supabase.from('question_pool').insert([{
           pdf_file: qName, solution_pdf_file: sName, correct_answer: it.answer, upload_batch_id: batch,
-          lesson_category_id: dersId || null, topic_id: konuId || null, outcome_id: kazanimId || null, extra_outcome_ids: extraOutcomeIds(), set_key: null,
+          lesson_category_id: dersId || null, topic_id: konuId || null, outcome_id: kazanimId || null, extra_outcome_ids: extraOutcomeIds(), set_key: grp.map[n] ? `${batch}::${grp.map[n]}` : null,
           source_json: { v: 2, w: pageW, h: pageH, hyph, q: qEditor.getJSON(), s: hasSol ? sEditor.getJSON() : null },
         }]);
         if (error) throw new Error(error.message);
@@ -1877,6 +1891,11 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                   <input type="text" inputMode="decimal" value={wInput} disabled={bulk.running || bulk.checking} onChange={(e) => setWInput(e.target.value)} onBlur={() => commitSize('w')} style={{ width: '52px', height: '30px' }} title="Sayfa genişliği" />
                   <span>×</span>
                   <input type="text" inputMode="decimal" value={hInput} disabled={bulk.running || bulk.checking} onChange={(e) => setHInput(e.target.value)} onBlur={() => commitSize('h')} style={{ width: '52px', height: '30px' }} title="Sayfa yüksekliği (sığmayanlar için büyütüp yeniden kontrol edin)" />
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.8rem', marginTop: '8px' }}>
+                  <span>Bağlı soru grupları:</span>
+                  <input type="text" value={bulk.groups || ''} disabled={bulk.running} onChange={(e) => setBulk((b) => ({ ...b, groups: e.target.value }))} placeholder="650-651, 652-653, 654-656, 657-659" style={{ flex: '1 1 280px', height: '30px' }} title="Ortak metne bağlı soruların liste numaraları. Virgülle ayırın. Boş = hepsi tek soru." />
+                  {(() => { const g = parseBulkGroups(bulk.groups); const n = new Set(Object.values(g.map)).size; return g.bad.length ? <span style={{ color: '#dc2626' }}>Hatalı: {g.bad.join(', ')}</span> : (n ? <span style={{ color: '#16a34a' }}>{n} grup</span> : null); })()}
                 </div>
                 {bulk.running && <div style={{ marginTop: '8px', fontSize: '0.85rem' }}>⏳ {bulk.done} / {Math.min(bulk.items.length, bulk.to) - Math.max(1, bulk.from) + 1} işleniyor… (sekmeyi kapatmayın)</div>}
                 {bulk.finished && <div style={{ marginTop: '8px', fontSize: '0.85rem', fontWeight: 'bold' }}>Bitti: {bulk.log.filter((l) => l.ok).length} kaydedildi, {bulk.log.filter((l) => !l.ok).length} atlandı.</div>}
