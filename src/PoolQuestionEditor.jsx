@@ -1821,7 +1821,14 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
         </div>
       )}
       {bulk && !bulk.editing && (
-        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.6)', zIndex: 1250, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <>
+        {bulk.hidden && (
+          <div style={{ position: 'fixed', left: '50%', bottom: '18px', transform: 'translateX(-50%)', zIndex: 1250, background: '#0f172a', color: '#fff', padding: '10px 16px', borderRadius: '10px', display: 'flex', gap: '12px', alignItems: 'center', fontSize: '0.85rem', boxShadow: '0 4px 16px rgba(0,0,0,0.3)' }}>
+            <span>📚 Toplu aktarma açık. Sağdan kazanımı seçin, sonra pencereyi açın.</span>
+            <button style={{ ...tbBtn(true), height: '30px', backgroundColor: '#2563eb', color: '#fff' }} onClick={() => setBulk((b) => ({ ...b, hidden: false }))}>Pencereyi aç</button>
+          </div>
+        )}
+        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.6)', zIndex: 1250, display: bulk.hidden ? 'none' : 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div style={{ backgroundColor: '#fff', borderRadius: '12px', padding: '20px', width: '760px', maxWidth: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}>
             <h3 style={{ margin: '0 0 8px' }}>📚 InDesign'dan toplu aktar</h3>
             {!bulk.items && (
@@ -1906,6 +1913,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                     ? <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => { bulkStop.current = true; }}>Kontrolü durdur</button>
                     : <>
                       <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => setBulk(null)}>Kapat</button>
+                      <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => setBulk((x) => ({ ...x, hidden: true }))} title="Pencereyi geçici gizler; liste ve kontrol sonuçları kaybolmaz. Sağdan Ders/Konu/Kazanım seçebilirsiniz.">Kazanım seçmek için gizle</button>
                       <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => runPrecheck(bulk.items)}>Sığmayı yeniden kontrol et</button>
                       <button style={{ ...tbBtn(true), height: '34px', backgroundColor: '#2563eb', color: '#fff' }} onClick={runBulk}>Seçili aralığı havuza kaydet</button>
                     </>}
@@ -1914,6 +1922,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
             )}
           </div>
         </div>
+        </>
       )}
       <div style={{ position: 'sticky', top: 0, zIndex: 20, backgroundColor: '#fff', borderBottom: '1px solid #e2e8f0', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
         <h2 style={{ margin: 0, fontSize: '1.15rem' }}>
