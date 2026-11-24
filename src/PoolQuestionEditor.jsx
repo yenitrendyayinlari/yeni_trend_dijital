@@ -1371,6 +1371,11 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       const clone = node.cloneNode(true);
       clone.style.boxShadow = 'none';
       idoc.body.appendChild(clone);
+      // Tireleme kapalıyken metindeki gizli (yumuşak) tire karakterleri (U+00AD, InDesign'dan gelen isteğe bağlı tireler) PDF'e taşınmasın.
+      if (!hyph) {
+        const tw = idoc.createTreeWalker(clone, 4 /* NodeFilter.SHOW_TEXT */);
+        let tn; while ((tn = tw.nextNode())) { if (tn.nodeValue.indexOf('\u00AD') >= 0) tn.nodeValue = tn.nodeValue.replace(/\u00AD/g, ''); }
+      }
       // html2canvas, birden fazla satıra yayılan satır-içi öğenin (altı çizili metin) kenarlığını tüm satırlara yayılan tek
       // bir kutu gibi çiziyor: satır sonuna gelen altı çizili kelime, alt satırda sayfa genişliğinde çizgi çıkarıyordu.
       // Çözüm: altı çizili metni kelime kelime (her biri tek satırlık) parçalara bölüp çizgiyi parçalara vermek.
@@ -1777,7 +1782,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   return (
     <div style={{ position: 'fixed', inset: 0, backgroundColor: '#fff', zIndex: 1100, overflowY: 'auto' }}>
       <style ref={cssRef}>{`
-        .pq-page .ProseMirror { outline: none; min-height: ${contentPxH - PAD_Y * 2}px; hyphens: ${hyph ? 'auto' : 'manual'}; -webkit-hyphens: ${hyph ? 'auto' : 'manual'}; tab-size: ${7 * MM_PX}px; }
+        .pq-page .ProseMirror { outline: none; min-height: ${contentPxH - PAD_Y * 2}px; hyphens: ${hyph ? 'auto' : 'none'}; -webkit-hyphens: ${hyph ? 'auto' : 'none'}; tab-size: ${7 * MM_PX}px; }
         .pq-page .ProseMirror p { margin: 0 0 ${MM_PX}px; }
         .pq-page .ProseMirror .pq-sel-keep { background: #b4d5fe; }
         .pq-page .ProseMirror table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 4px 0; }
