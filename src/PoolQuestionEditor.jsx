@@ -648,7 +648,28 @@ function extractAnswer(paras) {
   while (li >= 0 && !txt(paras[li]).trim()) li--;
   if (li < 0) return { answer: null, paras, found: false };
   const last = paras[li];
-  if (!last.segs) return { answer: null, paras, found: false }; // son öğe tablo
+  if (!last.segs) {
+    // Son öğe tablo: cevap satırı tablonun son dolu hücresinin son paragrafında olabilir (örn. çözümün tamamı tabloysa).
+    const cells = last.table && last.table.cells;
+    if (!cells) return { answer: null, paras, found: false };
+    let ci = -1;
+    cells.forEach((c, i) => { if (c.paras.some((q) => txt(q).trim()) && (ci < 0 || c.y > cells[ci].y || (c.y === cells[ci].y && c.x > cells[ci].x))) ci = i; });
+    if (ci < 0) return { answer: null, paras, found: false };
+    const cp = cells[ci].paras; let pi = cp.length - 1;
+    while (pi >= 0 && !txt(cp[pi]).trim()) pi--;
+    const lp = cp[pi];
+    if (!lp || !lp.segs) return { answer: null, paras, found: false };
+    let k2 = lp.segs.length;
+    while (k2 > 0) { const g = lp.segs[k2 - 1]; if (g.br || g.img || !/^[|A-E\s]*$/.test(g.text || '')) break; k2--; }
+    const tail2 = lp.segs.slice(k2);
+    const tailText2 = tail2.map((g) => g.text || '').join('');
+    if (!(tailText2.length <= 30 && tailText2.replace(/[^A-E]/g, '') === 'ABCDE')) return { answer: null, paras, found: false };
+    const heavy2 = new Set();
+    tail2.forEach((g) => { if (g.marks && g.marks.bold && g.text) (g.text.match(/[A-E]/g) || []).forEach((L) => heavy2.add(L)); });
+    const newCells = cells.map((c, i) => (i === ci ? { ...c, paras: c.paras.map((q, j) => (j === pi ? { ...lp, segs: lp.segs.slice(0, k2) } : q)) } : c));
+    const rest2 = paras.slice(0, li); rest2.push({ ...last, table: { ...last.table, cells: newCells } });
+    return { answer: heavy2.size === 1 ? [...heavy2][0] : null, paras: rest2, found: true };
+  }
   // Cevap satırı bazen ayrı bir paragraf, bazen çözüm metninin hemen sonunda: sondan geriye
   // yalnızca "|", A-E harfleri ve boşluk içeren parçaları topla.
   let k = last.segs.length;
@@ -662,6 +683,64 @@ function extractAnswer(paras) {
   if (k > 0) rest.push({ ...last, segs: last.segs.slice(0, k) });
   while (rest.length && txt(rest[rest.length - 1]).length === 0) rest.pop();
   return { answer: heavy.size === 1 ? [...heavy][0] : null, paras: rest, found: true };
+}
+// ---- AKIŞ MODU: tek metin akışındaki (sayfa/sütun fark etmeksizin) numaralı soruları ("1.", "2." ...) ayırır ----
+// Her yeni testte numara 1'e döner; testNo buna göre artar. Soru numarası metinden silinir (havuzda sıra numarası görünmesin).
+const flowNumOf = (p) => {
+  const m = /^\s*(\d{1,2})\s*\.(?=\s|$|[^\d])/.exec(paraText(p));
+  return m ? parseInt(m[1], 10) : null;
+};
+const flowStripNum = (p) => {
+  const m = /^\s*\d{1,2}\s*\.[ \t\u00A0]*/.exec(paraText(p));
+  if (!m || !p.segs) return p;
+  let need = m[0].length;
+  const segs = p.segs.map((g) => ({ ...g }));
+  for (const g of segs) {
+    if (need <= 0) break;
+    if (g.text) { const k = Math.min(need, g.text.length); g.text = g.text.slice(k); need -= k; }
+  }
+  return { ...p, segs: segs.filter((g) => g.br || g.img || (g.text && g.text.length)) };
+};
+const flowStrip = (paras) => {
+  const ps = paras.slice();
+  // 1) numarayı sil (numara tablonun ilk hücresindeyse oradan)
+  const p0 = ps[0];
+  if (p0 && p0.table) {
+    const cells = p0.table.cells.map((c) => ({ ...c, paras: c.paras.slice() }));
+    const ci = cells.findIndex((c) => c.paras.some((q) => paraText(q).trim().length));
+    if (ci >= 0) {
+      const pi = cells[ci].paras.findIndex((q) => paraText(q).trim().length);
+      cells[ci].paras[pi] = flowStripNum(cells[ci].paras[pi]);
+      ps[0] = { ...p0, table: { ...p0.table, cells } };
+    }
+  } else if (p0 && p0.segs) {
+    ps[0] = flowStripNum(p0);
+  }
+  // 2) baştaki boş paragrafları at; ilk dolu paragrafın başındaki boşluk/sekmeyi sil
+  while (ps.length && !ps[0].table && paraText(ps[0]).trim().length === 0 && !(ps[0].segs || []).some((g) => g.img)) ps.shift();
+  if (ps[0] && ps[0].segs) {
+    const segs = ps[0].segs.map((g) => ({ ...g }));
+    const f = segs.find((g) => !g.br && !g.img && g.text && g.text.length);
+    if (f) f.text = f.text.replace(/^[ \t ]+/, '');
+    ps[0] = { ...ps[0], segs };
+  }
+  while (ps.length && !ps[ps.length - 1].table && paraText(ps[ps.length - 1]).trim().length === 0 && !(ps[ps.length - 1].segs || []).some((g) => g.img)) ps.pop();
+  return ps;
+};
+function splitFlow(paras) {
+  const out = []; let cur = null; let exp = 1; let t = 0;
+  paras.forEach((p) => {
+    const n = flowNumOf(p);
+    const isNew = n !== null && (n === exp || (n === 1 && exp > 5 && cur && cur.no >= 5));
+    if (isNew) {
+      if (n === 1) t += 1;
+      exp = n + 1;
+      cur = { t, no: n, paras: [] };
+      out.push(cur);
+    }
+    if (cur) cur.paras.push(p);
+  });
+  return out.map((x) => ({ t: x.t, no: x.no, paras: flowStrip(x.paras) }));
 }
 const icmlParasToJson = (paras, imgMap) => paras.map((p) => (p.table ? icmlTableToJson(p.table, imgMap) : icmlParaToJson(p, imgMap)));
 function icmlTableToJson(tb, imgMap) {
@@ -1142,25 +1221,58 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
       (imgFiles || []).forEach((f) => { const k = imgKeyOf(f.name); if (!fmap.has(k) || /\.pdf$/i.test(f.name)) fmap.set(k, f); });
       bulkImgFiles.current = fmap; bulkImgCache.current = new Map(); bulkImgMods.current = new Map();
       const tcb = document.getElementById('bulkTrim'); bulkTrim.current = tcb ? tcb.checked : true; try { localStorage.setItem('pqTrimImg', bulkTrim.current ? '1' : '0'); } catch (e) { /* önemsiz */ }
-      const qRes = parseIcml(await qFile.text());
-      const qPages = mainPages(qRes);
-      const extraStories = qRes.storyPages.filter((x) => x.len > 0).length - 1;
-      if (extraStories > 0) notes.push(`${extraStories} küçük metin kutusu (şekil etiketleri: I, II, III gibi) atlandı; şekilli sorulara resmi siz eklersiniz.`);
-      let sPages = [];
-      let sRes = null;
-      if (sFile) { sRes = parseIcml(await sFile.text()); sPages = mainPages(sRes); }
-      const unlinked = (qRes.unlinkedImages || 0) + (sRes ? sRes.unlinkedImages || 0 : 0);
+      // Birden çok ICML seçilebilir (her dosya = bir test). Dosyalar ada göre (sayısal sırayla) birleştirilir.
+      const asList = (x) => (Array.isArray(x) ? x : (x ? [x] : [])).slice().sort((u, v) => String(u.name).localeCompare(String(v.name), 'tr', { numeric: true }));
+      const loadSide = async (files) => {
+        const list = asList(files);
+        const out = { pages: [], meta: [], flow: false, unlinked: 0, extra: 0, perFile: [] };
+        for (let fi = 0; fi < list.length; fi++) {
+          const res = parseIcml(await list[fi].text());
+          const pages = mainPages(res);
+          const fl = splitFlow(pages.flat());
+          const isFlow = fl.length >= 3 && fl.length !== pages.length;
+          out.unlinked += res.unlinkedImages || 0;
+          if (isFlow) {
+            out.flow = true;
+            fl.forEach((x) => { out.pages.push(x.paras); out.meta.push({ t: list.length > 1 ? fi + 1 : x.t, no: x.no }); });
+            out.perFile.push(fl.length);
+          } else {
+            out.extra += res.storyPages.filter((x) => x.len > 0).length - 1;
+            pages.forEach((pg) => { out.pages.push(pg); out.meta.push(null); });
+            out.perFile.push(pages.length);
+          }
+        }
+        out.nFiles = list.length;
+        return out;
+      };
+      const qSide = await loadSide(qFile);
+      const sSide = await loadSide(sFile);
+      const sFileGiven = asList(sFile).length > 0;
+      let qPages = qSide.pages;
+      let sPages = sSide.pages;
+      let flowMeta = qSide.flow ? qSide.meta : null;
+      if (qSide.extra > 0) notes.push(`${qSide.extra} küçük metin kutusu (şekil etiketleri: I, II, III gibi) atlandı; şekilli sorulara resmi siz eklersiniz.`);
+      if (qSide.flow) {
+        const nT = Math.max(...qSide.meta.map((x) => x.t));
+        notes.push(`Akış modu: metinde numaralı ${qPages.length} soru (${nT} test) bulundu; soru numaraları metinden silindi.`);
+        if (sFileGiven) {
+          const bad = qSide.meta.filter((x, i) => !sSide.meta[i] || sSide.meta[i].t !== x.t || sSide.meta[i].no !== x.no).length;
+          if (sPages.length !== qPages.length) notes.push(`Soru ${qPages.length}, çözüm ${sPages.length}: sayılar eşit değil. Eşleştirme sıraya göredir, çözüm dosyalarını/numaralarını kontrol edin.`);
+          else if (bad) notes.push(`${bad} soruda çözüm numarası, soru numarasıyla uyuşmuyor (test sırası ya da numara). Listede kontrol edin.`);
+        }
+      }
+      const unlinked = qSide.unlinked + sSide.unlinked;
       if (unlinked) notes.push(`${unlinked} resim çerçevesinin dosya bağlantısı yok (gömülü resim); bunlar aktarılamaz, elle eklemeniz gerekir.`);
       const nTables = qPages.reduce((n, pg) => n + countTables(pg), 0) + sPages.reduce((n, pg) => n + countTables(pg), 0);
       if (nTables > 0) notes.push(`${nTables} tablo gerçek tablo olarak aktarıldı (sütun genişliği, satır yüksekliği ve hücre çizgileriyle). Sorulara göz atıp kontrol edin.`);
-      if (sFile && sPages.length !== qPages.length) notes.push(`Soru sayfası ${qPages.length}, çözüm sayfası ${sPages.length}: sayılar eşit değil. Eşleştirme sıraya göredir, kontrol edin.`);
+      if (sFileGiven && !qSide.flow && sPages.length !== qPages.length) notes.push(`Soru sayfası ${qPages.length}, çözüm sayfası ${sPages.length}: sayılar eşit değil. Eşleştirme sıraya göredir, kontrol edin.`);
       const items = qPages.map((qp, i) => {
         const sp = sPages[i];
         const ex = sp ? extractAnswer(sp) : { answer: null, paras: [], found: false };
         const first = (qp.map(paraText).join(' ')).replace(/\s+/g, ' ').trim();
         const imgs = collectImgs(qp).concat(collectImgs(ex.paras).filter((x) => !collectImgs(qp).some((y) => y.key === x.key)));
         const missing = imgs.filter((im) => !fmap.has(im.key) && !folderIdx.current.has(im.key)).map((im) => im.name);
-        return { n: i + 1, q: qp, s: ex.paras, answer: ex.answer, answerLine: ex.found, label: first.slice(0, 100), imgs, missing, fig: !imgs.length && /harita|grafik|şekil|resim|görsel|piramit|tabloda|diyagram/i.test(first) };
+        return { n: i + 1, q: qp, s: ex.paras, answer: ex.answer, answerLine: ex.found, label: (flowMeta ? `T${flowMeta[i].t}-${flowMeta[i].no}  ` : '') + first.slice(0, 100), testNo: flowMeta ? flowMeta[i].t : null, testSira: flowMeta ? flowMeta[i].no : null, imgs, missing, fig: !imgs.length && /harita|grafik|şekil|resim|görsel|piramit|tabloda|diyagram/i.test(first) };
       });
       const nMissing = items.filter((x) => x.missing.length).length;
       if (nMissing) notes.push(`${nMissing} soruda resim dosyası bulunamadı (resim klasörünü bağlayın ya da 3. alandan ilgili PDF'leri seçin); bu sorular kaydedilmez, listede işaretli.`);
@@ -1782,7 +1894,7 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
   return (
     <div style={{ position: 'fixed', inset: 0, backgroundColor: '#fff', zIndex: 1100, overflowY: 'auto' }}>
       <style ref={cssRef}>{`
-        .pq-page .ProseMirror { outline: none; min-height: ${contentPxH - PAD_Y * 2}px; hyphens: ${hyph ? 'auto' : 'none'}; -webkit-hyphens: ${hyph ? 'auto' : 'none'}; tab-size: ${7 * MM_PX}px; }
+        .pq-page .ProseMirror { white-space: pre-wrap; word-wrap: break-word; outline: none; min-height: ${contentPxH - PAD_Y * 2}px; hyphens: ${hyph ? 'auto' : 'none'}; -webkit-hyphens: ${hyph ? 'auto' : 'none'}; tab-size: ${7 * MM_PX}px; }
         .pq-page .ProseMirror p { margin: 0 0 ${MM_PX}px; }
         .pq-page .ProseMirror .pq-sel-keep { background: #b4d5fe; }
         .pq-page .ProseMirror table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 4px 0; }
@@ -1840,9 +1952,9 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
               <div style={{ fontSize: '0.85rem', lineHeight: 1.6 }}>
                 <p style={{ margin: '0 0 10px', color: '#475569' }}>Her sayfası bir soru olan InDesign dosyasını <b>InCopy Document (.icml)</b> olarak dışa aktarın. Çözüm dosyasını da aynı şekilde (soru sırasıyla aynı sırada, her sayfa bir çözüm). Doğru cevap, çözüm sayfası altındaki |A|B|C|D|E| satırındaki kalın harften okunur.</p>
                 <label style={{ display: 'block', margin: '8px 0 2px', fontWeight: 'bold' }}>1) Soru dosyası (.icml)</label>
-                <input type="file" accept=".icml,.xml" id="bulkQ" />
+                <input type="file" accept=".icml,.xml" id="bulkQ" multiple />
                 <label style={{ display: 'block', margin: '10px 0 2px', fontWeight: 'bold' }}>2) Çözüm dosyası (.icml)</label>
-                <input type="file" accept=".icml,.xml" id="bulkS" />
+                <input type="file" accept=".icml,.xml" id="bulkS" multiple />
                 <label style={{ display: 'block', margin: '10px 0 2px', fontWeight: 'bold' }}>3) Resimler (soruda resim varsa)</label>
                 {folderBar}
                 <div style={{ fontSize: '0.76rem', color: '#64748b', marginBottom: '4px' }}>Klasör bağlıysa resimler adıyla oradan otomatik bulunur. İsterseniz ayrıca dosya da seçebilirsiniz (seçtikleriniz önceliklidir):</div>
@@ -1852,8 +1964,8 @@ export default function PoolQuestionEditor({ lessonCategories, topics, learningO
                 <div style={{ marginTop: '14px', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                   <button style={{ ...tbBtn(false), height: '34px' }} onClick={() => setBulk(null)}>Vazgeç</button>
                   <button style={{ ...tbBtn(true), height: '34px', backgroundColor: '#2563eb', color: '#fff' }} onClick={() => {
-                    const q = document.getElementById('bulkQ').files[0]; const sf = document.getElementById('bulkS').files[0];
-                    if (!q) { alert('Soru dosyasını seçin.'); return; }
+                    const q = Array.from(document.getElementById('bulkQ').files); const sf = Array.from(document.getElementById('bulkS').files);
+                    if (!q.length) { alert('Soru dosyasını seçin.'); return; }
                     handleBulkFiles(q, sf, Array.from(document.getElementById('bulkImg').files));
                   }}>Dosyaları oku</button>
                 </div>

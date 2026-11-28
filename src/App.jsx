@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
@@ -448,6 +448,12 @@ export default function App() {
   const [poolEditorRow, setPoolEditorRow] = useState(null); // null = yeni soru, dolu = düzenlenen havuz satırı
   const [poolBrowserLoading, setPoolBrowserLoading] = useState(false);
   const [poolBrowserRows, setPoolBrowserRows] = useState([]);
+  // Bağlı sorular (aynı set_key): her grubun kaç soru içerdiği (liste göstergesi için)
+  const poolSetCounts = useMemo(() => {
+    const m = new Map();
+    poolBrowserRows.forEach((r) => { if (r.set_key) m.set(r.set_key, (m.get(r.set_key) || 0) + 1); });
+    return m;
+  }, [poolBrowserRows]);
   const [poolTreeOpen, setPoolTreeOpen] = useState({}); // Soru Havuzu ağacında açık düğümler
   const [poolBrowserFilterTag] = useState('tagged'); // Soru Havuzu yalnızca etiketli soruları gösterir
   const [poolBrowserGroups, setPoolBrowserGroups] = useState([]); // [{key, count}] -- key: grup adı ya da '__none__' (isimsiz)
@@ -2561,6 +2567,41 @@ export default function App() {
     if (!selectedPoolQuestionId) return;
     await supabase.from('question_pool').update(fields).eq('id', selectedPoolQuestionId);
     setPoolBrowserRows((prev) => prev.map((r) => r.id === selectedPoolQuestionId ? { ...r, ...fields } : r));
+  };
+
+  // Listede iki soru arasındaki zincir düğmesi: üstteki soruyla BAĞLA, ya da zaten bağlıysa bu soruyla üstü arasındaki bağı KOPAR.
+  const togglePoolChain = async (prev, row) => {
+    try {
+      const sameKey = !!row.set_key && prev.set_key === row.set_key;
+      const all = poolBrowserRows;
+      let updates = []; // [{ids, key}]
+      if (sameKey) {
+        // Bağı kopar: grup id sırasına göre iki parçaya ayrılır (bu soru ve sonrakiler yeni grup olur).
+        const members = all.filter((r) => r.set_key === row.set_key).sort((a, b) => a.id - b.id);
+        const cut = members.findIndex((r) => r.id === row.id);
+        const head = members.slice(0, cut); const tail = members.slice(cut);
+        if (head.length === 1) updates.push({ ids: [head[0].id], key: null });
+        if (tail.length === 1) updates.push({ ids: [tail[0].id], key: null });
+        else updates.push({ ids: tail.map((r) => r.id), key: `${row.upload_batch_id || ''}::G${tail[0].id}` });
+      } else {
+        // Bağla: üstteki sorunun grubuna katıl (üstteki tekse yeni grup başlat). Bu sorunun kendi grubu varsa o grup da birleşir.
+        const key = prev.set_key || `${prev.upload_batch_id || ''}::G${prev.id}`;
+        const ids = new Set([row.id]);
+        if (!prev.set_key) ids.add(prev.id);
+        if (row.set_key) all.forEach((r) => { if (r.set_key === row.set_key) ids.add(r.id); });
+        updates.push({ ids: [...ids], key });
+      }
+      for (const u of updates) {
+        const { error } = await supabase.from('question_pool').update({ set_key: u.key }).in('id', u.ids);
+        if (error) throw error;
+      }
+      setPoolBrowserRows((prevRows) => prevRows.map((r) => {
+        for (const u of updates) if (u.ids.includes(r.id)) return { ...r, set_key: u.key };
+        return r;
+      }));
+    } catch (e) {
+      alert('Bağlantı kaydedilemedi: ' + (e.message || e));
+    }
   };
 
   // Benzer soru kontrolü: Soru Havuzu ağacında bir KAZANIMIN altındaki sorular kendi içinde karşılaştırılır.
@@ -5840,20 +5881,38 @@ export default function App() {
                                           {poolTreeOpen[ok] && (
                                             <table style={{ width: 'calc(100% - 72px)', marginLeft: 72, borderCollapse: 'collapse', fontSize: '0.8rem' }}>
                                               <tbody>
-                                                {o.rows.map((row) => (
+                                                {o.rows.map((row, ri) => {
+                                                  const prevRow = ri > 0 ? o.rows[ri - 1] : null;
+                                                  const nextRow = ri < o.rows.length - 1 ? o.rows[ri + 1] : null;
+                                                  const linkedUp = !!(row.set_key && prevRow && prevRow.set_key === row.set_key);
+                                                  const linkedDown = !!(row.set_key && nextRow && nextRow.set_key === row.set_key);
+                                                  const inGroup = !!row.set_key;
+                                                  let hsh = 0; if (row.set_key) for (let ch = 0; ch < row.set_key.length; ch++) hsh = (hsh * 31 + row.set_key.charCodeAt(ch)) >>> 0;
+                                                  const gColor = ['#2563eb', '#16a34a', '#d97706', '#9333ea', '#dc2626', '#0891b2', '#be185d', '#4d7c0f'][hsh % 8];
+                                                  return (
                                                   <tr
                                                     key={row.id}
                                                     onClick={() => openPoolQuestionDetail(row.id)}
-                                                    style={{ borderTop: '1px solid #f1f5f9', cursor: 'pointer' }}
+                                                    style={{ borderTop: linkedUp ? '1px dashed #e2e8f0' : '1px solid #f1f5f9', cursor: 'pointer', backgroundColor: inGroup ? gColor + '10' : undefined }}
                                                     onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f8fafc'}
-                                                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                                                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = inGroup ? gColor + '10' : 'transparent'}
                                                   >
-                                                    <td style={{ padding: '5px 10px', color: '#334155', fontWeight: 'bold' }}>#{row.id}</td>
+                                                    <td style={{ padding: '0 4px', width: 44, borderLeft: inGroup ? '4px solid ' + gColor : '4px solid transparent', whiteSpace: 'nowrap' }}>
+                                                      {prevRow ? (
+                                                        <button
+                                                          title={linkedUp ? 'Üstteki soruyla bağlı. Bağı koparmak için tıklayın' : 'Üstteki soruyla BAĞLA (ortak metne bağlı soru)'}
+                                                          onClick={(e) => { e.stopPropagation(); togglePoolChain(prevRow, row); }}
+                                                          style={{ border: '1px solid ' + (linkedUp ? gColor : '#e2e8f0'), background: linkedUp ? gColor : '#fff', color: linkedUp ? '#fff' : '#94a3b8', borderRadius: 6, cursor: 'pointer', fontSize: '0.75rem', padding: '1px 6px', lineHeight: 1.3 }}
+                                                        >🔗</button>
+                                                      ) : null}
+                                                    </td>
+                                                    <td style={{ padding: '5px 10px', color: '#334155', fontWeight: 'bold' }}>#{row.id}{inGroup && !linkedUp ? <span style={{ marginLeft: 6, color: gColor, fontWeight: 600, fontSize: '0.72rem' }}>{poolSetCounts.get(row.set_key) || ''}'li grup</span> : null}</td>
                                                     <td style={{ padding: '5px 10px', fontFamily: 'monospace' }}>Cevap: {row.correct_answer || '—'}</td>
                                                     <td style={{ padding: '5px 10px' }}>Kullanım: {row.used_count || 0}</td>
                                                     <td style={{ padding: '5px 10px', color: '#64748b' }}>{row.upload_batch_id || '—'}</td>
                                                   </tr>
-                                                ))}
+                                                  );
+                                                })}
                                               </tbody>
                                             </table>
                                           )}
